@@ -6,20 +6,51 @@ behind `IRenderer`; without a game directory the old placeholder box renderer is
 ## Running
 
 ```
-f3_client --viewmap 03_Tutorial_Junktown --gamedir F:\_work\F3_Demo      # no server
-f3_client --host 127.0.0.1 --port 24555 --gamedir F:\_work\F3_Demo       # network mode
+f3_client --host 127.0.0.1 --port 4141          # network mode; the game dir is detected automatically
+f3_client --viewmap 03_Tutorial_Junktown        # no server, map viewer
 ```
 
-`F3_GAMEDIR` sets the default game directory. `--viewmap` takes a tre base name (`04_Tutorial_Vault`) or an emap
-name (`00_04_Tutorial_Vault`, optional `.map`), case-insensitive. In network mode the renderer loads the map named
-by `MapInfo.name` once; an unknown name (or no gamedir) falls back to the placeholder renderer.
+Network mode is 3D by default. Game directory detection order: `--gamedir`, env `F3_GAMEDIR`, `client.cfg` next to the
+exe (or cwd), `F:\_work\F3_Demo`, `<root>\..\F3_Demo`, `<root>\F3_Demo`, `<root>`, a few common drives. A directory counts
+when it has `resource.rht` and a data dir. The result (and host/port/name) is persisted to `client.cfg` next to the
+exe. If nothing usable is found the flat placeholder is drawn with a red banner explaining why (no gamedir /
+unusable gamedir / map missing from the game data) and how to fix it.
 
-Test options: `--shot FILE.png [--shot-frame N] [--shot-exit]`, `--cam AZ,EL,FOV`, `--target X,Z` (original
-coordinates), `--clipy Y`, `--noentities`, `--modelscale S`, `--size W,H`.
+Test options: `--shot FILE.png`, `--shots PREFIX --shot-times 5,8,11` (timed series, logged with frame timestamps),
+`--cam AZ,EL,FOV`, `--target X,Z`, `--clipy Y`, `--noentities`, `--modelscale S`, `--size W,H`, `--protos FILE`,
+`--no-assets`, `--legacy` (do not announce the timing capability; tests per-cell CritterMove), `--say TEXT` (repeatable),
+`--autowalk`, `--autoattack`, `--autopickup`, `--trace` (movement smoothness summary), `--run-seconds N`.
+Note: under MSYS bash set `MSYS_NO_PATHCONV=1` or `/tp ...` is rewritten into a Windows path.
 
-Keys: RMB drag orbit, MMB / WASD / arrows pan, wheel = fov (zoom), Q/E rotate, R/F tilt, PgUp/PgDn/End roof
-cut-away, G grid overlay, H props on/off, L lightmap gain, Space recentre, F12 screenshot. In network mode camera
-keys are disabled while typing chat.
+Controls (network): LMB acts according to the cursor mode, RMB click cycles the mode (Move/Attack/Use/Talk/Pickup, or
+keys 1-5), Shift = walk instead of run, Tab stops attacking, I inventory, C character, X examine, Enter chat.
+The camera follows the player; wheel zooms; RMB drag orbits; Q/E rotate.
+
+## Movement and timing
+
+Each critter has a timed polyline track sampled every frame, so motion is continuous. `MovePath` gives the polyline
+with server timing; legacy `CritterMove` steps are chained one step duration apart. A replaced track keeps visual
+continuity through an offset that decays in 0.2 s. `--trace` reports displacement / (speed*dt): mean 1.0000, sd < 0.001
+for both protocols. Clicks send `MoveToF` (float destination) when the server answered `ClientCaps`, else `MoveTo`.
+HUD: HP, AP cells (regenerating linearly from `WaitState`), and a break bar driven by the server wait-end time.
+
+## Skeletal animation
+
+Critters use the b3d mesh with the Granny skeleton and clips from `anim.gr2` (`engine/common/gr2`, a vendored copy of
+`tools/gr2lib`), skinned on the CPU into dynamic meshes (`CritterRig`). Findings: in preconverted critter meshes the
+"4 lightmap uv sets" block is really 4 skin influences per vertex `{u32 bone, f32 weight}` (bone = index in the b3d
+bone list, 0xFFFFFFFF unused); b3d bone names equal Granny bone names; b3d units are exactly 10x Granny units.
+Skin matrix (row vectors) = `inverseWorld[j] * poseWorld[j]`, skinned in b3d space then z negated. Clips are in place and
+loop; `<prefix>_Com_Una_{Idle,Walk,Run,Punch_Jab,DmgFr,Laydown_ProneB}_01` (prefix HumM/HumF or CR_* model name), state
+(idle/walk/run/attack/hit/death) is derived from critter state with a short blend. Model forward is original +z; yaw from
+the movement direction.
+
+## Protocol use and model ids
+
+All `protocol_game.h` extension messages are handled (stats, inventory, container, object info, critter state, combat
+events, door cells, timing). `ItemAdd.pid` is an index into the key-sorted `protos.json` (`ProtoDb`). `CritterAdd` carries
+no model, so the client optionally accepts `S2C_CritterProto` (id 135: critter id, pid) sent after CritterAdd; without
+it the model is looked up by critter name in protos.json, falling back to the player model.
 
 ## Libraries
 
@@ -80,10 +111,10 @@ Vault: 47 k triangles. All geometry is static GPU meshes; no per-frame allocatio
 
 ## Known gaps
 
-* Static pose only: no Granny/skeletal animation (critters are in T-pose), no particles, VFX, decals, water.
-* Model facing of critters is unverified (front/back of the T-pose could not be confirmed); network critters all
-  use `HumMNor` tinted by colour because `CritterAdd` carries no model id.
-* No per-light dynamic lighting (only baked lightmaps plus a sun term on props); sky is a quad/colour.
+* Critters are drawn as base body (plus skin override) only: no outfit/hair parts, no weapon-specific clips.
+* Talk mode only examines (no dialogue); an open door is shown by hiding the door model.
+* The server does not send `S2C_CritterProto` yet, so NPC models come from the name lookup.
+* No particles, VFX, decals, water; no per-light dynamic lighting (baked lightmaps plus a sun term on props).
 * Ground picking uses up-facing triangles only; multi-storey interiors pick the first hit from the camera.
 * Original material state (ADD blends, fog, per-material alpha ref) is approximated by the flag mapping.
 * 39 resources typed as TGA are actually BMP and are not decoded.

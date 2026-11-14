@@ -1,10 +1,10 @@
 #pragma once
 // Rendering abstraction. The game loop (client/main.cpp) only talks to IRenderer, so the
-// raylib placeholder renderer can later be replaced by one that loads the original
-// game's assets (TGA/DDS tiles, GR2 models) without touching networking or game logic.
+// raylib renderer can be replaced without touching networking or game logic.
 //
 // The renderer owns the window, input polling and the camera; it receives a read-only
-// snapshot of the replicated world (SceneView) plus UI state (UiView) each frame.
+// snapshot of the replicated world (SceneView) plus UI state (UiView) each frame, and reports clicks on its own
+// widgets back as UiCommands.
 #include <memory>
 #include <string>
 #include <vector>
@@ -12,17 +12,38 @@
 
 namespace f3 {
 
+// FOnline-style cursor modes; the right mouse button cycles through them.
+enum class CursorMode : int { Move = 0, Attack, Use, Talk, Pickup, Count };
+inline const char* CursorModeName(CursorMode m) {
+    switch (m) {
+        case CursorMode::Move: return "Move";
+        case CursorMode::Attack: return "Attack";
+        case CursorMode::Use: return "Use";
+        case CursorMode::Talk: return "Talk";
+        case CursorMode::Pickup: return "Pickup";
+        default: return "?";
+    }
+}
+
 struct FrameInput {
     bool mouseLeftPressed = false;
+    bool mouseRightClick = false;     // right button released without dragging (camera orbit uses drags)
     int mouseX = 0, mouseY = 0;
     float wheel = 0;
     std::string typed;  // UTF-8 characters typed this frame
     bool enter = false, backspace = false, escape = false;
+    bool shift = false, ctrl = false;
+    bool keyMode[5] = {};             // 1..5 select a cursor mode
+    bool keyInventory = false;        // I
+    bool keyChar = false;             // C
+    bool keyExamine = false;          // X
+    bool keyStop = false;             // Tab: stop attacking
 };
 
 struct SceneCritter {
     const ClientCritter* critter = nullptr;
     float x = 0, y = 0;  // interpolated tile position
+    CritterPose pose;    // motion at `now`
     bool isSelf = false;
 };
 
@@ -34,6 +55,9 @@ struct SceneView {
     bool hasSelf = false;            // cameraX/Y is the controlled critter (renderer follows it)
     bool viewer = false;             // map viewer mode: no network, the renderer draws its own loaded map
     bool allowCameraKeys = true;     // false while the chat box has the keyboard
+    double now = 0;                  // ClientCore clock
+    const ProtoDb* protos = nullptr;
+    uint64_t mapSerial = 0;
 };
 
 // Options for the asset renderer. With an empty gameDir (or a failed open) the placeholder renderer is used.
@@ -42,12 +66,28 @@ struct RendererOptions {
     std::string screenshotPath;     // write a PNG of frame `screenshotFrame`
     int screenshotFrame = 30;
     bool exitAfterScreenshot = false;
+    // multiple timed screenshots (seconds after start): prefix_N.png, logged with the frame timestamp
+    std::string shotPrefix;
+    std::vector<double> shotTimes;
     // optional initial camera / view overrides (viewer and tests)
     bool hasCam = false;  float camAzimuth = 45, camElevation = 45, camFov = 12;
     bool hasTarget = false;  float targetX = 0, targetZ = 0;   // original world x/z
     float clipY = 1e9f;             // roof cut-away height
     bool noEntities = false;
     float modelScale = -1;          // <0: default
+    bool network = false;           // network mode: dynamic entities come from the server, not from the emap
+    const ProtoDb* protos = nullptr;
+};
+
+struct UiCommand {
+    enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, CloseContainer } type = SetMode;
+    uint32_t a = 0, b = 0;
+};
+
+struct UiState {
+    CursorMode mode = CursorMode::Move;
+    bool inventory = false;
+    bool charSheet = false;
 };
 
 struct UiView {
@@ -55,7 +95,19 @@ struct UiView {
     bool chatInputActive = false;
     std::string chatInput;
     std::string status;  // top-left line
+    std::string banner;  // prominent warning (e.g. game data missing)
     double now = 0;
+    const ClientCore* core = nullptr;   // HUD data (null in viewer mode)
+    UiState* state = nullptr;
+    std::vector<UiCommand>* commands = nullptr;
+};
+
+struct PickResult {
+    enum Kind { None, Ground, Critter, Item } kind = None;
+    CritterId critter = 0;
+    ItemId item = 0;
+    float fx = 0, fy = 0;  // ground position, tile units (tile centre = integer)
+    TilePos tile;
 };
 
 class IRenderer {
@@ -71,14 +123,19 @@ public:
     virtual void EndFrame() = 0;
     // Maps a screen position to the tile under it for the last drawn scene.
     virtual bool ScreenToTile(int sx, int sy, TilePos& out) const = 0;
+    // What is under the cursor (critter, item or ground) in the last drawn scene.
+    virtual bool Pick(int sx, int sy, PickResult& out) const = 0;
     // True if the point is over UI (so clicks should not become move orders).
     virtual bool IsOverUi(int sx, int sy) const = 0;
 
     // --- original-asset rendering (optional; the placeholder renderer ignores these) ---
     virtual bool HasAssets() const { return false; }
+    // True when the last DrawScene used the 3D asset path (false = flat placeholder).
+    virtual bool Is3D() const { return false; }
     // Loads a map of the original game by name (tre/emap base name). Viewer mode and network mode both use this.
     virtual bool LoadOriginalMap(const std::string& /*name*/, std::string* /*err*/ = nullptr) { return false; }
     virtual std::string AssetInfo() const { return {}; }
+    virtual std::string AssetError() const { return {}; }
 };
 
 std::unique_ptr<IRenderer> CreateRaylibRenderer(const RendererOptions& opt = {});

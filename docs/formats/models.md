@@ -227,3 +227,9 @@ Textures/Materials are always 0 in GR2 (materials come from the matching b3d / i
 * Per-instance prop/tile scale and rotation (map files `TRE`/`EMAP`/`mapdata` are not reversed); why 5x5 tile = 0.5 units.
 * Winding/handedness conclusions come from normals-vs-winding statistics and the LEFT_HANDED token handling, not from tracing the D3D
   state setup. Pixel pipeline for the `SK_BASE_LM_*` techniques was not traced.
+
+## Skin weights in preconverted critter meshes (finding)
+
+In meshes with the converted flag (vertex stride 44) the block read as "4 lightmap uv sets" is 4 skin influences per
+vertex, `{u32 boneIndex (0xFFFFFFFF = unused), f32 weight}`, indexing the tok 0e bone list. Bone names match the Granny
+skeleton; b3d vertex units are exactly 10x Granny units. Skin matrix (row vectors) = `inverseWorld[j] * poseWorld[j]`.

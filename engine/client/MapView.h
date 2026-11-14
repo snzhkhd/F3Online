@@ -10,6 +10,7 @@
 #include <vector>
 #include <raylib.h>
 #include "GameAssets.h"
+#include "ProtoDb.h"
 #include "gamedata/MapFiles.h"
 
 namespace f3 {
@@ -27,6 +28,7 @@ struct MapEntityInstance {
     Matrix transform{};
     const Texture2D* skin = nullptr;
     gd::MapEntity src;
+    bool hidden = false;   // e.g. an opened door
 };
 
 struct DrawOptions {
@@ -44,6 +46,13 @@ public:
     void Unload();
     bool loaded() const { return loaded_; }
     const std::string& name() const { return name_; }
+
+    // Network mode: critters and items are owned by the server and drawn by the renderer, so the emap instances of
+    // moving critters and loose items are not baked into the scene (doors, containers, static props stay).
+    // Must be called before Load.
+    void SetNetworkMode(const ProtoDb* protos) { network_ = true; protos_ = protos; }
+    // Hides / shows the door entity nearest to a renderer-space position (door models have no open pose).
+    void SetDoorOpen(const Vector3& worldPos, bool open);
 
     void Draw(GameAssets& assets, const DrawOptions& opt);
     // Draws one model instance with the asset shader (used for network critters/items as well).
@@ -86,6 +95,8 @@ private:
     void BuildEntities(GameAssets& assets);
 
     bool loaded_ = false;
+    bool network_ = false;
+    const ProtoDb* protos_ = nullptr;
     std::string name_, treName_;
     gd::Emap emap_;
     bool hasEmap_ = false;

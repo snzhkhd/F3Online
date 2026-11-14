@@ -1,4 +1,5 @@
-// Placeholder renderer: flat grid, coloured boxes. Only file that includes raylib.
+// raylib renderer: original-asset 3D scene (map, skinned critters, items) with a flat placeholder fallback, plus the
+// immediate-mode HUD. Only file (with the asset helpers) that includes raylib.
 #include <raylib.h>
 #include <raymath.h>
 #include <rlgl.h>
@@ -7,6 +8,9 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include "CritterRig.h"
 #include "GameAssets.h"
 #include "IRenderer.h"
 #include "MapView.h"
@@ -18,6 +22,12 @@ namespace {
 Color Unpack(uint32_t rgba) {
     return Color{static_cast<unsigned char>(rgba >> 24), static_cast<unsigned char>(rgba >> 16),
                  static_cast<unsigned char>(rgba >> 8), static_cast<unsigned char>(rgba)};
+}
+float YawFromTileDir(float dx, float dy) { return std::atan2(-dx, dy); }  // model faces original +z (see CritterRig)
+float WrapPi(float a) {
+    while (a > PI) a -= 2 * PI;
+    while (a < -PI) a += 2 * PI;
+    return a;
 }
 }  // namespace
 
@@ -55,18 +65,23 @@ public:
             assets_ = std::make_unique<GameAssets>();
             std::string err;
             if (!assets_->Open(opt_.gameDir, &err) || !assets_->InitGpu()) {
-                log::Warn("asset renderer disabled (%s); using placeholder", err.c_str());
+                assetErr_ = err.empty() ? "cannot initialise the asset renderer" : err;
+                log::Warn("asset renderer disabled (%s); using placeholder", assetErr_.c_str());
                 assets_.reset();
             } else {
                 log::Info("game data: %s (%zu resources)", opt_.gameDir.c_str(), assets_->data().resources().size());
                 if (opt_.modelScale > 0) MapView::modelScale = opt_.modelScale;
                 dopt_.clipY = opt_.clipY;
                 dopt_.entities = !opt_.noEntities;
+                rigs_ = std::make_unique<RigLibrary>(*assets_);
             }
         }
+        startTime_ = GetTime();
         return true;
     }
     void Shutdown() override {
+        visuals_.clear();   // GL meshes before the context goes away
+        rigs_.reset();
         map_.Unload();
         if (assets_) assets_->Unload();
         assets_.reset();
@@ -75,10 +90,15 @@ public:
     bool ShouldClose() override { return WindowShouldClose() || (shotDone_ && opt_.exitAfterScreenshot); }
 
     bool HasAssets() const override { return assets_ != nullptr; }
+    bool Is3D() const override { return active3d_; }
     std::string AssetInfo() const override { return map_.loaded() ? map_.info() : std::string(); }
+    std::string AssetError() const override { return assetErr_; }
     bool LoadOriginalMap(const std::string& name, std::string* err) override {
         if (!assets_) { if (err) *err = "no game data"; return false; }
         auto t0 = GetTime();
+        visuals_.clear();
+        doorState_.clear();
+        if (opt_.network) map_.SetNetworkMode(opt_.protos);
         if (!map_.Load(*assets_, name, err)) return false;
         log::Info("loaded %s (%.2fs); %zu textures, %zu models cached", map_.info().c_str(), GetTime() - t0,
                   assets_->textureCount(), assets_->modelCount());
@@ -86,6 +106,7 @@ public:
         // initial camera
         cam_ = OrbitCam{};
         cam_.target = map_.startTarget();
+        if (opt_.network) { cam_.fov = 3.2f; cam_.elevation = 50.0f; }
         if (opt_.hasTarget) cam_.target = Vector3{opt_.targetX, 0, -opt_.targetZ};
         if (opt_.hasCam) { cam_.azimuth = opt_.camAzimuth; cam_.elevation = opt_.camElevation; cam_.fov = opt_.camFov; }
         panOffset_ = Vector3{0, 0, 0};
@@ -107,8 +128,26 @@ public:
         in.enter = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER);
         in.backspace = IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE);
         in.escape = IsKeyPressed(KEY_ESCAPE);
-        if (in.wheel != 0) {
-            if (map_.loaded()) cam_.fov = std::clamp(cam_.fov * (in.wheel > 0 ? 0.9f : 1.1f), 3.0f, 40.0f);
+        in.shift = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+        in.ctrl = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+        const int modeKeys[5] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR, KEY_FIVE};
+        for (int i = 0; i < 5; ++i) in.keyMode[i] = IsKeyPressed(modeKeys[i]);
+        in.keyInventory = IsKeyPressed(KEY_I);
+        in.keyChar = IsKeyPressed(KEY_C);
+        in.keyExamine = IsKeyPressed(KEY_X);
+        in.keyStop = IsKeyPressed(KEY_TAB);
+        // right button: a click (cycle cursor mode) unless the mouse was dragged (camera orbit)
+        if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) { rmbDown_ = true; rmbTravel_ = 0; }
+        if (rmbDown_) {
+            Vector2 d = GetMouseDelta();
+            rmbTravel_ += std::fabs(d.x) + std::fabs(d.y);
+            if (IsMouseButtonReleased(MOUSE_BUTTON_RIGHT)) {
+                rmbDown_ = false;
+                if (rmbTravel_ < 6.0f) in.mouseRightClick = true;
+            }
+        }
+        if (in.wheel != 0 && !IsOverUi(in.mouseX, in.mouseY)) {
+            if (map_.loaded()) cam_.fov = std::clamp(cam_.fov * (in.wheel > 0 ? 0.9f : 1.1f), 1.5f, 40.0f);
             else zoom_ = std::clamp(zoom_ * (in.wheel > 0 ? 1.1f : 0.9f), 0.4f, 3.0f);
         }
         return in;
@@ -117,6 +156,10 @@ public:
     void BeginFrame() override { BeginDrawing(); ClearBackground(Color{18, 20, 24, 255}); }
     void EndFrame() override {
         ++frame_;
+        const double el = GetTime() - startTime_;
+        const bool wantShot = (!opt_.screenshotPath.empty() && !shotDone_ && frame_ >= opt_.screenshotFrame) ||
+                              (!opt_.shotPrefix.empty() && nextShot_ < opt_.shotTimes.size() && el >= opt_.shotTimes[nextShot_]);
+        if (wantShot) rlDrawRenderBatchActive();  // flush the queued 2D (HUD) draws so the screenshot contains them
         if (!opt_.screenshotPath.empty() && !shotDone_ && frame_ >= opt_.screenshotFrame) {
             Image img = LoadImageFromScreen();
             ExportImage(img, opt_.screenshotPath.c_str());
@@ -124,17 +167,32 @@ public:
             log::Info("screenshot written: %s", opt_.screenshotPath.c_str());
             shotDone_ = true;
         }
+        if (!opt_.shotPrefix.empty() && nextShot_ < opt_.shotTimes.size() && el >= opt_.shotTimes[nextShot_]) {
+            char name[512];
+            std::snprintf(name, sizeof name, "%s_%02zu.png", opt_.shotPrefix.c_str(), nextShot_);
+            Image img = LoadImageFromScreen();
+            ExportImage(img, name);
+            UnloadImage(img);
+            log::Info("shot %zu: %s t=%.3f frame=%d", nextShot_, name, el, frame_);
+            ++nextShot_;
+            if (nextShot_ >= opt_.shotTimes.size() && opt_.exitAfterScreenshot) shotDone_ = true;
+        }
         EndDrawing();
     }
 
     void DrawScene(const SceneView& s) override {
         active3d_ = false;
+        sceneNow_ = s.now;
         if (assets_) {
-            if (!s.viewer && s.map && s.map->name != attemptedName_) {
+            if (!s.viewer && s.map && (s.map->name != attemptedName_ || s.mapSerial != attemptedSerial_)) {
                 attemptedName_ = s.map->name;
+                attemptedSerial_ = s.mapSerial;
                 std::string err;
-                if (!LoadOriginalMap(s.map->name, &err))
-                    log::Warn("map '%s' not in game data (%s): placeholder view", s.map->name.c_str(), err.c_str());
+                if (!LoadOriginalMap(s.map->name, &err)) {
+                    loadedName_.clear();
+                    mapErr_ = "map '" + s.map->name + "' not in game data (" + err + ")";
+                    log::Warn("%s: placeholder view", mapErr_.c_str());
+                } else mapErr_.clear();
             }
             if (map_.loaded() && (s.viewer || (s.map && s.map->name == attemptedName_ && loadedName_ == attemptedName_))) {
                 DrawScene3D(s);
@@ -151,6 +209,9 @@ public:
         const int sw = GetScreenWidth(), sh = GetScreenHeight();
         if (!s.map) return;
         const ClientMap& m = *s.map;
+        phCritters_.clear(); phItems_.clear();
+        for (const SceneCritter& c : s.critters) phCritters_.push_back({c.critter->id, c.x, c.y, c.isSelf});
+        for (const ClientItem* i : s.items) phItems_.push_back({i->id, i->pos});
 
         int x0 = std::max(0, static_cast<int>(std::floor(camX_ - sw / (2 * ts))) - 1);
         int x1 = std::min(m.width - 1, static_cast<int>(std::ceil(camX_ + sw / (2 * ts))) + 1);
@@ -168,14 +229,16 @@ public:
         for (const ClientItem* it : s.items) {
             Vector2 p = TileToScreen(static_cast<float>(it->pos.x), static_cast<float>(it->pos.y));
             float cx = p.x + ts / 2, cy = p.y + ts / 2, r = ts * 0.18f;
-            DrawPoly(Vector2{cx, cy}, 4, r * 1.6f, 45.0f, Color{240, 210, 70, 255});
+            Color col = it->kind == gnet::ObjectKind::Ground ? Color{240, 210, 70, 255} : Color{120, 190, 240, 255};
+            DrawPoly(Vector2{cx, cy}, 4, r * 1.6f, 45.0f, col);
         }
 
         for (const SceneCritter& sc : s.critters) {
             Vector2 p = TileToScreen(sc.x, sc.y);
             float pad = ts * 0.15f;
             Rectangle r{p.x + pad, p.y + pad, ts - 2 * pad, ts - 2 * pad};
-            DrawRectangleRec(r, Unpack(sc.critter->color));
+            Color col = sc.critter->dead ? Color{90, 90, 90, 255} : Unpack(sc.critter->color);
+            DrawRectangleRec(r, col);
             DrawRectangleLinesEx(r, sc.isSelf ? 2.5f : 1.0f, sc.isSelf ? WHITE : Color{0, 0, 0, 160});
             // facing marker
             int d = static_cast<int>(sc.critter->dir);
@@ -197,30 +260,34 @@ public:
         }
     }
 
+    // ------------------------------------------------------------------------------------------------ HUD
     void DrawUi(const UiView& ui) override {
-        const int sh = GetScreenHeight();
+        const int sw = GetScreenWidth(), sh = GetScreenHeight();
+        uiRects_.clear();
         DrawText(ui.status.c_str(), 10, 8, 16, RAYWHITE);
         if (active3d_) {
-            for (const Label& l : labels_) {
-                Vector2 sp = GetWorldToScreen(l.pos, lastCam_);
-                int tw = MeasureText(l.text.c_str(), 12);
-                DrawText(l.text.c_str(), static_cast<int>(sp.x) - tw / 2, static_cast<int>(sp.y) - 6, 12, l.color);
-            }
             char b[320];
             std::snprintf(b, sizeof b, "%d fps | az %.0f el %.0f fov %.1f | %s", GetFPS(), cam_.azimuth, cam_.elevation,
                           cam_.fov, map_.info().c_str());
             DrawText(b, 10, 28, 12, Color{200, 200, 200, 255});
-            if (hoverValid_) {
+            if (!ui.core && hoverValid_) {
                 std::snprintf(b, sizeof b, "cursor: x %.1f y %.1f z %.1f  cell (%d, %d)  [original axes]", hover_.x, hover_.y,
                               -hover_.z, static_cast<int>(std::floor(hover_.x * 2)), static_cast<int>(std::floor(-hover_.z * 2)));
                 DrawText(b, 10, 44, 12, Color{200, 200, 140, 255});
             }
-            DrawText("RMB orbit | MMB/WASD pan | wheel zoom | Q/E rotate | R/F tilt | PgUp/PgDn roof cut | G grid | H props | L lightmap | F12 shot",
-                     10, 60, 12, Color{150, 150, 150, 255});
-        } else {
-            DrawText("LMB move | Enter chat | wheel zoom", 10, 28, 12, Color{180, 180, 180, 255});
+            if (!ui.core)
+                DrawText("RMB orbit | MMB/WASD pan | wheel zoom | Q/E rotate | R/F tilt | PgUp/PgDn roof cut | G grid | H props | L lightmap | F12 shot",
+                         10, 60, 12, Color{150, 150, 150, 255});
+        } else if (ui.core) {
+            DrawText("LMB act | RMB cycle cursor mode | Enter chat | wheel zoom", 10, 28, 12, Color{180, 180, 180, 255});
         }
 
+        // overhead labels and floating combat text
+        if (active3d_ && ui.core) {
+            DrawLabels(ui);
+        }
+
+        // chat
         Rectangle panel = ChatPanel();
         DrawRectangleRec(panel, Color{0, 0, 0, 140});
         if (ui.chat) {
@@ -240,6 +307,32 @@ public:
         std::string text = ui.chatInputActive ? ui.chatInput + ((static_cast<int>(ui.now * 2) & 1) ? "_" : "") : "Press Enter to chat";
         DrawText(text.c_str(), static_cast<int>(in.x) + 6, static_cast<int>(in.y) + 4, 16,
                  ui.chatInputActive ? WHITE : Color{150, 150, 150, 255});
+
+        if (ui.core && ui.state && ui.commands && ui.core->state() == ClientCore::State::InGame) {
+            DrawHud(ui);
+            DrawCursorInfo(ui);
+        }
+
+        if (!ui.banner.empty()) {
+            const int fs = 16;
+            // wrap on '\n'
+            std::vector<std::string> lines;
+            size_t p = 0;
+            while (p <= ui.banner.size()) {
+                size_t e = ui.banner.find('\n', p);
+                if (e == std::string::npos) e = ui.banner.size();
+                lines.push_back(ui.banner.substr(p, e - p));
+                p = e + 1;
+            }
+            int bw = 0;
+            for (auto& l : lines) bw = std::max(bw, MeasureText(l.c_str(), fs));
+            Rectangle r{(sw - bw) / 2.0f - 14, 52, static_cast<float>(bw + 28), static_cast<float>(lines.size() * (fs + 4) + 16)};
+            DrawRectangleRec(r, Color{90, 20, 20, 230});
+            DrawRectangleLinesEx(r, 2, Color{255, 200, 60, 255});
+            float y = r.y + 8;
+            for (size_t i = 0; i < lines.size(); ++i, y += fs + 4)
+                DrawText(lines[i].c_str(), static_cast<int>(r.x) + 14, static_cast<int>(y), fs, i == 0 ? Color{255, 220, 90, 255} : RAYWHITE);
+        }
         (void)sh;
     }
 
@@ -260,14 +353,73 @@ public:
         out.y = static_cast<int16_t>(std::floor(fy + 0.5f));
         return true;
     }
+
+    bool Pick(int sx, int sy, PickResult& out) const override {
+        out = PickResult{};
+        const Vector2 mp{static_cast<float>(sx), static_cast<float>(sy)};
+        if (active3d_) {
+            float best = 1e30f;
+            for (const PickRect& r : pickRects_) {
+                if (!CheckCollisionPointRec(mp, r.rect) || r.depth >= best) continue;
+                best = r.depth;
+                out.kind = r.isCritter ? PickResult::Critter : PickResult::Item;
+                out.critter = r.isCritter ? r.id : 0;
+                out.item = r.isCritter ? 0 : r.id;
+            }
+            Vector3 hit;
+            if (PickAt(sx, sy, hit)) {
+                int tx, ty;
+                const float cw = lastTileW_ > 0 && map_.gridW() > 0 ? map_.gridW() * 0.5f / lastTileW_ : 0.5f;
+                const float ch = lastTileH_ > 0 && map_.gridH() > 0 ? map_.gridH() * 0.5f / lastTileH_ : 0.5f;
+                out.fx = hit.x / cw - 0.5f;
+                out.fy = -hit.z / ch - 0.5f;
+                if (map_.WorldToTile(hit, lastTileW_, lastTileH_, tx, ty)) {
+                    out.tile = TilePos{static_cast<int16_t>(tx), static_cast<int16_t>(ty)};
+                    if (out.kind == PickResult::None) out.kind = PickResult::Ground;
+                }
+            }
+            return out.kind != PickResult::None;
+        }
+        TilePos t;
+        if (!ScreenToTile(sx, sy, t)) return false;
+        out.tile = t; out.fx = t.x; out.fy = t.y; out.kind = PickResult::Ground;
+        for (const auto& c : phCritters_)
+            if (static_cast<int>(std::lround(c.x)) == t.x && static_cast<int>(std::lround(c.y)) == t.y && !c.self) {
+                out.kind = PickResult::Critter; out.critter = c.id; return true;
+            }
+        for (const auto& i : phItems_)
+            if (i.pos == t) { out.kind = PickResult::Item; out.item = i.id; return true; }
+        return true;
+    }
+
     bool IsOverUi(int sx, int sy) const override {
         Rectangle p = ChatPanel();
         p.height += 30;
-        return CheckCollisionPointRec(Vector2{static_cast<float>(sx), static_cast<float>(sy)}, p);
+        const Vector2 v{static_cast<float>(sx), static_cast<float>(sy)};
+        if (CheckCollisionPointRec(v, p)) return true;
+        for (const Rectangle& r : uiRects_) if (CheckCollisionPointRec(v, r)) return true;
+        return false;
     }
 
 private:
-    struct Label { Vector3 pos; std::string text; Color color; };
+    struct Label { Vector3 pos; std::string text; Color color; CritterId id; int hp, maxHp; bool dead; };
+    struct PickRect { Rectangle rect; bool isCritter; uint32_t id; float depth; };
+
+    struct AnimState {
+        ClipKind cur = ClipKind::Idle, prev = ClipKind::Idle;
+        double curStart = 0, prevStart = 0, blendStart = -10;
+        float yaw = 0;
+        bool yawInit = false;
+        double lastNow = 0;
+        double attackSeen = -1, hitSeen = -1;
+    };
+    struct Visual {
+        std::string model;
+        std::unique_ptr<SkinnedInstance> inst;
+        const ModelAsset* staticModel = nullptr;   // models without skin data
+        AnimState anim;
+        const Texture2D* skin = nullptr;
+    };
 
     bool PickAt(int sx, int sy, Vector3& hit) const {
         Ray r = GetScreenToWorldRay(Vector2{static_cast<float>(sx), static_cast<float>(sy)}, lastCam_);
@@ -278,7 +430,7 @@ private:
         if (IsKeyPressed(KEY_F12)) TakeScreenshot("f3_screenshot.png");
         if (!s.allowCameraKeys) return;
         Vector2 md = GetMouseDelta();
-        if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+        if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && rmbTravel_ >= 6.0f) {
             cam_.azimuth -= md.x * 0.3f;
             cam_.elevation = std::clamp(cam_.elevation + md.y * 0.3f, 15.0f, 89.0f);
         }
@@ -310,6 +462,84 @@ private:
         if (IsKeyPressed(KEY_END)) dopt_.clipY = 1e9f;
     }
 
+    // Chooses and advances the animation of a critter; returns the yaw to draw it with.
+    void UpdateAnim(Visual& v, const SceneCritter& sc, const SceneView& s, int tw, int th) {
+        const ClientCritter& c = *sc.critter;
+        AnimState& a = v.anim;
+        SkinModel& m = *const_cast<SkinModel*>(v.inst->model());
+        const double now = s.now;
+        const float dt = a.lastNow > 0 ? static_cast<float>(std::min(0.1, now - a.lastNow)) : 0.016f;
+        a.lastNow = now;
+
+        auto clipOf = [&](ClipKind k) -> const Clip* { return rigs_->Get(m, k); };
+        ClipKind want = ClipKind::Idle;
+        double start = now;
+        if (c.dead) {
+            want = ClipKind::Death;
+            start = c.deathT >= 0 ? c.deathT : now - 100.0;
+        } else if (c.attackT >= 0 && clipOf(ClipKind::Attack) && now - c.attackT < clipOf(ClipKind::Attack)->duration) {
+            want = ClipKind::Attack; start = c.attackT;
+        } else if (c.hitT >= 0 && clipOf(ClipKind::Hit) && now - c.hitT < clipOf(ClipKind::Hit)->duration) {
+            want = ClipKind::Hit; start = c.hitT;
+        } else if (sc.pose.moving) {
+            want = (c.run || sc.pose.speed > 4.5f) ? ClipKind::Run : ClipKind::Walk;
+        }
+        const bool oneShot = want == ClipKind::Attack || want == ClipKind::Hit || want == ClipKind::Death;
+        const bool changed = want != a.cur || (oneShot && std::fabs(start - a.curStart) > 0.01);
+        if (changed) {
+            a.prev = a.cur; a.prevStart = a.curStart;
+            a.cur = want;
+            a.curStart = oneShot ? start : now - (static_cast<double>(c.id % 7)) * 0.13;
+            a.blendStart = now;
+        }
+        auto timeOf = [&](ClipKind k, double st) -> float {
+            const Clip* cl = clipOf(k);
+            if (!cl) return 0;
+            float rate = 1.0f;
+            if (k == ClipKind::Walk) rate = std::clamp(sc.pose.speed / 3.0f, 0.6f, 1.8f);
+            else if (k == ClipKind::Run) rate = std::clamp(sc.pose.speed / 7.0f, 0.7f, 1.6f);
+            float t = static_cast<float>((now - st)) * rate;
+            const bool loop = k == ClipKind::Idle || k == ClipKind::Walk || k == ClipKind::Run;
+            if (loop) t = std::fmod(std::max(0.0f, t), cl->duration);
+            else t = std::clamp(t, 0.0f, cl->duration);
+            return t;
+        };
+        const Clip* ca = clipOf(a.cur);
+        const Clip* cb = a.blendStart > -5 ? clipOf(a.prev) : nullptr;
+        if (!ca) ca = clipOf(ClipKind::Idle);
+        const float k = static_cast<float>(std::clamp((now - a.blendStart) / 0.18, 0.0, 1.0));
+        v.inst->Pose(ca, timeOf(a.cur, a.curStart), k < 1.0f ? cb : nullptr, timeOf(a.prev, a.prevStart), k);
+
+        // facing
+        float target;
+        if (sc.pose.moving) target = YawFromTileDir(sc.pose.hx, sc.pose.hy);
+        else {
+            target = YawFromTileDir(static_cast<float>(kDirDx[static_cast<int>(c.dir)]), static_cast<float>(kDirDy[static_cast<int>(c.dir)]));
+            if (!c.dead && c.attackT >= 0 && now - c.attackT < 1.2) {
+                for (const SceneCritter& o : s.critters)
+                    if (o.critter->id == c.attackTarget) {
+                        const float dx = o.x - sc.x, dy = o.y - sc.y;
+                        if (std::fabs(dx) + std::fabs(dy) > 0.01f) target = YawFromTileDir(dx, dy);
+                    }
+            }
+        }
+        if (!a.yawInit) { a.yaw = target; a.yawInit = true; }
+        else {
+            const float d = WrapPi(target - a.yaw);
+            const float maxStep = 12.0f * dt;
+            a.yaw = WrapPi(a.yaw + std::clamp(d, -maxStep, maxStep));
+        }
+        (void)tw; (void)th;
+    }
+
+    Rectangle ProjectRect(const Vector3& foot, float height, float width) const {
+        Vector2 f = GetWorldToScreen(foot, lastCam_);
+        Vector2 h = GetWorldToScreen(Vector3{foot.x, foot.y + height, foot.z}, lastCam_);
+        float hpx = std::fabs(f.y - h.y);
+        float wpx = std::max(hpx * width, 14.0f);
+        return Rectangle{f.x - wpx / 2, std::min(f.y, h.y), wpx, std::max(hpx, 14.0f)};
+    }
+
     void DrawScene3D(const SceneView& s) {
         const ClientMap* nm = s.viewer ? nullptr : s.map;
         const int tw = nm ? nm->width : map_.gridW(), th = nm ? nm->height : map_.gridH();
@@ -319,11 +549,24 @@ private:
         HandleCameraInput(s, dt);
         if (follow_) {
             Vector3 w = map_.TileToWorld(s.cameraX, s.cameraY, tw, th);
-            Vector3 goal = Vector3Add(w, panOffset_);
-            cam_.target = Vector3Lerp(cam_.target, goal, std::min(1.0f, dt * 10.0f));
+            cam_.target = Vector3Add(w, panOffset_);   // exact follow: the critter pose is already smooth
         }
         lastCam_ = cam_.Build();
         labels_.clear();
+        std::vector<PickRect> prevRects;
+        prevRects.swap(pickRects_);
+        // hover from last frame's rectangles
+        hoverCrit_ = 0; hoverItem_ = 0;
+        {
+            const Vector2 mp = GetMousePosition();
+            float best = 1e30f;
+            for (const PickRect& r : prevRects)
+                if (CheckCollisionPointRec(mp, r.rect) && r.depth < best && !IsOverUi((int)mp.x, (int)mp.y)) {
+                    best = r.depth;
+                    hoverCrit_ = r.isCritter ? r.id : 0;
+                    hoverItem_ = r.isCritter ? 0 : r.id;
+                }
+        }
 
         rlSetClipPlanes(30.0, 1500.0);
         BeginMode3D(lastCam_);
@@ -348,8 +591,10 @@ private:
                             DrawPlane(c, Vector2{cw * 0.94f, ch * 0.94f}, blocked ? Color{220, 40, 40, 110} : Color{60, 220, 90, 40});
                         }
                 }
-                Vector3 c = map_.TileToWorld(static_cast<float>(hx), static_cast<float>(hy), tw, th, hover_.y + 0.06f);
-                DrawPlane(c, Vector2{cw, ch}, Color{255, 255, 255, 120});
+                if (!hoverCrit_ && !hoverItem_) {
+                    Vector3 c = map_.TileToWorld(static_cast<float>(hx), static_cast<float>(hy), tw, th, hover_.y + 0.06f);
+                    DrawPlane(c, Vector2{cw, ch}, Color{255, 255, 255, 120});
+                }
             }
         }
         if (s.viewer && map_.hasEmap()) {
@@ -362,31 +607,343 @@ private:
 
         // network critters and items
         if (nm) {
-            const ModelAsset* human = assets_->Model("HumMNor");
-            for (const SceneCritter& sc : s.critters) {
-                Vector3 w = map_.TileToWorld(sc.x, sc.y, tw, th);
-                int d = static_cast<int>(sc.critter->dir);
-                float yaw = std::atan2(static_cast<float>(kDirDx[d]), -static_cast<float>(kDirDy[d]));
-                Color c = Color{static_cast<unsigned char>(sc.critter->color >> 24), static_cast<unsigned char>(sc.critter->color >> 16),
-                                static_cast<unsigned char>(sc.critter->color >> 8), 255};
-                Color tint = Color{static_cast<unsigned char>(128 + c.r / 2), static_cast<unsigned char>(128 + c.g / 2),
-                                   static_cast<unsigned char>(128 + c.b / 2), 255};
-                if (human) {
-                    const float k = MapView::modelScale;
-                    Matrix m = MatrixMultiply(MatrixMultiply(MatrixScale(k, k, k), MatrixRotateY(yaw)), MatrixTranslate(w.x, w.y, w.z));
-                    MapView::DrawModel(*assets_, *human, m, tint, nullptr, dopt_, true);
-                } else {
-                    DrawCylinder(w, 0.35f, 0.35f, 1.8f, 10, c);
-                }
-                labels_.push_back({Vector3{w.x, w.y + 2.3f, w.z}, sc.critter->name,
-                                   sc.critter->kind == CritterKind::Npc ? Color{255, 220, 140, 255} : RAYWHITE});
+            std::unordered_set<CritterId> seen;
+            for (const SceneCritter& sc : s.critters) DrawCritter(s, sc, tw, th, seen);
+            for (auto it = visuals_.begin(); it != visuals_.end();) {
+                if (!seen.count(it->first)) it = visuals_.erase(it); else ++it;
             }
-            for (const ClientItem* it : s.items) {
-                Vector3 w = map_.TileToWorld(static_cast<float>(it->pos.x), static_cast<float>(it->pos.y), tw, th, 0.25f);
-                DrawCube(w, 0.4f, 0.4f, 0.4f, Color{240, 210, 70, 255});
-            }
+            for (const ClientItem* it : s.items) DrawItem(s, *it, tw, th);
         }
         EndMode3D();
+    }
+
+    void DrawCritter(const SceneView& s, const SceneCritter& sc, int tw, int th, std::unordered_set<CritterId>& seen) {
+        const ClientCritter& c = *sc.critter;
+        const ProtoInfo* proto = s.protos ? s.protos->ByPid(static_cast<uint32_t>(std::max(0, c.pid))) : nullptr;
+        if (c.pid < 0) proto = nullptr;
+        if (proto && proto->isStatic) return;  // barrels, windows: baked into the map
+        std::string model = proto && !proto->model.empty() ? proto->model : "HumMNor";
+        Vector3 w = map_.TileToWorld(sc.x, sc.y, tw, th);
+        seen.insert(c.id);
+
+        Visual& v = visuals_[c.id];
+        if (v.model != model) {
+            v = Visual{};
+            v.model = model;
+            if (SkinModel* sm = rigs_->Model(model)) v.inst = std::make_unique<SkinnedInstance>(sm);
+            else v.staticModel = assets_->Model(model);
+            const std::string& skinName = proto ? proto->skin : std::string();
+            if (!skinName.empty()) v.skin = assets_->Texture(skinName);
+        }
+        const float k = MapView::modelScale;
+        float yaw = 0;
+        float height = 1.9f;
+        if (v.inst) {
+            UpdateAnim(v, sc, s, tw, th);
+            yaw = v.anim.yaw;
+            height = v.inst->model()->height * k;
+        } else if (v.staticModel) {
+            yaw = YawFromTileDir(static_cast<float>(kDirDx[static_cast<int>(c.dir)]), static_cast<float>(kDirDy[static_cast<int>(c.dir)]));
+        }
+        Matrix m = MatrixMultiply(MatrixMultiply(MatrixScale(k, k, k), MatrixRotateY(yaw)), MatrixTranslate(w.x, w.y, w.z));
+        Color tint = WHITE;
+        if (v.inst) MapView::DrawModel(*assets_, v.inst->asset(), m, tint, v.skin, dopt_, true);
+        else if (v.staticModel) MapView::DrawModel(*assets_, *v.staticModel, m, tint, v.skin, dopt_, true);
+        else DrawCylinder(w, 0.35f, 0.35f, 1.8f, 10, Unpack(c.color));
+
+        const bool hovered = hoverCrit_ == c.id;
+        if (hovered || sc.isSelf) {
+            Color rc = sc.isSelf ? Color{80, 220, 120, 200} : (c.kind == CritterKind::Npc ? Color{255, 90, 70, 220} : Color{255, 220, 80, 220});
+            if (!sc.isSelf || hovered) DrawCircle3D(Vector3{w.x, w.y + 0.03f, w.z}, hovered ? 0.62f : 0.5f, Vector3{1, 0, 0}, 90.0f, rc);
+        }
+        pickRects_.push_back(PickRect{ProjectRect(w, height, 0.5f), true, c.id, Vector3Distance(w, lastCam_.position)});
+        labels_.push_back({Vector3{w.x, w.y + height + 0.25f, w.z}, c.name,
+                           c.kind == CritterKind::Npc ? Color{255, 220, 140, 255} : RAYWHITE, c.id, c.hp, c.maxHp, c.dead});
+        critterWorld_[c.id] = Vector3{w.x, w.y + height * 0.8f, w.z};
+    }
+
+    void DrawItem(const SceneView& s, const ClientItem& it, int tw, int th) {
+        const ProtoInfo* proto = s.protos ? s.protos->ByPid(it.pid) : nullptr;
+        Vector3 w = map_.TileToWorld(static_cast<float>(it.pos.x), static_cast<float>(it.pos.y), tw, th, 0.0f);
+        bool drawn = false;
+        float height = 0.7f;
+        if (it.kind == gnet::ObjectKind::Ground) {
+            const ModelAsset* ma = proto && !proto->model.empty() ? assets_->Model(proto->model) : nullptr;
+            const float k = MapView::modelScale;
+            if (ma) {
+                Matrix m = MatrixMultiply(MatrixScale(k, k, k), MatrixTranslate(w.x, 0.08f, w.z));
+                MapView::DrawModel(*assets_, *ma, m, WHITE, nullptr, dopt_, true);
+                drawn = true;
+                height = std::max(0.4f, (ma->bmax.y - ma->bmin.y) * k);
+            }
+            if (!drawn) DrawCube(Vector3{w.x, 0.2f, w.z}, 0.4f, 0.4f, 0.4f, Color{240, 210, 70, 255});
+        } else {
+            // doors, containers and usables are baked into the map; a door has no open pose, so hide it while open
+            auto d = doorState_.find(it.id);
+            const bool wasOpen = d != doorState_.end() && d->second;
+            if (it.kind == gnet::ObjectKind::Door && wasOpen != it.open) { map_.SetDoorOpen(w, it.open); doorState_[it.id] = it.open; }
+            else if (d == doorState_.end()) doorState_[it.id] = false;
+            height = 1.6f;
+        }
+        const bool hovered = hoverItem_ == it.id;
+        if (hovered) {
+            Color rc = it.kind == gnet::ObjectKind::Ground ? Color{255, 220, 80, 230} : Color{120, 200, 255, 230};
+            DrawCircle3D(Vector3{w.x, 0.05f, w.z}, 0.55f, Vector3{1, 0, 0}, 90.0f, rc);
+        }
+        Rectangle r = ProjectRect(Vector3{w.x, 0.0f, w.z}, height, 1.0f);
+        r.width = std::max(r.width, 26.0f);
+        r.height = std::max(r.height, 26.0f);
+        pickRects_.push_back(PickRect{r, false, it.id, Vector3Distance(w, lastCam_.position) + 0.5f});
+        if (hovered || (it.kind == gnet::ObjectKind::Ground)) {
+            labels_.push_back({Vector3{w.x, 0.55f, w.z}, hovered ? it.name : std::string(), Color{255, 230, 140, 255}, 0, -1, -1, false});
+        }
+    }
+
+    void DrawLabels(const UiView& ui) {
+        for (const Label& l : labels_) {
+            if (l.text.empty()) continue;
+            Vector2 sp = GetWorldToScreen(l.pos, lastCam_);
+            int tw = MeasureText(l.text.c_str(), 12);
+            DrawText(l.text.c_str(), static_cast<int>(sp.x) - tw / 2 + 1, static_cast<int>(sp.y) - 5, 12, Color{0, 0, 0, 200});
+            DrawText(l.text.c_str(), static_cast<int>(sp.x) - tw / 2, static_cast<int>(sp.y) - 6, 12, l.color);
+            if (l.id && l.hp >= 0 && l.maxHp > 0) {
+                float f = std::clamp(static_cast<float>(l.hp) / l.maxHp, 0.0f, 1.0f);
+                Rectangle b{sp.x - 20, sp.y + 8, 40, 4};
+                DrawRectangleRec(b, Color{0, 0, 0, 180});
+                DrawRectangleRec(Rectangle{b.x, b.y, b.width * f, b.height}, l.dead ? Color{120, 120, 120, 255} : Color{210, 40, 40, 255});
+            }
+        }
+        for (const Floater& f : ui.core->floaters()) {
+            auto it = critterWorld_.find(f.target);
+            if (it == critterWorld_.end()) continue;
+            const float age = static_cast<float>(ui.now - f.time);
+            Vector2 sp = GetWorldToScreen(it->second, lastCam_);
+            sp.y -= 30 + age * 40;
+            Color col = f.kind == 1 ? Color{200, 200, 200, 255} : (f.kind == 2 ? Color{255, 200, 40, 255} : (f.kind == 3 ? Color{255, 60, 60, 255} : Color{255, 110, 90, 255}));
+            col.a = static_cast<unsigned char>(255 * std::clamp(1.6f - age, 0.0f, 1.0f));
+            int fs = f.kind == 2 ? 22 : 18;
+            int tw = MeasureText(f.text.c_str(), fs);
+            DrawText(f.text.c_str(), static_cast<int>(sp.x) - tw / 2 + 1, static_cast<int>(sp.y) + 1, fs, Color{0, 0, 0, col.a});
+            DrawText(f.text.c_str(), static_cast<int>(sp.x) - tw / 2, static_cast<int>(sp.y), fs, col);
+        }
+    }
+
+    // ---------------------------------------------------------------- HUD widgets
+    bool Button(Rectangle r, const char* text, bool active, bool enabled = true) {
+        Vector2 mp = GetMousePosition();
+        const bool hot = enabled && CheckCollisionPointRec(mp, r);
+        Color bg = !enabled ? Color{40, 40, 44, 200} : active ? Color{70, 110, 70, 230} : hot ? Color{70, 70, 90, 230} : Color{36, 38, 48, 220};
+        DrawRectangleRec(r, bg);
+        DrawRectangleLinesEx(r, 1, active ? Color{140, 230, 140, 255} : Color{90, 90, 110, 255});
+        int fs = 14;
+        int tw = MeasureText(text, fs);
+        DrawText(text, static_cast<int>(r.x + (r.width - tw) / 2), static_cast<int>(r.y + (r.height - fs) / 2), fs, enabled ? RAYWHITE : Color{120, 120, 120, 255});
+        return hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    }
+
+    static Color ModeColor(CursorMode m) {
+        switch (m) {
+            case CursorMode::Move: return Color{120, 220, 120, 255};
+            case CursorMode::Attack: return Color{255, 90, 80, 255};
+            case CursorMode::Use: return Color{120, 190, 255, 255};
+            case CursorMode::Talk: return Color{255, 220, 120, 255};
+            default: return Color{230, 160, 255, 255};
+        }
+    }
+
+    void DrawHud(const UiView& ui) {
+        const ClientCore& core = *ui.core;
+        UiState& st = *ui.state;
+        const int sw = GetScreenWidth(), sh = GetScreenHeight();
+        Rectangle hud{sw - 566.0f, sh - 124.0f, 558, 116};
+        DrawRectangleRec(hud, Color{10, 12, 16, 210});
+        DrawRectangleLinesEx(hud, 1, Color{80, 84, 100, 255});
+        uiRects_.push_back(hud);
+
+        // mode buttons
+        const char* names[] = {"1 Move", "2 Attack", "3 Use", "4 Talk", "5 Pickup"};
+        for (int i = 0; i < 5; ++i) {
+            Rectangle b{hud.x + 8 + i * 74.0f, hud.y + 8, 70, 24};
+            if (Button(b, names[i], st.mode == static_cast<CursorMode>(i)))
+                ui.commands->push_back(UiCommand{UiCommand::SetMode, static_cast<uint32_t>(i), 0});
+        }
+        if (Button(Rectangle{hud.x + 8 + 5 * 74.0f + 6, hud.y + 8, 66, 24}, "I Inv", st.inventory)) ui.commands->push_back(UiCommand{UiCommand::ToggleInventory, 0, 0});
+        if (Button(Rectangle{hud.x + 8 + 5 * 74.0f + 78, hud.y + 8, 66, 24}, "C Char", st.charSheet)) ui.commands->push_back(UiCommand{UiCommand::ToggleChar, 0, 0});
+
+        // HP
+        const ClientCritter* me = core.self();
+        int hp = core.hasStats() ? core.stats().hp : (me ? me->hp : -1);
+        int maxHp = core.hasStats() ? core.stats().maxHp : (me ? me->maxHp : -1);
+        Rectangle hpb{hud.x + 8, hud.y + 40, 250, 20};
+        DrawRectangleRec(hpb, Color{40, 10, 10, 255});
+        if (hp >= 0 && maxHp > 0) {
+            float f = std::clamp(static_cast<float>(hp) / maxHp, 0.0f, 1.0f);
+            DrawRectangleRec(Rectangle{hpb.x, hpb.y, hpb.width * f, hpb.height}, f > 0.35f ? Color{190, 30, 30, 255} : Color{240, 60, 30, 255});
+        }
+        DrawRectangleLinesEx(hpb, 1, Color{150, 70, 70, 255});
+        char buf[96];
+        std::snprintf(buf, sizeof buf, "HP %d / %d", std::max(hp, 0), std::max(maxHp, 0));
+        DrawText(buf, static_cast<int>(hpb.x) + 6, static_cast<int>(hpb.y) + 3, 14, RAYWHITE);
+
+        // AP: one cell per AP, partial fill for the regenerating one
+        const float maxAp = core.waitKnown() ? core.MaxAp() : (core.hasStats() ? core.stats().sequence : 0.0f);
+        const float ap = core.CurrentAp();
+        Rectangle apb{hud.x + 270, hud.y + 40, 280, 20};
+        DrawRectangleRec(apb, Color{8, 18, 12, 255});
+        if (maxAp > 0.5f) {
+            const int n = std::max(1, static_cast<int>(std::lround(maxAp)));
+            const float cwid = apb.width / n;
+            for (int i = 0; i < n; ++i) {
+                float f = std::clamp(ap - i, 0.0f, 1.0f);
+                Rectangle cell{apb.x + i * cwid + 1, apb.y + 2, cwid - 2, apb.height - 4};
+                DrawRectangleRec(cell, Color{20, 34, 24, 255});
+                DrawRectangleRec(Rectangle{cell.x, cell.y, cell.width * f, cell.height}, Color{70, 220, 110, 255});
+            }
+        }
+        DrawRectangleLinesEx(apb, 1, Color{60, 130, 80, 255});
+        std::snprintf(buf, sizeof buf, "AP %.1f / %.0f", ap, maxAp);
+        DrawText(buf, static_cast<int>(apb.x) + 4, static_cast<int>(apb.y) - 14, 12, Color{150, 230, 170, 255});
+
+        // break time (FOnline IntBreakTime): bar + red clock while actions are locked
+        Rectangle bt{hud.x + 36, hud.y + 72, 514, 18};
+        const bool locked = core.IsBreak();
+        DrawRectangleRec(bt, Color{24, 8, 8, 255});
+        if (locked) {
+            const double rem = core.BreakRemaining(), tot = std::max(0.05, core.BreakTotal());
+            const float f = static_cast<float>(std::clamp(rem / tot, 0.0, 1.0));
+            DrawRectangleRec(Rectangle{bt.x, bt.y, bt.width * f, bt.height}, Color{220, 30, 30, 255});
+            std::snprintf(buf, sizeof buf, "BREAK  %.1fs", rem);
+            DrawText(buf, static_cast<int>(bt.x) + 8, static_cast<int>(bt.y) + 2, 14, WHITE);
+            // red clock icon
+            const Vector2 c{hud.x + 20, hud.y + 81};
+            const float pulse = 0.8f + 0.2f * std::sin(static_cast<float>(ui.now) * 10.0f);
+            DrawCircleV(c, 11, Color{static_cast<unsigned char>(230 * pulse), 25, 25, 255});
+            DrawCircleLines(static_cast<int>(c.x), static_cast<int>(c.y), 11, WHITE);
+            const float ang = static_cast<float>(ui.now) * 4.0f;
+            DrawLineEx(c, Vector2{c.x + 7 * std::sin(ang), c.y - 7 * std::cos(ang)}, 2, WHITE);
+            DrawLineEx(c, Vector2{c.x, c.y - 5}, 2, WHITE);
+        } else {
+            const Vector2 c{hud.x + 20, hud.y + 81};
+            DrawCircleV(c, 11, Color{30, 90, 40, 255});
+            DrawCircleLines(static_cast<int>(c.x), static_cast<int>(c.y), 11, Color{120, 200, 130, 255});
+            DrawText(core.InBattle() ? "IN BATTLE - ready" : "ready", static_cast<int>(bt.x) + 8, static_cast<int>(bt.y) + 2, 14, Color{110, 170, 120, 255});
+        }
+        DrawRectangleLinesEx(bt, 1, locked ? Color{200, 60, 60, 255} : Color{80, 60, 60, 255});
+        if (core.waitKnown() && core.lastResult() != gnet::ActionResult::Ok && core.lastResult() != gnet::ActionResult::None &&
+            ui.now - core.lastResultTime() < 1.5) {
+            const char* why = core.lastResult() == gnet::ActionResult::Busy ? "busy" : core.lastResult() == gnet::ActionResult::NoAp ? "not enough AP" :
+                              core.lastResult() == gnet::ActionResult::Dead ? "dead" : "invalid";
+            DrawText(why, static_cast<int>(hud.x) + 8, static_cast<int>(hud.y) - 20, 16, Color{255, 120, 100, 255});
+        }
+        std::snprintf(buf, sizeof buf, "%s", core.serverTiming() ? "real-time" : "legacy server");
+        DrawText(buf, static_cast<int>(hud.x + hud.width) - MeasureText(buf, 10) - 6, static_cast<int>(hud.y + hud.height) - 14, 10, Color{110, 110, 120, 255});
+
+        if (st.inventory) DrawInventory(ui);
+        if (core.hasContainer()) DrawContainer(ui);
+        if (st.charSheet) DrawCharSheet(ui);
+    }
+
+    void DrawInventory(const UiView& ui) {
+        const ClientCore& core = *ui.core;
+        const int sw = GetScreenWidth(), sh = GetScreenHeight();
+        Rectangle p{sw - 340.0f, 64, 332, static_cast<float>(sh - 64 - 140)};
+        DrawRectangleRec(p, Color{10, 12, 16, 225});
+        DrawRectangleLinesEx(p, 1, Color{80, 84, 100, 255});
+        uiRects_.push_back(p);
+        DrawText("Inventory", static_cast<int>(p.x) + 8, static_cast<int>(p.y) + 6, 16, RAYWHITE);
+        if (core.hasStats()) {
+            char b[64];
+            std::snprintf(b, sizeof b, "%u / %u lb", core.stats().carried, core.stats().carryWeight);
+            DrawText(b, static_cast<int>(p.x + p.width) - MeasureText(b, 12) - 8, static_cast<int>(p.y) + 9, 12, Color{180, 180, 190, 255});
+        }
+        float y = p.y + 30;
+        for (const gnet::InvEntry& e : core.inventory()) {
+            if (y + 26 > p.y + p.height) break;
+            Rectangle row{p.x + 6, y, p.width - 12, 24};
+            DrawRectangleRec(row, e.equipped ? Color{40, 60, 40, 220} : Color{24, 26, 34, 220});
+            std::string label = e.name + (e.count > 1 ? " x" + std::to_string(e.count) : "");
+            DrawText(label.c_str(), static_cast<int>(row.x) + 6, static_cast<int>(row.y) + 5, 14, e.equipped ? Color{170, 240, 170, 255} : RAYWHITE);
+            if (Button(Rectangle{row.x + row.width - 128, row.y + 2, 60, 20}, e.equipped ? "Unequip" : "Equip", false))
+                ui.commands->push_back(UiCommand{UiCommand::Equip, e.id, e.equipped ? 0u : 1u});
+            if (Button(Rectangle{row.x + row.width - 62, row.y + 2, 56, 20}, "Drop", false))
+                ui.commands->push_back(UiCommand{UiCommand::Drop, e.id, 0});
+            y += 27;
+        }
+        if (core.inventory().empty()) DrawText("(empty)", static_cast<int>(p.x) + 10, static_cast<int>(y) + 4, 14, Color{140, 140, 150, 255});
+    }
+
+    void DrawContainer(const UiView& ui) {
+        const ClientCore& core = *ui.core;
+        const int sw = GetScreenWidth();
+        Rectangle p{sw / 2.0f - 170, 90, 340, 300};
+        DrawRectangleRec(p, Color{14, 14, 20, 235});
+        DrawRectangleLinesEx(p, 1, Color{120, 140, 200, 255});
+        uiRects_.push_back(p);
+        DrawText("Container", static_cast<int>(p.x) + 8, static_cast<int>(p.y) + 6, 16, RAYWHITE);
+        if (Button(Rectangle{p.x + p.width - 70, p.y + 4, 62, 20}, "Close", false)) ui.commands->push_back(UiCommand{UiCommand::CloseContainer, 0, 0});
+        if (Button(Rectangle{p.x + p.width - 150, p.y + 4, 74, 20}, "Take all", false, !core.container().empty()))
+            ui.commands->push_back(UiCommand{UiCommand::Take, core.containerOwner(), 0});
+        float y = p.y + 30;
+        for (const gnet::InvEntry& e : core.container()) {
+            if (y + 26 > p.y + p.height) break;
+            Rectangle row{p.x + 6, y, p.width - 12, 24};
+            DrawRectangleRec(row, Color{26, 28, 38, 220});
+            std::string label = e.name + (e.count > 1 ? " x" + std::to_string(e.count) : "");
+            DrawText(label.c_str(), static_cast<int>(row.x) + 6, static_cast<int>(row.y) + 5, 14, RAYWHITE);
+            if (Button(Rectangle{row.x + row.width - 56, row.y + 2, 50, 20}, "Take", false))
+                ui.commands->push_back(UiCommand{UiCommand::Take, core.containerOwner(), e.id});
+            y += 27;
+        }
+        if (core.container().empty()) DrawText("(empty)", static_cast<int>(p.x) + 10, static_cast<int>(y) + 4, 14, Color{140, 140, 150, 255});
+    }
+
+    void DrawCharSheet(const UiView& ui) {
+        const ClientCore& core = *ui.core;
+        Rectangle p{10, 64, 220, 210};
+        DrawRectangleRec(p, Color{10, 12, 16, 225});
+        DrawRectangleLinesEx(p, 1, Color{80, 84, 100, 255});
+        uiRects_.push_back(p);
+        DrawText("Character", static_cast<int>(p.x) + 8, static_cast<int>(p.y) + 6, 16, RAYWHITE);
+        if (!core.hasStats()) { DrawText("(no data)", static_cast<int>(p.x) + 10, static_cast<int>(p.y) + 34, 14, GRAY); return; }
+        const gnet::Stats& s = core.stats();
+        const char* sp[7] = {"Strength", "Perception", "Endurance", "Charisma", "Intelligence", "Agility", "Luck"};
+        float y = p.y + 30;
+        for (int i = 0; i < 7; ++i, y += 18) {
+            char b[64];
+            std::snprintf(b, sizeof b, "%-13s %d", sp[i], s.special[i]);
+            DrawText(b, static_cast<int>(p.x) + 10, static_cast<int>(y), 14, Color{220, 220, 230, 255});
+        }
+        char b[96];
+        std::snprintf(b, sizeof b, "Level %d   AC %d   Seq %d", s.level, s.armorClass, s.sequence);
+        DrawText(b, static_cast<int>(p.x) + 10, static_cast<int>(y) + 6, 14, Color{200, 200, 140, 255});
+        std::snprintf(b, sizeof b, "HP %d/%d  Melee +%d", s.hp, s.maxHp, s.meleeBonus);
+        DrawText(b, static_cast<int>(p.x) + 10, static_cast<int>(y) + 24, 14, Color{220, 140, 140, 255});
+    }
+
+    // cursor mode label and tooltip for whatever is under the mouse
+    void DrawCursorInfo(const UiView& ui) {
+        const Vector2 mp = GetMousePosition();
+        if (IsOverUi(static_cast<int>(mp.x), static_cast<int>(mp.y))) return;
+        const CursorMode mode = ui.state->mode;
+        std::string t = std::string("[") + CursorModeName(mode) + "]";
+        PickResult pr;
+        if (Pick(static_cast<int>(mp.x), static_cast<int>(mp.y), pr)) {
+            if (pr.kind == PickResult::Critter) {
+                if (const ClientCritter* c = ui.core->Find(pr.critter)) {
+                    t += " " + c->name;
+                    if (c->hp >= 0 && c->maxHp > 0) t += "  " + std::to_string(c->hp) + "/" + std::to_string(c->maxHp) + " HP";
+                    if (c->dead) t += " (dead)";
+                }
+            } else if (pr.kind == PickResult::Item) {
+                auto it = ui.core->items().find(pr.item);
+                if (it != ui.core->items().end()) t += " " + it->second.name;
+            }
+        }
+        const int fs = 14;
+        const int tw = MeasureText(t.c_str(), fs);
+        Rectangle r{mp.x + 16, mp.y + 14, static_cast<float>(tw + 10), 20};
+        DrawRectangleRec(r, Color{0, 0, 0, 170});
+        DrawText(t.c_str(), static_cast<int>(r.x) + 5, static_cast<int>(r.y) + 3, fs, ModeColor(mode));
     }
 
     float TileSize() const { return 32.0f * zoom_; }
@@ -405,6 +962,7 @@ private:
 
     RendererOptions opt_;
     std::unique_ptr<GameAssets> assets_;
+    std::unique_ptr<RigLibrary> rigs_;
     MapView map_;
     DrawOptions dopt_;
     OrbitCam cam_;
@@ -412,9 +970,25 @@ private:
     Vector3 panOffset_{0, 0, 0};
     Vector3 hover_{0, 0, 0};
     bool hoverValid_ = false, active3d_ = false, follow_ = false, showGrid_ = false, shotDone_ = false;
+    bool rmbDown_ = false;
+    float rmbTravel_ = 0;
     int lastTileW_ = 0, lastTileH_ = 0, frame_ = 0;
-    std::string attemptedName_, loadedName_;
+    size_t nextShot_ = 0;
+    double startTime_ = 0, sceneNow_ = 0;
+    uint64_t attemptedSerial_ = ~0ull;
+    std::string attemptedName_, loadedName_, assetErr_, mapErr_;
     std::vector<Label> labels_;
+    std::vector<PickRect> pickRects_;
+    std::vector<Rectangle> uiRects_;
+    std::unordered_map<CritterId, Visual> visuals_;
+    std::unordered_map<CritterId, Vector3> critterWorld_;
+    std::unordered_map<ItemId, bool> doorState_;
+    CritterId hoverCrit_ = 0;
+    ItemId hoverItem_ = 0;
+    struct PhCritter { CritterId id; float x, y; bool self; };
+    struct PhItem { ItemId id; TilePos pos; };
+    std::vector<PhCritter> phCritters_;
+    std::vector<PhItem> phItems_;
 };
 
 std::unique_ptr<IRenderer> CreateRaylibRenderer(const RendererOptions& opt) { return std::make_unique<RaylibRenderer>(opt); }

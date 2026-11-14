@@ -201,6 +201,13 @@ void MapView::BuildEntities(GameAssets& assets) {
     if (!hasEmap_) return;
     std::set<std::string> reported;
     for (const gd::MapEntity& e : emap_.entities) {
+        if (network_) {
+            const ProtoInfo* pi = protos_ ? protos_->ByKey(e.tmpl + "." + e.type) : nullptr;
+            bool dynamic;
+            if (pi) dynamic = (pi->isCritter() && !pi->isStatic) || pi->cls == "weapon" || pi->cls == "armor" || pi->cls == "ammo" || pi->cls == "item";
+            else dynamic = e.type == "CRT" || e.type == "WEA" || e.type == "ARM" || e.type == "AMO" || e.type == "ITM";
+            if (dynamic) continue;
+        }
         std::string defSkin;
         const ModelAsset* m = assets.EntityModel(e.tmpl, e.type, &defSkin);
         if (!m) {
@@ -249,6 +256,7 @@ void MapView::Draw(GameAssets& assets, const DrawOptions& opt) {
     entitiesDrawn_ = 0;
     if (opt.entities) {
         for (const MapEntityInstance& e : entities_) {
+            if (e.hidden) continue;
             DrawModel(assets, *e.model, e.transform, WHITE, e.skin, opt, true);
             ++entitiesDrawn_;
         }
@@ -256,6 +264,18 @@ void MapView::Draw(GameAssets& assets, const DrawOptions& opt) {
     rlDisableDepthMask();
     drawBatches(true);
     rlEnableDepthMask();
+}
+
+void MapView::SetDoorOpen(const Vector3& p, bool open) {
+    MapEntityInstance* best = nullptr;
+    float bd = 2.5f;
+    for (MapEntityInstance& e : entities_) {
+        if (e.src.type != "DOR") continue;
+        const float dx = e.src.pos[0] - p.x, dz = -e.src.pos[2] - p.z;
+        const float d = std::sqrt(dx * dx + dz * dz);
+        if (d < bd) { bd = d; best = &e; }
+    }
+    if (best) best->hidden = open;
 }
 
 bool MapView::PickGround(const Ray& ray, Vector3& hit) const {
