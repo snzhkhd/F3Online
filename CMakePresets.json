@@ -1,0 +1,34 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "vs2022",
+      "displayName": "Visual Studio 2022 (x64)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/vs2022"
+    },
+    {
+      "name": "vs2022-server-only",
+      "displayName": "Visual Studio 2022 (x64), headless server + test client only",
+      "inherits": "vs2022",
+      "binaryDir": "${sourceDir}/build/vs2022-server",
+      "cacheVariables": { "F3_BUILD_CLIENT": "OFF" }
+    },
+    {
+      "name": "ninja",
+      "displayName": "Ninja Multi-Config (needs MSVC env or other compiler)",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/ninja"
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug",   "configurePreset": "vs2022", "configuration": "Debug" },
+    { "name": "release", "configurePreset": "vs2022", "configuration": "Release" },
+    { "name": "server-release", "configurePreset": "vs2022-server-only", "configuration": "Release" }
+  ],
+  "testPresets": [
+    { "name": "release", "configurePreset": "vs2022", "configuration": "Release" }
+  ]
+}
