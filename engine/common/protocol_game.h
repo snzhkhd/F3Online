@@ -311,3 +311,23 @@ struct WaitState {
 
 }  // namespace gnet
 }  // namespace f3
+
+// ===================================================================================================
+// CLIENT-RENDERING BLOCK (client agent). Optional: critter model identification. Id: server->client 135.
+// CritterAdd carries no model. A client that has gamedata/server/protos.json maps `pid` (index in the key-sorted protos
+// list, same as ItemAdd.pid) to model, skin and the `static` flag. Server: send this right after CritterAdd for every
+// critter that was created from a prototype (players: pid of Default_PC.CRT). Clients without it fall back to a
+// name -> prototype lookup in protos.json, so ignoring this message is harmless but less accurate.
+// ===================================================================================================
+namespace f3 {
+enum class GMsgView : uint8_t { S2C_CritterProto = 135 };
+namespace gnet {
+struct CritterProto {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgView::S2C_CritterProto);
+    uint32_t id = 0;   // critter id
+    uint16_t pid = 0;  // prototype index (key-sorted protos.json)
+    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU16(pid); }
+    bool Read(ByteBuffer& b) { id = b.ReadU32(); pid = b.ReadU16(); return b.Ok(); }
+};
+}  // namespace gnet
+}  // namespace f3
