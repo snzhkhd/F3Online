@@ -108,6 +108,7 @@ public:
     void Broadcast(const std::string& text);              // system message to all players
     void SendBuf(Critter& to, const ByteBuffer& b) { Send(to, b); }  // raw message to one player (AMX dialogue engine)
     AmxHost* Amx() { return amx_.get(); }
+    void SetDoor(Map& m, Item& door, bool open);
     void TalkTo(Critter& pc, CritterId npc);   // dialogue: walk next to the NPC, then run its .scra conversation
     void RunTalk(Critter& pc);                 // per-tick continuation of TalkTo
 
@@ -145,7 +146,6 @@ private:
     void SendObjectInfo(Critter& to, const Item& it);
     void DropAllToGround(Critter& c);
     void Respawn(Critter& c);
-    void SetDoor(Map& m, Item& door, bool open);
     void TickDoors(Map& m);
     void ApplyDoorBlock(Map& m, Item& door);
     void PlaceCritter(Critter& c, Map& m, TilePos pos);

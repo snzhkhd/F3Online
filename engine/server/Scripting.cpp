@@ -144,7 +144,7 @@ void Scripting::BindApi(sol::state& L) {
                 const Proto* p = S.Data().GetProto(it.pid);
                 sol::table e = sv.create_table();
                 e["id"] = it.id; e["name"] = it.name; e["kind"] = kinds[(int)it.kind]; e["x"] = it.pos.x; e["y"] = it.pos.y;
-                e["proto"] = p ? p->key : std::string(); e["open"] = it.open; e["count"] = it.count;
+                e["proto"] = p ? p->key : std::string(); e["open"] = it.open; e["count"] = it.count; e["script"] = it.script; e["locked"] = it.locked;
                 t[n++] = e;
             }
             return t;
@@ -239,6 +239,13 @@ void Scripting::BindApi(sol::state& L) {
         const Proto* p = S.Data().FindProto(key);
         if (!p) return 0;
         return (int)S.SpawnObjectProto((MapId)map, *p, TilePos{(int16_t)x, (int16_t)y}, (uint16_t)count.value_or(1), nullptr);
+    };
+    L["stf"] = [&S](int id) { return S.Data().String(id); };   // English.stf text by id
+    L["set_door_locked"] = [&S](int objId, bool locked) { Item* d = S.FindObject((ItemId)objId); if (!d || d->kind != ObjKind::Door) return false; S.SetDoorLocked(*d, locked); return true; };
+    L["set_door_open"] = [&S](int objId, bool open) {
+        Map* m = nullptr; Item* d = S.FindObject((ItemId)objId, &m);
+        if (!d || !m || d->kind != ObjKind::Door) return false;
+        S.SetDoor(*m, *d, open); return true;
     };
     L["get_global"] = [&S](const std::string& k) { return S.GetGlobal(k); };
     L["set_global"] = [&S](const std::string& k, double v) { S.SetGlobal(k, v); };

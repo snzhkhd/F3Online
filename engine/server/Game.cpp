@@ -527,7 +527,7 @@ bool Server::UseObject(Critter& c, ItemId objId) {
         case ObjKind::Ground: return false;
     }
     const Proto* p = data_.GetProto(o.pid);
-    if (scripting_) scripting_->Call("on_use", &c, static_cast<int>(objId), p ? p->key : std::string());
+    if (scripting_) scripting_->Call("on_use", &c, static_cast<int>(objId), p ? p->key : std::string(), o.script);
     return true;
 }
 

@@ -6,6 +6,12 @@ log("main.lua: loading")
 load_script("npc/guard.lua")
 load_script("npc/wanderer.lua")
 load_script("npc/hostile.lua")
+local original_tutorial = load_script("original/tutorial.lua")
+
+-- map object used (door, container, usable); script = original AMX script name of the object
+function on_use(c, obj_id, proto_key, script)
+    if original_tutorial then original_tutorial.on_use(c, obj_id, proto_key, script) end
+end
 
 -- Behaviour of critters spawned from the original map data (called once per critter, first tick).
 function pick_npc_type(npc)
@@ -98,6 +104,10 @@ function commands.tp(c, arg)
     local x, y = (arg or ""):match("^(%d+)%s+(%d+)")
     if not x or not c:teleport(c.map_id, tonumber(x), tonumber(y)) then c:tell("usage: /tp x y (walkable cell)") end
 end
+-- dev: /glob <name> prints a global; /usescript <original script name> runs the Lua port of that object script's use handler
+function commands.glob(c, arg) c:tell("global " .. tostring(arg) .. " = " .. tostring(get_global(arg or ""))) end
+function commands.usescript(c, arg) original_tutorial.on_use(c, 0, "", arg) end
+
 -- dev: /near <name or dialogue part>: teleport next to the first critter of this map whose name/dialogue contains the text (e.g. /near Armstrong)
 function commands.near(c, arg)
     local m = get_map(c.map_id)

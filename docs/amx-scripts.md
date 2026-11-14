@@ -38,8 +38,8 @@ are annotated with the string. Debug records (`line`, `symbol`) are hidden. Read
 |---|---:|---:|---|---|---|
 | `Myself` | 7310 | 105 | 0 | yes | () -> entity handle of the script owner |
 | `AttachSound` | 1949 | 72 | 3 | yes | (entity, sound$, ?) |
-| `RegisterReply` | 1680 | 40 | 4 | no | (replyTextId$, ?, nextNodeCode, ?) adds a reply option; 4 args, 3rd looks like a node-id/function code, args need tracing |
-| `SetNodeTextFunction` | 1245 | 40 | 1 | no | (funcName$) node text is produced by that public (NU<k>_N<k>) |
+| `RegisterReply` | 1680 | 40 | 4 | no | (flag, stfId, actionPublic$, logicPublic$) adds a reply; chosen -> action public, then logic public (bound, dialogue engine) |
+| `SetNodeTextFunction` | 1245 | 40 | 1 | no | (publicName$) reply builder of the node (NU<k>_N<k>); "EndDialogue" ends the conversation (bound) |
 | `GetGender` | 970 | 79 | 1 | yes | (entity) -> int |
 | `GetGlobal` | 865 | 79 | 1,2 | yes | (name$) -> int (globals.ini / server global table) |
 | `RandomNumber` | 667 | 90 | 2 | yes | (lo, hi) -> int |
@@ -152,10 +152,31 @@ are annotated with the string. Debug records (`line`, `symbol`) are hidden. Read
 | `GetLOSPoint` | 1 | 1 | 2 | no | (entity, point[]) |
 | `A_ReloadWeapon` | 1 | 1 | 1 | no | (entity) |
 
-## Port status
+## Dialogue engine (server, `AmxHost::StartDialog`)
 
-See the table below (updated as scripts are ported to Lua under `scripts/original/`).
+Graph of a `.scra` (verified by running Armstrong): `OnStartDialogue` -> `RL1_N1` picks the first node and calls `N<k>`. A node function runs `NA<k>`,
+`SetCurrentNodeName`, `SetNodeTextFunction("NU<k>_N<k>")` and (if `NTC` holds) `NTA` + `RegisterNodeText(stfId)`. The server then calls the
+reply builder `NU<k>_N<k>`, which calls `RegisterReply(flag, stfId, "RA..", "RL..")` for every reply whose `RC<j>_N<k>` condition holds, and sends
+`DialogNode` (text and replies, stf ids resolved from `strings.tsv`, `{cNNN}` tags stripped). `DialogChoose(i)` runs the reply's action public then its
+logic public (`LA..` sets globals / tasks, then `N<next>`); the node is presented again. `SetNodeTextFunction("EndDialogue")` closes. Quest natives
+`OpenTask/CloseTask/AddEntry` set globals `Task<id>` (1 open, 2 closed) / `TaskEntry<id>` and tell the player. Behaviour scripts that call
+`StartDialogue(npc, pc)` (00_TutorialFrank) start a conversation themselves. Protocol: `protocol_game.h` dialogue block (C 30 Talk / 31 DialogChoose /
+32 DialogClose, S 136 DialogOpen / 137 DialogNode / 138 DialogClose). Talking walks the player next to the NPC first (`Server::TalkTo`). Client: Talk cursor
+(NPC prototype has a dialogue) sends Talk; raylib window with wrapped text and one button per reply; Esc leaves. Verified headless by
+`f3_gametest` (Armstrong: open, 8 choices, goodbye closes); the raylib window itself compiles but was not exercised visually.
+
+## Port status
 
 | script | status |
 |---|---|
-| (none yet) | |
+| `00 Corporal Armstrong.scra`, `00 Frank.scra` (all 36 `.scra` use the same natives) | running on the AMX dialogue engine (Armstrong tested; Frank not driven in a test) |
+| `00_TutorialGeneratorRoomDoor01` | Lua `scripts/original/tutorial.lua` (UseSkill lockpick -> `00_Lock_Status`, unlock) |
+| `00_TutorialGenerator01` | Lua port (repair -> `00_Generator_Status`, `00_Life_Support_Status`, task 3231 closed); tested via `/usescript` |
+| `00_TutorialComputer01` | Lua (status message only; map effect `Life_SupportEffects` and message passing not ported) |
+| `00_Tutorial_Vault_Door_Console` | Lua (unlocks/opens `Outer_EntranceDS_Doors*`; the console animation `A_PlayAnim` is not ported) |
+| `00_TutorialFrank.scrb`, `CaptainArmstrong.scrb` | AMX only: starts dialogue via `StartDialogue`; walking/`A_*` actions are unimplemented natives |
+| insurgents, dogs, barrels, windows, vault dwellers, map scripts, `00_TutorialDefault_VaultDoor` | not ported (insurgent hostility still comes from `scripts/npc/hostile.lua` by team) |
+| everything else (~100 scripts) | not ported; AMX prototype runs their OnCreate/OnUpdate |
+
+Not done: skill-use UI (UseSkill identifiers), the `A_*` action queue, messages, squads/teams, stores, `A_FloatingSpeechText`.
+The Lua hook `on_use(c, obj_id, proto_key, script)` now receives the original script name; `stf(id)`, `set_door_locked`, `set_door_open` are new Lua globals.

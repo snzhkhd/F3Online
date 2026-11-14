@@ -518,6 +518,19 @@ int main(int argc, char** argv) {
         }
     }
 
+    // --- Lua port of the tutorial generator (scripts/original/tutorial.lua): use -> 00_Generator_Status = 1
+    {
+        auto say = [&](const char* t) { net::ChatReq c; c.text = t; a.Send(net::Pack(c)); };
+        auto sawChat = [&](const char* needle) { for (auto& l : a.chat) if (l.find(needle) != std::string::npos) return true; return false; };
+        say("/glob 00_Generator_Status");
+        CHECK(WaitFor({&a, &b}, 3, [&] { return sawChat("00_Generator_Status = 0"); }), "generator status starts at 0");
+        say("/usescript 00_TutorialGenerator01");
+        CHECK(WaitFor({&a, &b}, 3, [&] { return sawChat("Repairing"); }), "using the generator repairs it (Lua port)");
+        say("/glob 00_Generator_Status");
+        CHECK(WaitFor({&a, &b}, 3, [&] { return sawChat("00_Generator_Status = 1"); }), "generator status is 1 after repair");
+        CHECK(sawChat("Task completed"), "task 3231 completed");
+    }
+
     // --- map transition: go to the Vault side of Junktown's transition region
     {
         WaitFor({&a, &b}, 0.2, [] { return false; });
