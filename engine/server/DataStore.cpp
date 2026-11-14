@@ -84,6 +84,10 @@ bool DataStore::Load(const fs::path& dir, std::string& err) {
         p.dialog = j.value("dialog", std::string());
         p.team = j.value("team", 0);
         p.isStatic = j.value("static", false);
+        {   // GDOR (12 bytes): byte 1 is 1 only for DS_DoorsVault13Door02 (guess: initially locked)
+            std::string gd = j.value("gdor_hex", std::string());
+            p.doorLocked = gd.size() >= 4 && gd.compare(2, 2, "00") != 0;
+        }
         p.inventory = StrArray(j, "inventory");
         if (j.contains("critter")) {
             const json& c = j["critter"];
@@ -174,6 +178,8 @@ bool DataStore::LoadMap(const std::string& name, MapDef& out, std::string& err) 
     out.name = j.value("name", name);
     out.width = j.value("width", 0);
     out.height = j.value("height", 0);
+    out.originX = j.value("origin_x", 0.0f);
+    out.originZ = j.value("origin_z", 0.0f);
     if (out.width <= 0 || out.height <= 0 || static_cast<long long>(out.width) * out.height > 4000000) { err = "bad map size"; return false; }
     {
         fs::path wp = dir_ / "maps" / j.value("walk", name + ".walk");

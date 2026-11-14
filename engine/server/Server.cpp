@@ -562,6 +562,9 @@ void Server::DoTick() {
         Critter* c = world_.GetCritter(id);
         if (c && c->IsNpc() && c->mapId != 0 && !c->dead && active.count(c->mapId)) scripting_->OnNpcTick(*c, tick_);
     }
+    if (tick_ % 5 == 0)
+        for (MapId mid : active)
+            if (Map* dm = world_.GetMap(mid)) TickDoors(*dm);
     if (amx_) amx_->Tick(tick_, active);
     scripting_->OnTick(tick_);
     if (tick_ % static_cast<uint64_t>(cfg_.tickRate) == 0) scripting_->PollConfig();  // hot reload of config.lua

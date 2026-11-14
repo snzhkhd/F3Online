@@ -31,9 +31,11 @@ struct Item {
     TilePos pos;
     ObjKind kind = ObjKind::Ground;
     uint16_t count = 1;
-    bool open = false;                 // doors: footprint walkable
+    bool open = false;                 // doors: model open (animation / script state)
+    bool locked = false;               // doors: closed AND locked blocks the footprint cells; unlocked doors open by themselves
+    uint64_t nearTick = 0;             // doors: last tick a critter was close (auto close timer)
     std::vector<InvItem> contents;     // containers
-    std::vector<TilePos> footprint;    // doors: wall cells released while open
+    std::vector<TilePos> footprint;    // doors: the 0x1b doorway cells of the grid (blocked only while closed and locked)
     std::string script;                // original AMX script name (informational / AMX host)
 };
 
@@ -130,7 +132,10 @@ struct Map {
     MapId id = 0;
     std::string name;
     int width = 0, height = 0;
+    float originX = 0, originZ = 0;  // world position of the min corner of cell (0,0) (original data maps only)
     std::vector<uint8_t> blocked;  // width*height
+    std::vector<uint8_t> cls;      // raw mapdata class per cell (original data maps; empty on test maps)
+    std::unordered_map<int, ItemId> doorCell;  // cell index -> door object owning that doorway cell
     TilePos spawn;
     std::vector<EntryPoint> entries;
     std::vector<Region> regions;

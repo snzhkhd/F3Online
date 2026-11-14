@@ -78,7 +78,9 @@ void AmxHost::BindNatives() {
     N["GetPosition"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {  // (entity, float[3] out) x,y(height),z in world units
         Critter* c = CritterOf(a[0]);
         if (!c || n < 2) return 0;
-        m.Set(a[1], FBits(c->pos.x / 2.f)); m.Set(a[1] + 4, FBits(0.f)); m.Set(a[1] + 8, FBits(c->pos.y / 2.f));
+        const Map* mp = server_.GetWorld().GetMap(c->mapId);
+        const float ox = mp ? mp->originX : 0.f, oz = mp ? mp->originZ : 0.f;   // original world coordinates = cell / 2 + grid origin
+        m.Set(a[1], FBits(c->pos.x / 2.f + ox)); m.Set(a[1] + 4, FBits(0.f)); m.Set(a[1] + 8, FBits(c->pos.y / 2.f + oz));
         return 1;
     };
     N["GetFacing"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell { Critter* c = CritterOf(a[0]); return FBits(c ? static_cast<float>(static_cast<int>(c->dir) * 45) : 0.f); };
@@ -106,8 +108,17 @@ void AmxHost::BindNatives() {
     };
     // ---- teams (the scripts create/seed them on every spawn; kept as accept-and-ignore stubs)
     N["CreateTeam"] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { static AmxCell next = 100; return next++; };
+    // ---- doors: handle = object id | 0x40000000
+    auto doorOf = [this](AmxCell h) -> Item* {
+        if (!(h & 0x40000000)) return nullptr;
+        Item* it = server_.FindObject(static_cast<ItemId>(h & 0x3FFFFFFF));
+        return it && it->kind == ObjKind::Door ? it : nullptr;
+    };
+    N["UnlockDoor"] = [this, doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { if (Item* d = n > 0 ? doorOf(a[0]) : nullptr) { server_.SetDoorLocked(*d, false); return 1; } return 0; };
+    N["LockDoor"] = [this, doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { if (Item* d = n > 0 ? doorOf(a[0]) : nullptr) { server_.SetDoorLocked(*d, true); return 1; } return 0; };
+    N["IsLocked"] = [doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { Item* d = n > 0 ? doorOf(a[0]) : nullptr; return d && d->locked ? 1 : 0; };
     for (const char* n : {"AddToTeam", "SetTeamAttitude", "SetTeamRank", "CreateSquad", "AddToSquad", "SetSquadAttitude", "SetSquadRank",
-                          "ClearActions", "AttachSound", "RemoveSound", "SetValue", "UnlockDoor", "LockDoor"})
+                          "ClearActions", "AttachSound", "RemoveSound", "SetValue"})
         N[n] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };
 }
 
@@ -175,6 +186,12 @@ void AmxHost::Tick(uint64_t tick, const std::unordered_set<MapId>& active) {
         }
         if (tick % static_cast<uint64_t>(rate) == key % static_cast<uint64_t>(rate)) e.inst->Call("OnUpdate");
     }
+}
+
+void AmxHost::CallObject(ItemId id, const char* pub) {
+    auto it = instances_.find(id | kObjectBit);
+    if (it == instances_.end() || !it->second.created || !it->second.inst->Script().HasPublic(pub)) return;
+    it->second.inst->Call(pub);
 }
 
 void AmxHost::OnDeath(const Critter& c) {

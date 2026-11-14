@@ -478,6 +478,14 @@ int main(int argc, char** argv) {
         CHECK(a.map.width == 384 && a.map.height == 334, "vault grid is %dx%d (expect 384x334)", a.map.width, a.map.height);
         WaitFor({&a}, 1, [] { return false; });
         CHECK(Walkable(a, a.pos.x, a.pos.y), "arrival cell %d,%d is walkable", a.pos.x, a.pos.y);
+        // grid alignment: the mapdata grid starts at the tre root bbox min (44, 4) in the Vault. Door01 at world (78.89, 39.97) stands in a
+        // doorway (walkable, unlocked) between two wall cells; Door02 at (141, 45) is initially locked and blocks its doorway.
+        CHECK(Walkable(a, 69, 71) && !Walkable(a, 60, 71) && !Walkable(a, 82, 71), "Vault grid origin: Door01 doorway (69,71) walkable between wall cells");
+        {
+            bool lockedBlocked = false;
+            for (int dy = -2; dy <= 2; ++dy) for (int dx = -2; dx <= 2; ++dx) lockedBlocked = lockedBlocked || !Walkable(a, 194 + dx, 82 + dy);
+            CHECK(lockedBlocked, "locked Door02 keeps its doorway blocked at cell 194,82");
+        }
         // vault NPCs/containers/doors should be visible somewhere near the entry; just report
         int doors = 0, cons = 0;
         for (auto& [id, o] : a.objInfo) { if (o.kind == gnet::ObjectKind::Door) doors++; if (o.kind == gnet::ObjectKind::Container) cons++; }
@@ -491,7 +499,12 @@ int main(int argc, char** argv) {
             size_t chats = a.chat.size();
             gnet::Use u; u.id = door;
             a.Send(gnet::PackG(u));
+            // unlocked doors also open by themselves when the player comes close, so a Use may close an already open door: use again
             opened = WaitFor({&a, &b}, 12, [&] { return a.objInfo[door].open == 1 || a.chat.size() > chats; }) && a.objInfo[door].open == 1;
+            if (!opened && a.chat.size() == chats) {
+                a.Send(gnet::PackG(u));
+                opened = WaitFor({&a, &b}, 8, [&] { return a.objInfo[door].open == 1 || a.chat.size() > chats; }) && a.objInfo[door].open == 1;
+            }
             if (opened) { std::printf("note: door %u opened (distance %d cells)\n", door, dist); break; }
         }
         CHECK(doors2.empty() || opened, "a reachable door can be opened (%zu doors in view)", doors2.size());

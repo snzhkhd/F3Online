@@ -64,6 +64,8 @@ public:
     bool DropItem(Critter& c, ItemId invId);
     bool EquipItem(Critter& c, ItemId invId, bool on);
     bool UseObject(Critter& c, ItemId objId);
+    Item* FindObject(ItemId id, Map** mapOut = nullptr);
+    void SetDoorLocked(Item& door, bool locked);   // script API (UnlockDoor / LockDoor)
     bool TakeFrom(Critter& c, ItemId containerId, ItemId entry);
     bool StartAttack(Critter& c, CritterId target);
     void Damage(Critter& target, int amount, Critter* attacker);
@@ -140,6 +142,8 @@ private:
     void DropAllToGround(Critter& c);
     void Respawn(Critter& c);
     void SetDoor(Map& m, Item& door, bool open);
+    void TickDoors(Map& m);
+    void ApplyDoorBlock(Map& m, Item& door);
     void PlaceCritter(Critter& c, Map& m, TilePos pos);
     void UnplaceCritter(Critter& c);
     void SendMapInfo(Critter& player, const Map& m);

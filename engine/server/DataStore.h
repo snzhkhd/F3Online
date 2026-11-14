@@ -27,6 +27,7 @@ struct Proto {
     int nameId = 0, descId = 0;
     int team = 0;
     bool isStatic = false;  // barrels, windows (critter-class props)
+    bool doorLocked = false;  // doors: GDOR byte 1 (guess: starts locked)
     std::vector<std::string> inventory;  // EEOV default inventory
     // critter
     int special[7] = {5, 5, 5, 5, 5, 5, 5};
@@ -69,6 +70,7 @@ struct EntityDef {
 struct MapDef {
     std::string name;
     int width = 0, height = 0;  // cells, 2 per world unit
+    float originX = 0, originZ = 0;  // world position of the min corner of cell (0,0); cell = floor(2 * (world - origin))
     std::vector<uint8_t> walk;  // raw mapdata class byte per cell, 0x2f = blocked
     std::vector<EntryPointDef> entries;
     std::vector<RegionDef> regions;

@@ -27,6 +27,7 @@ public:
     void DetachCritter(CritterId id) { Detach(id); }
     void Tick(uint64_t tick, const std::unordered_set<MapId>& activeMaps);
     void OnDeath(const Critter& c);
+    void CallObject(ItemId id, const char* pub);   // runs a public (OnOpen / OnClose) of a map object script, if it has one
     size_t Count() const { return instances_.size(); }
     // console helper: load `script` (name without extension), call public `pub`, with native tracing on
     std::string RunTest(const std::string& script, const std::string& pub);

@@ -8,6 +8,7 @@
 #include <random>
 #include "Scripting.h"
 #include "Server.h"
+#include "common/gamedata/CellClass.h"
 #include "common/log.h"
 
 namespace f3 {
@@ -52,6 +53,35 @@ bool HasLos(const Map& m, TilePos a, TilePos b) {
 
 // ------------------------------------------------------------------ world loading
 
+namespace {
+// Doorway of a door entity: 8-connected group of 0x1b cells nearest to `pos` (within 12 cells), not owned by another door.
+// Falls back to the blocked cells of the 3x3 around the position (doors in walls of test maps) when no doorway class is near.
+std::vector<TilePos> DoorFootprint(Map& m, TilePos pos, ItemId owner) {
+    std::vector<TilePos> out;
+    if (m.cls.empty()) return out;
+    auto at = [&](int x, int y) -> int { return m.InBounds(x, y) ? m.cls[static_cast<size_t>(y) * m.width + x] : -1; };
+    auto free = [&](int x, int y) { return at(x, y) == gd::kCellDoor && !m.doorCell.count(y * m.width + x); };
+    int bestD = 1 << 30, bx = 0, by = 0;
+    for (int dy = -12; dy <= 12; ++dy)
+        for (int dx = -12; dx <= 12; ++dx)
+            if (free(pos.x + dx, pos.y + dy) && dx * dx + dy * dy < bestD) { bestD = dx * dx + dy * dy; bx = pos.x + dx; by = pos.y + dy; }
+    if (bestD == (1 << 30)) return out;   // no doorway: the door only animates
+    std::vector<TilePos> stack{TilePos{static_cast<int16_t>(bx), static_cast<int16_t>(by)}};
+    m.doorCell[by * m.width + bx] = owner;
+    while (!stack.empty() && out.size() < 800) {
+        TilePos c = stack.back(); stack.pop_back();
+        out.push_back(c);
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx)
+                if ((dx || dy) && free(c.x + dx, c.y + dy)) {
+                    m.doorCell[(c.y + dy) * m.width + c.x + dx] = owner;
+                    stack.push_back(TilePos{static_cast<int16_t>(c.x + dx), static_cast<int16_t>(c.y + dy)});
+                }
+    }
+    return out;
+}
+}  // namespace
+
 bool Server::LoadWorldData() {
     if (!data_.Loaded()) return false;
     size_t entities = 0, skipped = 0;
@@ -60,13 +90,17 @@ bool Server::LoadWorldData() {
         std::string err;
         if (!data_.LoadMap(name, def, err)) { log::Warn("data: map %s: %s", name.c_str(), err.c_str()); continue; }
         std::vector<uint8_t> blocked(def.walk.size());
-        for (size_t i = 0; i < blocked.size(); ++i) blocked[i] = def.walk[i] == 0x2f ? 1 : 0;
+        for (size_t i = 0; i < blocked.size(); ++i) blocked[i] = gd::CellSolid(def.walk[i]) ? 1 : 0;   // doorway cells (0x1b) are handled by the door objects
         TilePos spawn{static_cast<int16_t>(def.width / 2), static_cast<int16_t>(def.height / 2)};
         Map* m = world_.CreateMap(def.name, def.width, def.height, std::move(blocked), spawn);
+        m->originX = def.originX; m->originZ = def.originZ;
+        m->cls = def.walk;
+        // original world position (x, z) -> cell; the grid origin is the tre root bbox min (docs/formats/maps.md s.2)
+        auto cellOf = [&](float x, float z) { return CellOf(x - def.originX, z - def.originZ); };
         for (auto& ep : def.entries) {
             EntryPoint e;
             e.id = ep.id;
-            for (auto& s : ep.slots) e.slots.push_back({CellOf(s.x, s.z), s.yaw});
+            for (auto& s : ep.slots) e.slots.push_back({cellOf(s.x, s.z), s.yaw});
             m->entries.push_back(std::move(e));
         }
         if (!m->entries.empty() && !m->entries[0].slots.empty()) m->spawn = m->entries[0].slots[0].pos;
@@ -77,22 +111,23 @@ bool Server::LoadWorldData() {
             rg.kind = r.kind; rg.script = r.script; rg.targetMap = r.targetMap; rg.targetEntry = r.targetEntry;
             rg.minx = rg.miny = 1e9f; rg.maxx = rg.maxy = -1e9f;
             for (auto& p : r.pts) {
-                rg.poly.emplace_back(p.first * 2.0f, p.second * 2.0f);
-                rg.minx = std::min(rg.minx, p.first * 2.0f); rg.maxx = std::max(rg.maxx, p.first * 2.0f);
-                rg.miny = std::min(rg.miny, p.second * 2.0f); rg.maxy = std::max(rg.maxy, p.second * 2.0f);
+                const float cx = (p.first - def.originX) * 2.0f, cy = (p.second - def.originZ) * 2.0f;
+                rg.poly.emplace_back(cx, cy);
+                rg.minx = std::min(rg.minx, cx); rg.maxx = std::max(rg.maxx, cx);
+                rg.miny = std::min(rg.miny, cy); rg.maxy = std::max(rg.maxy, cy);
             }
             m->regions.push_back(std::move(rg));
         }
         for (auto& path : def.paths) {
             std::vector<TilePos> cells;
-            for (auto& p : path) cells.push_back(CellOf(p.first, p.second));
+            for (auto& p : path) cells.push_back(cellOf(p.first, p.second));
             m->paths.push_back(std::move(cells));
         }
         size_t before = m->critters.size() + m->items.size();
         for (const EntityDef& e : def.entities) {
             const Proto* p = data_.FindProto(e.proto);
             if (!p) { ++skipped; continue; }  // stale template reference in the original data
-            TilePos pos = CellOf(e.x, e.z);
+            TilePos pos = cellOf(e.x, e.z);
             if (p->cls == PClass::Critter) SpawnCritterProto(m->id, *p, pos, &e);
             else SpawnObjectProto(m->id, *p, pos, 1, &e);
         }
@@ -165,11 +200,10 @@ ItemId Server::SpawnObjectProto(MapId mapId, const Proto& p, TilePos pos, uint16
     switch (p.cls) {
         case PClass::Door:
             it.kind = ObjKind::Door;
-            // the closed door sits on blocked cells of the grid; remember the 3x3 blocked cells to release when open
-            for (int dy = -1; dy <= 1; ++dy)
-                for (int dx = -1; dx <= 1; ++dx)
-                    if (m->IsBlocked(pos.x + dx, pos.y + dy) && m->InBounds(pos.x + dx, pos.y + dy))
-                        it.footprint.push_back(TilePos{static_cast<int16_t>(pos.x + dx), static_cast<int16_t>(pos.y + dy)});
+            it.locked = p.doorLocked;
+            it.footprint = DoorFootprint(*m, pos, it.id);
+            if (it.locked)
+                for (TilePos t : it.footprint) m->blocked[static_cast<size_t>(t.y) * m->width + t.x] = 1;
             break;
         case PClass::Container: {
             it.kind = ObjKind::Container;
@@ -402,22 +436,71 @@ bool Server::TakeFrom(Critter& c, ItemId containerId, ItemId entry) {
     return any;
 }
 
-void Server::SetDoor(Map& m, Item& door, bool open) {
+// Doors. The doorway of a door entity is the 8-connected group of 0x1b cells nearest to its position (the doorway is wider than the
+// entity: Vault13 doors are 13x3..5 cells). Rules: a closed door that is not locked lets critters walk through (it opens by
+// itself when somebody comes close and closes again 3 s after the last one left, like the original proximity doors); a locked
+// door keeps its doorway cells blocked until it is unlocked (UnlockDoor in the original scripts). Doors that do not stand on 0x1b
+// cells (outdoor entrance doors, hatches) have no footprint: they animate but never block.
+void Server::ApplyDoorBlock(Map& m, Item& door) {
+    const uint8_t want = (door.locked && !door.open) ? 1 : 0;
     gnet::CellsSet cs;
     for (TilePos t : door.footprint) {
-        if (!open && m.CritterAt(t)) return;  // something stands in the doorway: refuse to close
+        uint8_t& b = m.blocked[static_cast<size_t>(t.y) * m.width + t.x];
+        if (b != want) { b = want; cs.cells.push_back({t.x, t.y, want}); }
     }
+    if (cs.cells.empty()) return;
+    ByteBuffer cb = gnet::PackG(cs);
+    for (Critter* p : m.critters)
+        if (p->IsPlayer()) Send(*p, cb);
+}
+
+void Server::SetDoor(Map& m, Item& door, bool open) {
+    if (open == door.open) return;
+    if (!open)
+        for (TilePos t : door.footprint)
+            if (m.CritterAt(t)) return;  // something stands in the doorway: refuse to close
     door.open = open;
-    for (TilePos t : door.footprint) {
-        m.blocked[static_cast<size_t>(t.y) * m.width + t.x] = open ? 0 : 1;
-        cs.cells.push_back({t.x, t.y, static_cast<uint8_t>(open ? 0 : 1)});
-    }
-    ByteBuffer cb = gnet::PackG(cs), ob;
+    door.nearTick = tick_;
+    ApplyDoorBlock(m, door);
     gnet::ObjectInfo oi;
     oi.id = door.id; oi.kind = gnet::ObjectKind::Door; oi.open = open ? 1 : 0;
-    ob = gnet::PackG(oi);
+    ByteBuffer ob = gnet::PackG(oi);
     for (Critter* p : m.critters)
-        if (p->IsPlayer()) { if (!cs.cells.empty()) Send(*p, cb); Send(*p, ob); }
+        if (p->IsPlayer()) Send(*p, ob);
+    if (amx_) amx_->CallObject(door.id, open ? "OnOpen" : "OnClose");
+}
+
+void Server::SetDoorLocked(Item& door, bool locked) {
+    if (door.kind != ObjKind::Door || door.locked == locked) return;
+    door.locked = locked;
+    if (Map* m = world_.GetMap(door.mapId)) ApplyDoorBlock(*m, door);
+}
+
+Item* Server::FindObject(ItemId id, Map** mapOut) {
+    for (auto& m : world_.Maps()) {
+        auto it = m->items.find(id);
+        if (it != m->items.end()) { if (mapOut) *mapOut = m.get(); return &it->second; }
+    }
+    return nullptr;
+}
+
+void Server::TickDoors(Map& m) {
+    const int kNear = 5;   // cells around the doorway that make an unlocked door open
+    const uint64_t closeAfter = static_cast<uint64_t>(cfg_.tickRate) * 3;
+    for (auto& [id, it] : m.items) {
+        if (it.kind != ObjKind::Door) continue;
+        int x0 = it.pos.x, x1 = it.pos.x, y0 = it.pos.y, y1 = it.pos.y;
+        for (TilePos t : it.footprint) { x0 = std::min<int>(x0, t.x); x1 = std::max<int>(x1, t.x); y0 = std::min<int>(y0, t.y); y1 = std::max<int>(y1, t.y); }
+        bool nearby = false;
+        for (Critter* c : m.critters)
+            if (!c->dead && c->pos.x >= x0 - kNear && c->pos.x <= x1 + kNear && c->pos.y >= y0 - kNear && c->pos.y <= y1 + kNear) { nearby = true; break; }
+        if (nearby) {
+            it.nearTick = tick_;
+            if (!it.open && !it.locked) SetDoor(m, it, true);
+        } else if (it.open && tick_ - it.nearTick > closeAfter) {
+            SetDoor(m, it, false);
+        }
+    }
 }
 
 bool Server::UseObject(Critter& c, ItemId objId) {
@@ -428,7 +511,10 @@ bool Server::UseObject(Critter& c, ItemId objId) {
     Item& o = it->second;
     if (TileDist(o.pos, c.pos) > 3) return false;
     switch (o.kind) {
-        case ObjKind::Door: SetDoor(*m, o, !o.open); break;
+        case ObjKind::Door:
+            if (o.locked && !o.open) { if (c.IsPlayer()) Tell(c, "The door is locked."); break; }
+            SetDoor(*m, o, !o.open);
+            break;
         case ObjKind::Container:
             if (c.IsPlayer()) {
                 gnet::Container cm;
