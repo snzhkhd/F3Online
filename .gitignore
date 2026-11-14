@@ -1,0 +1,19 @@
+# build outputs
+build/
+out/
+.vs/
+*.obj
+*.exe
+*.dll
+*.pdb
+*.ilk
+# NEVER commit original game files / extracted assets
+*.grp
+*.rht
+*.stf
+*.gr2
+*.mve
+*.CRT
+extracted/
+gamedata/
+F3_Demo/
