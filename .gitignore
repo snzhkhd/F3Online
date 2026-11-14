@@ -15,7 +15,7 @@ out/
 *.mve
 *.CRT
 extracted/
-gamedata/
+/gamedata/
 F3_Demo/
 
 # third-party binaries (Granny Viewer etc.) - never commit

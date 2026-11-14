@@ -1,3 +1,6 @@
+# Original-game file readers (resource.rht/grp, TGA, B3D, map files).
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../common/gamedata ${CMAKE_BINARY_DIR}/gamedata)
+
 # Network + world-state client logic; no rendering, no raylib.
 add_library(f3_client_core STATIC ClientCore.cpp)
 target_link_libraries(f3_client_core PUBLIC f3_common)
