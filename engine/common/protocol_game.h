@@ -8,6 +8,7 @@
 // ItemAdd.pid / InvEntry.pid index the server's prototype list, which is the key-sorted order of
 // gamedata/server/protos.json (clients that read the original .een files can reproduce it).
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 #include "protocol.h"
@@ -194,6 +195,116 @@ struct CellsSet {
         if (!b.Ok() || n > 4096) return false;
         cells.resize(n);
         for (auto& c : cells) { c.x = b.ReadI16(); c.y = b.ReadI16(); c.blocked = b.ReadU8(); }
+        return b.Ok();
+    }
+};
+
+}  // namespace gnet
+}  // namespace f3
+
+// ===================================================================================================
+// REAL-TIME TIMING BLOCK (server agent). Ids: client->server 28..29, server->client 127..129.
+// Time base: the server clock in milliseconds (u32, wraps; compare with unsigned subtraction). Clients never need
+// to sync clocks: every message that carries a server time also carries `nowMs` (server time at send), so a client
+// computes age = nowMs - startMs and interpolates from its own receive time.
+// Positions are float CELL units (1 cell = 0.5 world unit); cell (cx,cy) has its centre at (cx+0.5, cy+0.5); the
+// legacy int16 positions are floor() of these. A client that sends ClientCaps(bit0) gets MovePath/CritterStop/
+// WaitState; clients that do not keep receiving the legacy CritterMove (one per cell crossed). Floats are sent as
+// their IEEE-754 bit pattern in a u32 (little endian). Docs: docs/server-data.md, section "Real-time timing".
+// ===================================================================================================
+namespace f3 {
+
+enum class GMsgRt : uint8_t {
+    C2S_ClientCaps = 28,  // u32 caps; bit0 = understands MovePath/CritterStop/WaitState (send once after LoginOk)
+    C2S_MoveToF = 29,     // f32 x, f32 y (cells), u8 run (0 walk, 1 run): a precise destination point
+    S2C_MovePath = 127,
+    S2C_CritterStop = 128,
+    S2C_WaitState = 129,
+};
+
+namespace gnet {
+
+inline constexpr uint32_t kCapContinuousMove = 1;
+
+inline void WriteF32(ByteBuffer& b, float v) { uint32_t u; std::memcpy(&u, &v, 4); b.WriteU32(u); }
+inline float ReadF32(ByteBuffer& b) { uint32_t u = b.ReadU32(); float v; std::memcpy(&v, &u, 4); return v; }
+
+struct ClientCaps {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgRt::C2S_ClientCaps);
+    uint32_t caps = 0;
+    void Write(ByteBuffer& b) const { b.WriteU32(caps); }
+    bool Read(ByteBuffer& b) { caps = b.ReadU32(); return b.Ok(); }
+};
+
+struct MoveToF {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgRt::C2S_MoveToF);
+    float x = 0, y = 0;
+    uint8_t run = 1;
+    void Write(ByteBuffer& b) const { WriteF32(b, x); WriteF32(b, y); b.WriteU8(run); }
+    bool Read(ByteBuffer& b) { x = ReadF32(b); y = ReadF32(b); run = b.ReadU8(); return b.Ok(); }
+};
+
+// A critter starts walking along a polyline. pts[0] is the position at startMs (the critter's exact position when
+// the move began); it moves along the straight segments at constant `speed` (cells/s) and stops at the last point.
+// Replaces any previous path of that critter. The server validated every segment against the walk grid.
+struct MovePath {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgRt::S2C_MovePath);
+    struct Pt { float x = 0, y = 0; };
+    uint32_t id = 0;
+    uint32_t nowMs = 0;    // server time when sent
+    uint32_t startMs = 0;  // server time at which the critter was at pts[0] (<= nowMs)
+    float speed = 0;       // cells per second
+    uint8_t run = 0;
+    std::vector<Pt> pts;   // 2..256 points
+    void Write(ByteBuffer& b) const {
+        b.WriteU32(id); b.WriteU32(nowMs); b.WriteU32(startMs); WriteF32(b, speed); b.WriteU8(run);
+        b.WriteU16(static_cast<uint16_t>(pts.size()));
+        for (auto& p : pts) { WriteF32(b, p.x); WriteF32(b, p.y); }
+    }
+    bool Read(ByteBuffer& b) {
+        id = b.ReadU32(); nowMs = b.ReadU32(); startMs = b.ReadU32(); speed = ReadF32(b); run = b.ReadU8();
+        uint16_t n = b.ReadU16();
+        if (!b.Ok() || n > 256 || static_cast<size_t>(n) * 8 > b.Remaining()) return false;
+        pts.resize(n);
+        for (auto& p : pts) { p.x = ReadF32(b); p.y = ReadF32(b); }
+        return b.Ok();
+    }
+};
+
+// The critter stands at (x,y) now: end of a path (reason 0), interrupted/blocked/out of AP (1), or a resync of a freshly
+// added critter (3). Teleports and map changes keep using the legacy CritterMove with snap=1.
+struct CritterStop {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgRt::S2C_CritterStop);
+    uint32_t id = 0;
+    float x = 0, y = 0;
+    uint8_t dir = 0;  // Dir
+    uint8_t reason = 0;
+    void Write(ByteBuffer& b) const { b.WriteU32(id); WriteF32(b, x); WriteF32(b, y); b.WriteU8(dir); b.WriteU8(reason); }
+    bool Read(ByteBuffer& b) { id = b.ReadU32(); x = ReadF32(b); y = ReadF32(b); dir = b.ReadU8(); reason = b.ReadU8(); return b.Ok(); }
+};
+
+enum class ActionResult : uint8_t { Ok = 0, Busy = 1, NoAp = 2, Invalid = 3, Dead = 4, None = 255 /* unsolicited update */ };
+
+// Sent to the owning player after every action (accepted or rejected), on login, on ReqState and when the battle flag
+// changes. Client model (same as FOnline): the critter is free when server time >= waitEndMs; AP regenerate linearly:
+//   ap(t) = min(maxAp, ap + maxAp * (t - nowMs) / apRegenMs)        (ap in 1/100 AP, FOnline AP_DIVIDER = 100)
+struct WaitState {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgRt::S2C_WaitState);
+    uint32_t nowMs = 0;        // server time when sent
+    uint32_t waitEndMs = 0;    // actions are rejected until server time reaches this (<= nowMs: free)
+    uint16_t ap = 0;           // current AP, 1/100 AP, valid at nowMs
+    uint16_t maxAp = 0;
+    uint32_t apRegenMs = 0;    // milliseconds for a full regeneration (config ApRegeneration)
+    uint32_t battleEndMs = 0;  // in battle while server time < battleEndMs
+    uint8_t action = 0;        // GMsg id of the request this answers (0 = none)
+    ActionResult result = ActionResult::None;
+    void Write(ByteBuffer& b) const {
+        b.WriteU32(nowMs); b.WriteU32(waitEndMs); b.WriteU16(ap); b.WriteU16(maxAp); b.WriteU32(apRegenMs); b.WriteU32(battleEndMs);
+        b.WriteU8(action); b.WriteU8(static_cast<uint8_t>(result));
+    }
+    bool Read(ByteBuffer& b) {
+        nowMs = b.ReadU32(); waitEndMs = b.ReadU32(); ap = b.ReadU16(); maxAp = b.ReadU16(); apRegenMs = b.ReadU32(); battleEndMs = b.ReadU32();
+        action = b.ReadU8(); result = static_cast<ActionResult>(b.ReadU8());
         return b.Ok();
     }
 };
