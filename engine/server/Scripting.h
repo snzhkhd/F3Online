@@ -1,0 +1,55 @@
+#pragma once
+// Lua (sol2) game-logic host. The server calls hooks; scripts call the API bound in Scripting.cpp.
+//
+// Hooks (all optional globals in scripts/main.lua or files it loads):
+//   on_init()                    once, first successful load (create maps, spawn npcs)
+//   on_reload()                  after each successful hot reload
+//   on_login(critter)            player entered the world
+//   on_logout(critter)
+//   on_critter_move(critter, from_x, from_y)   after every validated step (players and npcs)
+//   on_chat(critter, text)       return false to swallow, a string to replace the text
+//   on_tick(tick)                every server tick
+// NPC behaviours live in the global table npc_types[name] = { on_tick(npc, tick), on_heard(npc, speaker, text) }.
+//
+// Critter/Map objects handed to Lua are raw handles: use them inside the hook that
+// received them, keep ids (not objects) across ticks and re-fetch with get_critter(id).
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <sol/sol.hpp>
+#include "World.h"
+
+namespace f3 {
+
+class Server;
+
+class Scripting {
+public:
+    Scripting(Server& server, std::filesystem::path scriptsDir);
+    ~Scripting();
+
+    bool Load();    // first load: runs main.lua then on_init
+    bool Reload();  // builds a fresh state, swaps only on success, then on_reload
+
+    bool OnLogin(Critter& c);
+    void OnLogout(Critter& c);
+    void OnCritterMove(Critter& c, TilePos from);
+    bool OnChat(Critter& c, std::string& text);  // false = swallow
+    void OnTick(uint64_t tick);
+    void OnNpcTick(Critter& npc, uint64_t tick);
+    void OnNpcHeard(Critter& npc, Critter& speaker, const std::string& text);
+
+    const std::filesystem::path& Dir() const { return dir_; }
+
+private:
+    std::unique_ptr<sol::state> BuildState();
+    void BindApi(sol::state& L);
+    template <class... A> void CallNpc(const std::string& type, const char* fn, A&&... args);
+
+    Server& server_;
+    std::filesystem::path dir_;
+    std::unique_ptr<sol::state> L_;
+    int generation_ = 0;
+};
+
+}  // namespace f3
