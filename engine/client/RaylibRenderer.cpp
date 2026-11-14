@@ -76,6 +76,7 @@ public:
                 rigs_ = std::make_unique<RigLibrary>(*assets_);
             }
         }
+        showGrid_ = opt_.showGrid;
         startTime_ = GetTime();
         return true;
     }
@@ -99,6 +100,7 @@ public:
         visuals_.clear();
         doorState_.clear();
         if (opt_.network) map_.SetNetworkMode(opt_.protos);
+        map_.SetRigs(rigs_.get());
         if (!map_.Load(*assets_, name, err)) return false;
         log::Info("loaded %s (%.2fs); %zu textures, %zu models cached", map_.info().c_str(), GetTime() - t0,
                   assets_->textureCount(), assets_->modelCount());
@@ -370,8 +372,8 @@ public:
                 int tx, ty;
                 const float cw = lastTileW_ > 0 && map_.gridW() > 0 ? map_.gridW() * 0.5f / lastTileW_ : 0.5f;
                 const float ch = lastTileH_ > 0 && map_.gridH() > 0 ? map_.gridH() * 0.5f / lastTileH_ : 0.5f;
-                out.fx = hit.x / cw - 0.5f;
-                out.fy = -hit.z / ch - 0.5f;
+                out.fx = (hit.x - map_.gridOriginX()) / cw - 0.5f;
+                out.fy = (-hit.z - map_.gridOriginZ()) / ch - 0.5f;
                 if (map_.WorldToTile(hit, lastTileW_, lastTileH_, tx, ty)) {
                     out.tile = TilePos{static_cast<int16_t>(tx), static_cast<int16_t>(ty)};
                     if (out.kind == PickResult::None) out.kind = PickResult::Ground;
@@ -576,6 +578,7 @@ private:
 
         rlSetClipPlanes(30.0, 1500.0);
         BeginMode3D(lastCam_);
+        map_.Update(GetFrameTime());
         map_.Draw(*assets_, dopt_);
 
         // hover / picking
@@ -584,19 +587,26 @@ private:
                       PickAt(static_cast<int>(mp.x), static_cast<int>(mp.y), hover_);
         const float cw = tw > 0 && map_.gridW() > 0 ? map_.gridW() * 0.5f / tw : 0.5f;
         const float ch = th > 0 && map_.gridH() > 0 ? map_.gridH() * 0.5f / th : 0.5f;
+        if (showGrid_) {   // 'G': walk grid around the hovered cell, or around the camera target when the mouse is not over the ground
+            int gx, gy;
+            const bool have = map_.WorldToTile(cam_.target, tw, th, gx, gy);
+            if (have) {
+                rlDrawRenderBatchActive(); rlDisableDepthTest();   // terrain is bumpy: draw the overlay on top
+                const int R = 18;
+                for (int dy = -R; dy <= R; ++dy)
+                    for (int dx = -R; dx <= R; ++dx) {
+                        int cx = gx + dx, cy = gy + dy;
+                        if (cx < 0 || cy < 0 || (tw > 0 && cx >= tw) || (th > 0 && cy >= th)) continue;
+                        bool blocked = nm ? nm->IsBlocked(cx, cy) : map_.Blocked(cx, cy);
+                        Vector3 c = OnGround(map_.TileToWorld(static_cast<float>(cx), static_cast<float>(cy), tw, th), 0.04f);
+                        DrawPlane(c, Vector2{cw * 0.94f, ch * 0.94f}, blocked ? Color{220, 40, 40, 110} : Color{60, 220, 90, 40});
+                    }
+                rlDrawRenderBatchActive(); rlEnableDepthTest();
+            }
+        }
         if (hoverValid_) {
             int hx, hy;
             if (map_.WorldToTile(hover_, tw, th, hx, hy)) {
-                if (showGrid_) {
-                    for (int dy = -12; dy <= 12; ++dy)
-                        for (int dx = -12; dx <= 12; ++dx) {
-                            int cx = hx + dx, cy = hy + dy;
-                            if (cx < 0 || cy < 0 || (tw > 0 && cx >= tw) || (th > 0 && cy >= th)) continue;
-                            bool blocked = nm ? nm->IsBlocked(cx, cy) : map_.Blocked(cx, cy);
-                            Vector3 c = OnGround(map_.TileToWorld(static_cast<float>(cx), static_cast<float>(cy), tw, th), 0.04f);
-                            DrawPlane(c, Vector2{cw * 0.94f, ch * 0.94f}, blocked ? Color{220, 40, 40, 110} : Color{60, 220, 90, 40});
-                        }
-                }
                 if (!hoverCrit_ && !hoverItem_) {
                     Vector3 c = OnGround(map_.TileToWorld(static_cast<float>(hx), static_cast<float>(hy), tw, th), 0.06f);
                     DrawPlane(c, Vector2{cw, ch}, Color{255, 255, 255, 120});
@@ -684,10 +694,11 @@ private:
             const ModelAsset* ma = proto && !proto->model.empty() ? assets_->Model(proto->model) : nullptr;
             const float k = MapView::modelScale;
             if (ma) {
-                Matrix m = MatrixMultiply(MatrixScale(k, k, k), MatrixTranslate(w.x, w.y + 0.08f, w.z));
+                const float ks = k * ma->unitScale;
+                Matrix m = MatrixMultiply(MatrixScale(ks, ks, ks), MatrixTranslate(w.x, w.y + 0.08f, w.z));
                 MapView::DrawModel(*assets_, *ma, m, WHITE, nullptr, dopt_, true);
                 drawn = true;
-                height = std::max(1.2f, (ma->bmax.y - ma->bmin.y) * k);
+                height = std::max(1.2f, (ma->bmax.y - ma->bmin.y) * ks);
             }
             if (!drawn) DrawCube(Vector3{w.x, w.y + 0.5f, w.z}, 1.0f, 1.0f, 1.0f, Color{240, 210, 70, 255});
         } else {

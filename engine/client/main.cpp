@@ -124,6 +124,7 @@ int main(int argc, char** argv) {
             ropt.hasTarget = std::sscanf(next(), "%f,%f", &ropt.targetX, &ropt.targetZ) == 2;
         } else if (a == "--clipy") ropt.clipY = static_cast<float>(std::atof(next()));
         else if (a == "--noentities") ropt.noEntities = true;
+        else if (a == "--grid") ropt.showGrid = true;
         else if (a == "--modelscale") ropt.modelScale = static_cast<float>(std::atof(next()));
         else if (a == "--size") std::sscanf(next(), "%d,%d", &winW, &winH);
         else { std::cerr << kUsage; return 2; }

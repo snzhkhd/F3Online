@@ -164,6 +164,7 @@ const ModelAsset* GameAssets::Model(const std::string& name) {
         log::Warn("model %s: %s", name.c_str(), err.c_str());
     } else {
         asset = std::make_unique<ModelAsset>();
+        asset->unitScale = b3d.preconverted ? 1.0f : 10.0f;
         const size_t nv = b3d.VertexCount();
         asset->bmin = {b3d.bmin[0], b3d.bmin[1], -b3d.bmax[2]};
         asset->bmax = {b3d.bmax[0], b3d.bmax[1], -b3d.bmin[2]};
@@ -215,6 +216,12 @@ const ModelAsset* GameAssets::EntityModel(const std::string& tmpl, const std::st
     if (defaultSkin) *defaultSkin = it->second.second;
     if (it->second.first.empty()) return nullptr;
     return Model(it->second.first);
+}
+
+std::string GameAssets::EntityModelName(const std::string& tmpl, const std::string& type) {
+    EntityModel(tmpl, type);   // fills the template cache
+    auto it = templates_.find(gd::ToLower(type + ":" + tmpl));
+    return it == templates_.end() ? std::string() : it->second.first;
 }
 
 }  // namespace f3

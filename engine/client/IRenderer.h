@@ -78,6 +78,7 @@ struct RendererOptions {
     bool hasTarget = false;  float targetX = 0, targetZ = 0;   // original world x/z
     float clipY = 1e9f;             // roof cut-away height
     bool noEntities = false;
+    bool showGrid = false;          // start with the walk grid overlay on (the G key toggles it)
     float modelScale = -1;          // <0: default
     bool network = false;           // network mode: dynamic entities come from the server, not from the emap
     const ProtoDb* protos = nullptr;

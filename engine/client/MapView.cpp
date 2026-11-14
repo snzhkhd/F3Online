@@ -50,6 +50,7 @@ void MapView::Unload() {
     for (auto& b : batches_) UnloadMesh(b.mesh);
     batches_.clear();
     entities_.clear();
+    ox_ = oz_ = 0;
     pickTris_.clear();
     pickCells_.clear();
     hf_.clear();
@@ -60,14 +61,14 @@ void MapView::Unload() {
 Vector3 MapView::TileToWorld(float tx, float ty, int tw, int th, float y) const {
     float cw = tw > 0 && grid_.w > 0 ? grid_.w * 0.5f / tw : 0.5f;
     float ch = th > 0 && grid_.h > 0 ? grid_.h * 0.5f / th : 0.5f;
-    return {(tx + 0.5f) * cw, y, -(ty + 0.5f) * ch};
+    return {ox_ + (tx + 0.5f) * cw, y, -(oz_ + (ty + 0.5f) * ch)};
 }
 
 bool MapView::WorldToTile(const Vector3& w, int tw, int th, int& tx, int& ty) const {
     float cw = tw > 0 && grid_.w > 0 ? grid_.w * 0.5f / tw : 0.5f;
     float ch = th > 0 && grid_.h > 0 ? grid_.h * 0.5f / th : 0.5f;
-    tx = static_cast<int>(std::floor(w.x / cw));
-    ty = static_cast<int>(std::floor(-w.z / ch));
+    tx = static_cast<int>(std::floor((w.x - ox_) / cw));
+    ty = static_cast<int>(std::floor((-w.z - oz_) / ch));
     return tx >= 0 && ty >= 0 && (tw <= 0 || tx < tw) && (th <= 0 || ty < th);
 }
 
@@ -107,6 +108,12 @@ bool MapView::Load(GameAssets& assets, const std::string& nameIn, std::string* e
     std::string e;
     if (!gd.Read(*treRes, buf) || !gd::ParseTre(buf.data(), buf.size(), tre, &e)) return fail("tre: " + e);
     badSubRecords_ = tre.badSubRecords;
+    // The mapdata grid starts at the min corner of the tre root bounding box (see docs/formats/maps.md section 2).
+    ox_ = grid_.w > 0 ? tre.bmin[0] : 0.0f;
+    oz_ = grid_.w > 0 ? tre.bmin[2] : 0.0f;
+    if (grid_.w > 0 && (std::fabs((tre.bmax[0] - tre.bmin[0]) * 2 - grid_.w) > 0.01f || std::fabs((tre.bmax[2] - tre.bmin[2]) * 2 - grid_.h) > 0.01f))
+        log::Warn("map %s: grid %dx%d does not match the tre extent %gx%g units (stale test map); grid origin is a guess", treName_.c_str(), grid_.w, grid_.h,
+                  tre.bmax[0] - tre.bmin[0], tre.bmax[2] - tre.bmin[2]);
     if (!BuildTre(assets, tre)) return fail("no renderable geometry in " + treName_);
     BuildEntities(assets);
 
@@ -127,8 +134,8 @@ bool MapView::BuildTre(GameAssets& assets, const gd::Tre& tre) {
     bmin_ = {tre.bmin[0], tre.bmin[1], -tre.bmax[2]};
     bmax_ = {tre.bmax[0], tre.bmax[1], -tre.bmin[2]};
     if (grid_.w > 0) {
-        bmin_.x = std::min(bmin_.x, 0.0f); bmax_.x = std::max(bmax_.x, grid_.w * 0.5f);
-        bmin_.z = std::min(bmin_.z, -grid_.h * 0.5f); bmax_.z = std::max(bmax_.z, 0.0f);
+        bmin_.x = std::min(bmin_.x, ox_); bmax_.x = std::max(bmax_.x, ox_ + grid_.w * 0.5f);
+        bmin_.z = std::min(bmin_.z, -(oz_ + grid_.h * 0.5f)); bmax_.z = std::max(bmax_.z, -oz_);
     }
 
     std::vector<int32_t> remap;
@@ -226,7 +233,19 @@ void MapView::BuildEntities(GameAssets& assets) {
         inst.src = e;
         const std::string& skin = e.skin.empty() ? defSkin : e.skin;
         if (!skin.empty()) inst.skin = assets.Texture(skin);
-        Matrix s = MatrixScale(modelScale, modelScale, modelScale);
+        const float sc = modelScale * m->unitScale;
+        Matrix s = MatrixScale(sc, sc, sc);
+        if (e.type == "DOR" && rigs_) {
+            const std::string mn = assets.EntityModelName(e.tmpl, e.type);
+            if (SkinModel* sm = rigs_->Model(mn)) {
+                if (const Clip* c = rigs_->GetNamed(*sm, mn + "_Open_In_01")) {
+                    inst.rig = std::make_unique<SkinnedInstance>(sm);
+                    inst.openClip = c;
+                    inst.rig->Pose(c, 0.0f, nullptr, 0.0f, 1.0f);
+                    inst.posedT = 0;
+                }
+            }
+        }
         Matrix r = MatrixRotateY(-e.yaw);
         Matrix t = MatrixTranslate(e.pos[0], e.pos[1], -e.pos[2]);
         inst.transform = MatrixMultiply(MatrixMultiply(s, r), t);
@@ -263,7 +282,7 @@ void MapView::Draw(GameAssets& assets, const DrawOptions& opt) {
     if (opt.entities) {
         for (const MapEntityInstance& e : entities_) {
             if (e.hidden) continue;
-            DrawModel(assets, *e.model, e.transform, WHITE, e.skin, opt, true);
+            DrawModel(assets, e.rig ? e.rig->asset() : *e.model, e.transform, WHITE, e.skin, opt, true);
             ++entitiesDrawn_;
         }
     }
@@ -281,7 +300,19 @@ void MapView::SetDoorOpen(const Vector3& p, bool open) {
         const float d = std::sqrt(dx * dx + dz * dz);
         if (d < bd) { bd = d; best = &e; }
     }
-    if (best) best->hidden = open;
+    if (!best) return;
+    if (best->rig) best->doorOpen = open; else best->hidden = open;
+}
+
+void MapView::Update(float dt) {
+    for (MapEntityInstance& e : entities_) {
+        if (!e.rig || !e.openClip) continue;
+        const float dur = e.openClip->duration;
+        const float goal = e.doorOpen ? dur : 0.0f;
+        if (e.doorT == goal) continue;
+        e.doorT = e.doorT < goal ? std::min(goal, e.doorT + dt) : std::max(goal, e.doorT - dt);
+        if (e.doorT != e.posedT) { e.rig->Pose(e.openClip, e.doorT, nullptr, 0.0f, 1.0f); e.posedT = e.doorT; }
+    }
 }
 
 // Ground height field: every up-facing triangle is rasterised onto a regular XZ sample grid; per sample the lowest

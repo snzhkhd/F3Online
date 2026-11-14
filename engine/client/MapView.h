@@ -3,13 +3,14 @@
 // lightmap), emap entity instances drawn as static-pose B3D models, and the mapdata walk grid.
 //
 // Space conventions (renderer space, right-handed, Y up): X = original X, Y = original Y, Z = -original Z.
-// The walk grid has 2 cells per world unit; a cell (cx, cy) covers original x in [cx/2, cx/2+0.5),
-// original z in [cy/2, cy/2+0.5), i.e. renderer z in (-(cy+1)/2, -cy/2].
+// The walk grid has 2 cells per world unit and starts at the tre root bbox min (ox, oz): a cell (cx, cy) covers original x in
+// [ox+cx/2, ox+cx/2+0.5), original z in [oz+cy/2, oz+cy/2+0.5), i.e. renderer z in (-(oz+(cy+1)/2), -(oz+cy/2)].
 #include <memory>
 #include <string>
 #include <vector>
 #include <raylib.h>
 #include "GameAssets.h"
+#include "CritterRig.h"
 #include "ProtoDb.h"
 #include "gamedata/MapFiles.h"
 
@@ -28,7 +29,13 @@ struct MapEntityInstance {
     Matrix transform{};
     const Texture2D* skin = nullptr;
     gd::MapEntity src;
-    bool hidden = false;   // e.g. an opened door
+    bool hidden = false;   // a door without skeleton / open animation is hidden while open
+    // doors with a skeleton: CPU-skinned instance posed with "<model>_Open_In_01" (the door slab drops into the floor); doorT runs
+    // 0 (closed) .. clip duration (open), moving towards the server state at the clip's own speed
+    std::unique_ptr<SkinnedInstance> rig;
+    const Clip* openClip = nullptr;
+    float doorT = 0, posedT = -1;
+    bool doorOpen = false;
 };
 
 struct DrawOptions {
@@ -53,6 +60,8 @@ public:
     void SetNetworkMode(const ProtoDb* protos) { network_ = true; protos_ = protos; }
     // Hides / shows the door entity nearest to a renderer-space position (door models have no open pose).
     void SetDoorOpen(const Vector3& worldPos, bool open);
+    void SetRigs(RigLibrary* rigs) { rigs_ = rigs; }   // optional, before Load: skeletal doors
+    void Update(float dt);                              // door animation
 
     void Draw(GameAssets& assets, const DrawOptions& opt);
     // Draws one model instance with the asset shader (used for network critters/items as well).
@@ -72,7 +81,10 @@ public:
     int gridH() const { return grid_.h; }
     bool hasGrid() const { return grid_.w > 0; }
     bool Blocked(int cx, int cy) const { return grid_.Blocked(cx, cy); }
-    Vector3 CellCenter(int cx, int cy, float y = 0) const { return {(cx + 0.5f) * 0.5f, y, -(cy + 0.5f) * 0.5f}; }
+    Vector3 CellCenter(int cx, int cy, float y = 0) const { return {ox_ + (cx + 0.5f) * 0.5f, y, -(oz_ + (cy + 0.5f) * 0.5f)}; }
+    // World position (original x, z) of the min corner of cell (0,0): the min corner of the tre root bbox.
+    float gridOriginX() const { return ox_; }
+    float gridOriginZ() const { return oz_; }
     // Conversion between a server tile and a world position: the map spans gridW/2 x gridH/2 units, a server
     // map of tw x th tiles divides that evenly (tw == gridW means the usual 0.5-unit tiles).
     Vector3 TileToWorld(float tx, float ty, int tw, int th, float y = 0) const;
@@ -99,6 +111,8 @@ private:
     bool BuildTre(GameAssets& assets, const gd::Tre& tre);
     void BuildEntities(GameAssets& assets);
 
+    float ox_ = 0, oz_ = 0;   // grid origin, original world units
+    RigLibrary* rigs_ = nullptr;
     bool loaded_ = false;
     bool network_ = false;
     const ProtoDb* protos_ = nullptr;

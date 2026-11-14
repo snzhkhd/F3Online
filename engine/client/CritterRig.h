@@ -61,6 +61,8 @@ struct SkinModel {
     ClipSet* clipSet = nullptr;
     Texture2D atlas{};                  // humans: the composed 512x512 critter texture (owned by RigLibrary)
     float height = 6.0f;                // b3d units
+    float skelScale = 10.0f;            // b3d units per Granny skeleton unit: 10 for preconverted meshes (critters, JT doors), 1 otherwise
+    std::unordered_map<std::string, Clip> named;   // extra clips by resource name (doors: "<model>_Open_In_01")
 };
 
 class SkinnedInstance {
@@ -90,6 +92,7 @@ public:
     SkinModel* Model(const Appearance& app);
     // Loads (once) the clip of the given kind for this model; returns nullptr if the game has none.
     const Clip* Get(SkinModel& m, ClipKind k);
+    const Clip* GetNamed(SkinModel& m, const std::string& animName);   // nullptr if the game has no such clip
     static const char* ClipKey(ClipKind k);
 
 private:

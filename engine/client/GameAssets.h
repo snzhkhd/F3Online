@@ -35,6 +35,9 @@ struct DrawPart {
 struct ModelAsset {
     std::vector<DrawPart> parts;
     Vector3 bmin{0, 0, 0}, bmax{0, 0, 0};  // renderer space
+    // b3d file units -> world units: models that are not "preconverted" are stored at 1/10 of the world scale (like the tiles),
+    // preconverted ones (critters, most props) are already in world units. Entity transforms multiply by this.
+    float unitScale = 1.0f;
 };
 
 class GameAssets {
@@ -55,6 +58,7 @@ public:
     const ModelAsset* Model(const std::string& name);
     // Model for a map entity template ("Critters00_X" + "CRT"). `skin` may be set by the template.
     const ModelAsset* EntityModel(const std::string& tmpl, const std::string& type, std::string* defaultSkin = nullptr);
+    std::string EntityModelName(const std::string& tmpl, const std::string& type);   // b3d resource name of the template, "" if none
 
     size_t textureCount() const { return textures_.size(); }
     size_t modelCount() const { return models_.size(); }

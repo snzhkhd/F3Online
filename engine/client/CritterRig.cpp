@@ -118,7 +118,8 @@ void SkinnedInstance::Pose(const Clip* a, float ta, const Clip* b, float tb, flo
     std::vector<float> world = gr2::worldMatrices(sk, &pose);
     const size_t nb = sk.bones.size();
     for (size_t j = 0; j < nb; ++j) Mul4(&m.invWorld[j * 16], &world[j * 16], &palette_[j * 16]);
-    const float inv = 1.0f / kSkelToModel;
+    const float ss = m.skelScale;
+    const float inv = 1.0f / ss;
     for (size_t pi = 0; pi < m.parts.size(); ++pi) {
         const SkinPartSrc& sp = m.parts[pi];
         Mesh& mesh = inst_.parts[pi].mesh;
@@ -139,9 +140,9 @@ void SkinnedInstance::Pose(const Clip* a, float ta, const Clip* b, float tb, flo
                 onz += w * (nx * M[2] + ny * M[6] + nz * M[10]);
             }
             const float nl = 1.0f / std::max(1e-6f, std::sqrt(onx * onx + ony * ony + onz * onz));
-            mesh.vertices[v * 3 + 0] = ox * kSkelToModel;
-            mesh.vertices[v * 3 + 1] = oy * kSkelToModel;
-            mesh.vertices[v * 3 + 2] = -oz * kSkelToModel;
+            mesh.vertices[v * 3 + 0] = ox * ss;
+            mesh.vertices[v * 3 + 1] = oy * ss;
+            mesh.vertices[v * 3 + 2] = -oz * ss;
             mesh.normals[v * 3 + 0] = onx * nl;
             mesh.normals[v * 3 + 1] = ony * nl;
             mesh.normals[v * 3 + 2] = -onz * nl;
@@ -385,6 +386,7 @@ SkinModel* RigLibrary::Model(const Appearance& app) {
         for (auto& p : out->parts) p.tex = &out->atlas;
     }
     out->height = core->b3d.bmax[1];
+    out->skelScale = core->b3d.preconverted ? kSkelToModel : 1.0f;
     out->ok = !out->parts.empty();
     return out->ok ? out : nullptr;
 }
@@ -413,6 +415,16 @@ bool RigLibrary::LoadClip(SkinModel& m, const std::string& animName, Clip& out) 
     out.valid = true;
     out.name = animName;
     return true;
+}
+
+const Clip* RigLibrary::GetNamed(SkinModel& m, const std::string& animName) {
+    auto it = m.named.find(animName);
+    if (it == m.named.end()) {
+        Clip c;
+        LoadClip(m, animName, c);
+        it = m.named.emplace(animName, std::move(c)).first;
+    }
+    return it->second.valid ? &it->second : nullptr;
 }
 
 const Clip* RigLibrary::Get(SkinModel& m, ClipKind k) {
