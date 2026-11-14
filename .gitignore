@@ -17,3 +17,6 @@ out/
 extracted/
 gamedata/
 F3_Demo/
+
+# third-party binaries (Granny Viewer etc.) - never commit
+tools/Granny Viewer/
