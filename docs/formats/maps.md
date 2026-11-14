@@ -281,3 +281,5 @@ were readable text" are `globals.ini`/`locals.ini`, not scripts. 119 scripts (36
 4. GCRE field names (only SPECIAL is certain), GITM/GIWP/GIAR/GIAM/GOBJ/GDOR/GCON bodies, GWAM semantics, `EEOV` flags `f178/f179/f17a`.
 5. AMX disassembly, native signatures/semantics (only names known), `.sndscript`/`.veg` formats.
 6. 18 stale template references and 2 missing scripts in test maps are real dangling references in the shipped data, not parser errors.
+
+See also [client-rendering.md](../client-rendering.md) for the decoded TRE geometry layout (VTXD/IDXS) and how the client renders it.
