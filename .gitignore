@@ -20,3 +20,7 @@ F3_Demo/
 
 # third-party binaries (Granny Viewer etc.) - never commit
 tools/Granny Viewer/
+
+# local client settings and shortcuts
+client.cfg
+*.lnk
