@@ -98,6 +98,23 @@ function commands.tp(c, arg)
     local x, y = (arg or ""):match("^(%d+)%s+(%d+)")
     if not x or not c:teleport(c.map_id, tonumber(x), tonumber(y)) then c:tell("usage: /tp x y (walkable cell)") end
 end
+-- dev: /near <name or dialogue part>: teleport next to the first critter of this map whose name/dialogue contains the text (e.g. /near Armstrong)
+function commands.near(c, arg)
+    local m = get_map(c.map_id)
+    local want = (arg or ''):lower()
+    if not m or want == '' then c:tell('usage: /near <name part>'); return end
+    for _, o in ipairs(m:critters()) do
+        if o.id ~= c.id and (o.name .. ' ' .. o.dialog):lower():find(want, 1, true) then
+            for dx = -2, 2 do for dy = -2, 2 do
+                if m:is_free(o.x + dx, o.y + dy) and c:teleport(c.map_id, o.x + dx, o.y + dy) then return end
+            end end
+        end
+    end
+    local names = {}
+    for _, o in ipairs(m:critters()) do names[#names + 1] = o.name end
+    c:tell('nothing named like that on this map (' .. #names .. ' critters: ' .. table.concat(names, ', ', 1, math.min(#names, 6)) .. ')')
+end
+
 function commands.heal(c) c:heal(c.max_hp) end
 -- dev helper: /battle [ms]  sets the battle flag for ms (default TimeoutBattle); walking must still work while it is set
 function commands.battle(c, arg)

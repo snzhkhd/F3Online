@@ -120,6 +120,177 @@ void AmxHost::BindNatives() {
     for (const char* n : {"AddToTeam", "SetTeamAttitude", "SetTeamRank", "CreateSquad", "AddToSquad", "SetSquadAttitude", "SetSquadRank",
                           "ClearActions", "AttachSound", "RemoveSound", "SetValue"})
         N[n] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };
+
+    // ---- dialogue natives (.scra). Argument order = reverse of the push order in the listing (a[0] is the last pushed value).
+    //   SetCurrentNodeName(name$)  SetNodeTextFunction(publicName$)  RegisterNodeText(stfId)
+    //   RegisterReply(flag, stfId, actionPublic$, logicPublic$)   AddEntry(taskId, stfId)   OpenTask(taskId, ?)   CloseTask(taskId, ?)
+    N["SetCurrentNodeName"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
+        if (active_ && n > 0) { active_->node = m.GetString(a[0]); active_->textId = 0; }
+        return 0;
+    };
+    N["SetNodeTextFunction"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
+        if (active_ && n > 0) active_->textFn = m.GetString(a[0]);
+        return 0;
+    };
+    N["RegisterNodeText"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {
+        if (active_ && n > 0) active_->textId = a[0];
+        return 0;
+    };
+    N["RegisterReply"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
+        if (!active_ || n < 4) return 0;
+        DlgReply r;
+        r.flag = a[0]; r.textId = a[1]; r.action = m.GetString(a[2]); r.logic = m.GetString(a[3]);
+        active_->replies.push_back(std::move(r));
+        return 1;
+    };
+    N["PCSpeaker"] = [this](AmxInstance&, const AmxCell*, int) -> AmxCell { return active_ ? static_cast<AmxCell>(active_->pc) : 0; };
+    auto playerOf = [this](AmxInstance&) -> Critter* {
+        if (active_) return server_.GetWorld().GetCritter(active_->pc);
+        for (auto& [id, c] : server_.GetWorld().Critters()) if (c->IsPlayer() && c->mapId != 0) return c.get();
+        return nullptr;
+    };
+    // quest journal: task state lives in the globals table as "Task<id>" (1 open, 2 closed) so Lua and scripts can read it
+    N["OpenTask"] = [this, playerOf](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
+        if (n < 1) return 0;
+        server_.SetGlobal("Task" + std::to_string(a[0]), 1);
+        if (Critter* p = playerOf(m)) server_.Tell(*p, "New task: " + DlgText(a[0]));
+        return 1;
+    };
+    N["CloseTask"] = [this, playerOf](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
+        if (n < 1) return 0;
+        server_.SetGlobal("Task" + std::to_string(a[0]), 2);
+        if (Critter* p = playerOf(m)) server_.Tell(*p, "Task completed: " + DlgText(a[0]));
+        return 1;
+    };
+    N["AddEntry"] = [this, playerOf](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
+        if (n < 2) return 0;
+        server_.SetGlobal("TaskEntry" + std::to_string(a[0]), a[1]);
+        if (Critter* p = playerOf(m)) server_.Tell(*p, "Journal: " + DlgText(a[1]));
+        return 1;
+    };
+    N["IsInDialogue"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell { return n > 0 && a[0] > 0 && InDialog(static_cast<CritterId>(a[0])) ? 1 : 0; };
+    N["StartStore"] = [this, playerOf](AmxInstance& m, const AmxCell*, int) -> AmxCell {
+        if (Critter* p = playerOf(m)) server_.Tell(*p, "(trading is not implemented yet)");
+        return 0;
+    };
+    N["StartDialogue"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {  // (npc, pc): called by behaviours such as 00_TutorialFrank
+        if (n < 2) return 0;
+        Critter* npc = CritterOf(a[0]); Critter* pc = CritterOf(a[1]);
+        return npc && pc && pc->IsPlayer() && StartDialog(*pc, *npc) ? 1 : 0;
+    };
+}
+
+// ------------------------------------------------------------------ dialogue engine
+//
+// Conversation graph of a .scra (see docs/amx-scripts.md): OnStartDialogue picks the first node (RL1_N1 -> N<k>); a node function
+// N<k> runs NA<k>, names the node (SetCurrentNodeName), sets the reply builder (SetNodeTextFunction "NU<k>_N<k>") and registers
+// the NPC text (RegisterNodeText). The reply builder registers the visible replies (RegisterReply(flag, text, RA, RL)). Choosing a
+// reply runs its action public RA, then its logic public RL, which sets globals (LA...) and enters the next node N<n>.
+// SetNodeTextFunction("EndDialogue") ends the conversation.
+
+std::string AmxHost::DlgText(int id) const {
+    std::string s = server_.Data().String(id);
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i) {   // strip {c255} style colour / format tags
+        if (s[i] == '{') { size_t e = s.find('}', i); if (e != std::string::npos) { i = e; continue; } }
+        out.push_back(s[i]);
+    }
+    return out;
+}
+
+bool AmxHost::InDialog(CritterId id) const {
+    if (dialogs_.count(id)) return true;
+    for (auto& [pc, d] : dialogs_) if (d.npc == id) return true;
+    return false;
+}
+
+AmxHost::DlgView AmxHost::DialogView(CritterId pc) const {
+    DlgView v;
+    auto it = dialogs_.find(pc);
+    if (it == dialogs_.end()) return v;
+    v.open = true; v.textId = it->second.textId; v.text = DlgText(it->second.textId); v.node = it->second.node;
+    for (auto& r : it->second.replies) v.replies.push_back(DlgText(r.textId));
+    return v;
+}
+
+bool AmxHost::StartDialog(Critter& pc, Critter& npc) {
+    if (!available_ || npc.dialog.empty() || !pc.IsPlayer()) return false;
+    std::string base = npc.dialog;
+    if (base.size() > 4 && DataStore::Lower(base.substr(base.size() - 4)) == ".amx") base.resize(base.size() - 4);
+    std::shared_ptr<AmxScript> s;
+    auto it = dlgScripts_.find(base);
+    if (it != dlgScripts_.end()) s = it->second;
+    else {
+        std::filesystem::path p = dir_ / (base + ".scra");
+        std::string err;
+        if (std::filesystem::exists(p)) s = AmxScript::Load(p.string(), err);
+        if (!s) log::Warn("amx dialogue '%s' not loadable %s", base.c_str(), err.c_str());
+        dlgScripts_[base] = s;
+    }
+    if (!s || !s->HasPublic("OnStartDialogue")) return false;
+    if (dialogs_.count(pc.id)) DialogClose(pc);
+    Dlg d;
+    d.pc = pc.id; d.npc = npc.id;
+    d.inst = std::make_unique<AmxInstance>(s, &natives_);
+    d.inst->userData = npc.id;
+    Dlg* prev = active_;
+    auto& slot = dialogs_[pc.id] = std::move(d);
+    active_ = &slot;
+    slot.inst->Call("OnStartDialogue");
+    active_ = prev;
+    DlgView v = DialogView(pc.id);
+    log::Info("amx dialogue: %s <-> %s script '%s' node '%s'", pc.name.c_str(), npc.name.c_str(), base.c_str(), v.node.c_str());
+    gnet::DialogOpen o; o.npc = npc.id; o.name = npc.name;
+    server_.SendBuf(pc, gnet::PackG(o));
+    Present(pc);
+    return true;
+}
+
+void AmxHost::Present(Critter& pc) {
+    auto it = dialogs_.find(pc.id);
+    if (it == dialogs_.end()) return;
+    Dlg& d = it->second;
+    d.replies.clear();
+    if (d.textFn.empty() || d.textFn == "EndDialogue" || !d.inst->Script().HasPublic(d.textFn)) { DialogClose(pc); return; }
+    Dlg* prev = active_;
+    active_ = &d;
+    d.inst->Call(d.textFn);   // NU<k>_N<k>: registers the replies whose conditions hold
+    active_ = prev;
+    gnet::DialogNode m;
+    m.npc = d.npc; m.textId = static_cast<uint32_t>(d.textId); m.text = DlgText(d.textId);
+    if (d.replies.empty()) {   // nothing selectable: give the player a way out
+        DlgReply r; r.textId = 0; r.logic = "EndDialogue";
+        d.replies.push_back(r);
+    }
+    for (auto& r : d.replies) {
+        gnet::DialogNode::Reply pr; pr.replyId = static_cast<uint32_t>(r.textId);
+        pr.text = r.textId ? DlgText(r.textId) : std::string("[Leave]");
+        m.replies.push_back(std::move(pr));
+        if (m.replies.size() >= 24) break;
+    }
+    server_.SendBuf(pc, gnet::PackG(m));
+}
+
+void AmxHost::DialogChoose(Critter& pc, int index) {
+    auto it = dialogs_.find(pc.id);
+    if (it == dialogs_.end()) return;
+    Dlg& d = it->second;
+    if (index < 0 || static_cast<size_t>(index) >= d.replies.size()) return;
+    DlgReply r = d.replies[static_cast<size_t>(index)];
+    if (r.logic == "EndDialogue" || (r.logic.empty() && r.action.empty())) { DialogClose(pc); return; }
+    d.replies.clear();
+    Dlg* prev = active_;
+    active_ = &d;
+    const CritterId id = pc.id;
+    if (!r.action.empty() && d.inst->Script().HasPublic(r.action)) d.inst->Call(r.action);
+    if (!r.logic.empty() && d.inst->Script().HasPublic(r.logic)) d.inst->Call(r.logic);
+    active_ = prev;
+    if (dialogs_.count(id)) Present(pc);
+}
+
+void AmxHost::DialogClose(Critter& pc, bool notify) {
+    if (!dialogs_.erase(pc.id)) return;
+    if (notify) server_.SendBuf(pc, gnet::PackG(gnet::DialogClose{}));
 }
 
 std::shared_ptr<AmxScript> AmxHost::GetScript(const std::string& name) {
@@ -172,10 +343,26 @@ void AmxHost::AttachObject(const Item& it) {
     instances_[key] = std::move(e);
 }
 
-void AmxHost::Detach(uint64_t key) { instances_.erase(key); }
+void AmxHost::Detach(uint64_t key) {
+    instances_.erase(key);
+    for (auto it = dialogs_.begin(); it != dialogs_.end();) {   // a critter that leaves ends its conversations
+        if (it->first == key || it->second.npc == key) {
+            if (it->first != key) if (Critter* p = server_.GetWorld().GetCritter(it->first)) server_.SendBuf(*p, gnet::PackG(gnet::DialogClose{}));
+            if (active_ == &it->second) active_ = nullptr;
+            it = dialogs_.erase(it);
+        } else ++it;
+    }
+}
 
 void AmxHost::Tick(uint64_t tick, const std::unordered_set<MapId>& active) {
     int rate = server_.GetConfig().tickRate;
+    for (auto it = dialogs_.begin(); it != dialogs_.end();) {   // walking away or a dead partner ends a conversation
+        Critter* p = server_.GetWorld().GetCritter(it->first);
+        Critter* n = server_.GetWorld().GetCritter(it->second.npc);
+        if (p && n && !p->dead && !n->dead && p->mapId == n->mapId && TileDist(p->pos, n->pos) <= 12) { ++it; continue; }
+        if (p) server_.SendBuf(*p, gnet::PackG(gnet::DialogClose{}));
+        it = dialogs_.erase(it);
+    }
     for (auto& [key, e] : instances_) {
         if (!active.count(e.map)) continue;
         if (!e.created) {

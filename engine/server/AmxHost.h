@@ -32,6 +32,15 @@ public:
     // console helper: load `script` (name without extension), call public `pub`, with native tracing on
     std::string RunTest(const std::string& script, const std::string& pub);
 
+    // ---- dialogue engine: runs the original .scra conversation graph (see docs/amx-scripts.md, "Dialogue engine")
+    bool StartDialog(Critter& pc, Critter& npc);   // false if the NPC has no (loadable) dialogue
+    void DialogChoose(Critter& pc, int index);     // index into the replies of the last node sent
+    void DialogClose(Critter& pc, bool notify = true);
+    bool InDialog(CritterId id) const;             // id is the player or the NPC of a running conversation
+    // Test/debug access to the current node of a player's conversation.
+    struct DlgView { bool open = false; int textId = 0; std::string text, node; std::vector<std::string> replies; };
+    DlgView DialogView(CritterId pc) const;
+
     static constexpr uint64_t kObjectBit = 1ull << 32;  // entity key = critter id, or object id | kObjectBit
     static AmxCell Handle(uint64_t key) { return static_cast<AmxCell>((key & kObjectBit) ? ((key & 0xFFFFFFFFu) | 0x40000000u) : key); }
 
@@ -46,6 +55,20 @@ private:
     std::unique_ptr<AmxInstance> NewInstance(const std::string& scriptName, uint64_t key);
     void BindNatives();
     Critter* CritterOf(AmxCell handle);
+
+    struct DlgReply { int flag = 0, textId = 0; std::string action, logic; };
+    struct Dlg {
+        CritterId pc = 0, npc = 0;
+        std::unique_ptr<AmxInstance> inst;
+        std::string node, textFn;
+        int textId = 0;
+        std::vector<DlgReply> replies;
+    };
+    void Present(Critter& pc);   // builds the replies of the current node and sends it (or ends the conversation)
+    std::string DlgText(int id) const;
+    std::unordered_map<CritterId, Dlg> dialogs_;   // by player id
+    Dlg* active_ = nullptr;                        // conversation the natives currently write to
+    std::unordered_map<std::string, std::shared_ptr<AmxScript>> dlgScripts_;
 
     Server& server_;
     std::filesystem::path dir_;

@@ -260,7 +260,7 @@ void Server::OnMoveReq(Critter& c, const net::MoveToReq& req) {
     if (!m || c.dead) return;
     const gnet::ActionResult gate = CheckAction(c, static_cast<uint8_t>(Msg::C2S_MoveTo), 0);
     if (gate == gnet::ActionResult::Busy) {   // WaitState (Busy) was sent; the walk starts when the wait is over
-        c.pending = Pending{};
+        c.pending = Pending{}; c.talkTarget = 0;
         c.target = 0;
         c.qmove = Critter::QueuedMove{true, false, false, static_cast<float>(req.x), static_cast<float>(req.y), NowMs()};
         return;
@@ -274,7 +274,7 @@ void Server::OnMoveReq(Critter& c, const net::MoveToReq& req) {
 
 void Server::DoMoveCell(Critter& c, TilePos target) {
     c.qmove.has = false;
-    c.pending = Pending{};
+    c.pending = Pending{}; c.talkTarget = 0;
     c.target = 0;
     if (!MoveCritterTo(c, target)) {
         // Tell the client where it really is so it can drop any local assumption.
@@ -288,7 +288,7 @@ void Server::OnMoveReqF(Critter& c, const gnet::MoveToF& req) {
     --c.msgBudget;
     const gnet::ActionResult gate = CheckAction(c, static_cast<uint8_t>(GMsgRt::C2S_MoveToF), 0);
     if (gate == gnet::ActionResult::Busy) {   // WaitState (Busy) was sent; the walk starts when the wait is over
-        c.pending = Pending{};
+        c.pending = Pending{}; c.talkTarget = 0;
         c.target = 0;
         c.qmove = Critter::QueuedMove{true, true, req.run != 0, req.x, req.y, NowMs()};
         return;
@@ -299,7 +299,7 @@ void Server::OnMoveReqF(Critter& c, const gnet::MoveToF& req) {
 
 void Server::DoMoveF(Critter& c, float x, float y, bool run) {
     c.qmove.has = false;
-    c.pending = Pending{};
+    c.pending = Pending{}; c.talkTarget = 0;
     c.target = 0;
     if (run && !rt_.RunOnCombat && NowMs() < c.battleEndMs) run = false;
     if (!StartMove(c, x, y, run, true)) { if (c.mv.active) SendMovePath(c, &c); else SendCritterStop(c, 1, &c); }
@@ -482,9 +482,11 @@ void Server::StepCritter(Critter& c) {
         Critter* cc = world_.GetCritter(id);
         if (!cc || cc->mv.active || cc->mapId == 0) return;
         if (cc->pending.type != PendingType::None) RunPending(*cc);
+        if (cc->talkTarget) RunTalk(*cc);
         return;
     }
     if (c.pending.type != PendingType::None) RunPending(c);
+    if (c.talkTarget) RunTalk(c);
 }
 
 void Server::UpdateVisibility(Map& m) {

@@ -58,6 +58,10 @@ struct Bot {
     std::map<ItemId, gnet::ObjectInfo> objInfo;
     std::vector<gnet::CombatEvent> combat;
     std::vector<std::string> chat;
+    // dialogue
+    std::vector<gnet::DialogOpen> dlgOpens;
+    std::vector<gnet::DialogNode> dlgNodes;
+    int dlgCloses = 0;
     // real-time state (continuous-move capable clients only)
     struct Timed { gnet::WaitState w; double localMs; };
     std::vector<Timed> waits;
@@ -128,6 +132,9 @@ struct Bot {
                 break;
             }
             case (uint8_t)GMsgRt::S2C_WaitState: { gnet::WaitState m; if (m.Read(b)) waits.push_back({m, LocalMs()}); break; }
+            case (uint8_t)GMsgDlg::S2C_DialogOpen: { gnet::DialogOpen m; if (m.Read(b)) dlgOpens.push_back(m); break; }
+            case (uint8_t)GMsgDlg::S2C_DialogNode: { gnet::DialogNode m; if (m.Read(b)) dlgNodes.push_back(m); break; }
+            case (uint8_t)GMsgDlg::S2C_DialogClose: { ++dlgCloses; break; }
             default: break;
         }
     }
@@ -460,6 +467,55 @@ int main(int argc, char** argv) {
         a.Send(gnet::PackG(e2));
         CHECK(WaitFor({&a, &b}, 2, [&] { return a.waits.size() > w1; }) && a.waits.back().w.result == gnet::ActionResult::Ok, "Equip accepted again after the breaktime (%zu entries)", a.inv.size());
         WaitFor({&a, &b}, 0.7, [] { return false; });
+    }
+
+    // --- dialogue: Corporal Armstrong (00 Corporal Armstrong.scra) runs through the original conversation graph
+    {
+        net::ChatReq c; c.text = "/near Armstrong";
+        a.Send(net::Pack(c));
+        CritterId arm = 0;
+        CHECK(WaitFor({&a, &b}, 5, [&] {
+                  int best = 99999;   // Armstrong's prototype is displayed as "GMC Soldier": take the nearest one (we stand next to him)
+                  for (auto& [id, cr] : a.critters)
+                      if (cr.name == "GMC Soldier" && TileDist(TilePos{cr.x, cr.y}, a.pos) < best) { best = TileDist(TilePos{cr.x, cr.y}, a.pos); arm = id; }
+                  return arm != 0 && best <= 4;
+              }), "Armstrong is in view after /near");
+        if (arm) {
+            gnet::Talk t; t.critter = arm;
+            a.Send(gnet::PackG(t));
+            bool got = WaitFor({&a, &b}, 8, [&] { return !a.dlgOpens.empty() && !a.dlgNodes.empty(); });
+            CHECK(got, "Talk -> DialogOpen + DialogNode received");
+            if (got) {
+                CHECK(a.dlgOpens[0].npc == arm, "DialogOpen names the NPC (%s)", a.dlgOpens[0].name.c_str());
+                const gnet::DialogNode& n0 = a.dlgNodes[0];
+                CHECK(!n0.text.empty() && !n0.replies.empty(), "first node has text and %zu replies: \"%.60s\"", n0.replies.size(), n0.text.c_str());
+                // walk the conversation: always choose the first reply; every answer must be a new node or a close
+                int steps = 0; size_t seen = a.dlgNodes.size(); bool ended = false;
+                std::string last = n0.text;
+                for (; steps < 20 && !ended; ++steps) {
+                    gnet::DialogChoose ch; ch.index = 0;
+                    int closes = a.dlgCloses;
+                    a.Send(gnet::PackG(ch));
+                    WaitFor({&a, &b}, 3, [&] { return a.dlgNodes.size() > seen || a.dlgCloses > closes; });
+                    if (a.dlgCloses > closes) ended = true;
+                    else if (a.dlgNodes.size() > seen) {
+                        seen = a.dlgNodes.size(); last = a.dlgNodes.back().text;
+                        std::printf("      dlg step %d: \"%.70s\" (%zu replies; first \"%.40s\")\n", steps, last.c_str(), a.dlgNodes.back().replies.size(), a.dlgNodes.back().replies.empty() ? "" : a.dlgNodes.back().replies[0].text.c_str());
+                    }
+                    else break;
+                }
+                CHECK(ended || steps >= 3, "conversation advanced %d choices (ended=%d), last text \"%.50s\"", steps, ended ? 1 : 0, last.c_str());
+            }
+            if (got && !a.dlgNodes.empty() && a.dlgCloses == 0) {   // the last reply of every node is the goodbye
+                gnet::DialogChoose ch; ch.index = static_cast<uint8_t>(a.dlgNodes.back().replies.size() - 1);
+                std::printf("      leaving with \"%.40s\"\n", a.dlgNodes.back().replies.back().text.c_str());
+                a.Send(gnet::PackG(ch));
+                CHECK(WaitFor({&a, &b}, 3, [&] { return a.dlgCloses > 0; }), "the last reply ends the conversation (DialogClose)");
+            }
+            gnet::DialogCloseReq cl;
+            a.Send(gnet::PackG(cl));
+            WaitFor({&a, &b}, 0.3, [] { return false; });
+        }
     }
 
     // --- map transition: go to the Vault side of Junktown's transition region

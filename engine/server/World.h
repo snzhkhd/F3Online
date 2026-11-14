@@ -70,6 +70,7 @@ struct Critter {
     std::vector<InvItem> inventory;
     CritterId target = 0;       // combat target (0 = none)
     Pending pending;
+    CritterId talkTarget = 0;   // NPC the player is walking to in order to talk (Server::TalkTo)
     // A walk request that arrived while the critter was busy (breaktime of an attack / item action): the auto attack is
     // cancelled at once and the walk starts the moment the critter is free (FOnline would drop it; clicking in the
     // middle of an attack animation must not make walking impossible).

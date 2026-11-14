@@ -331,3 +331,73 @@ struct CritterProto {
 };
 }  // namespace gnet
 }  // namespace f3
+
+// ===================================================================================================
+// DIALOGUE BLOCK. Ids: client->server 30..32, server->client 136..138.
+// Talk: the player asks to talk to an NPC (critter with a dialogue script); the server walks the player next to the NPC,
+// runs the original conversation graph (.scra) and answers with DialogOpen, then DialogNode for every node shown. The
+// client answers with DialogChoose(index into the last DialogNode.replies); DialogClose ends the conversation from either
+// side. `text` fields are final English strings (stf ids resolved, {cNNN} colour tags stripped). `textId`/`replyId` carry
+// the original string ids for clients that want to localise. Old clients ignore the server messages.
+// ===================================================================================================
+namespace f3 {
+enum class GMsgDlg : uint8_t {
+    C2S_Talk = 30,
+    C2S_DialogChoose = 31,
+    C2S_DialogClose = 32,
+    S2C_DialogOpen = 136,
+    S2C_DialogNode = 137,
+    S2C_DialogClose = 138,
+};
+namespace gnet {
+struct Talk {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgDlg::C2S_Talk);
+    uint32_t critter = 0;
+    void Write(ByteBuffer& b) const { b.WriteU32(critter); }
+    bool Read(ByteBuffer& b) { critter = b.ReadU32(); return b.Ok(); }
+};
+struct DialogChoose {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgDlg::C2S_DialogChoose);
+    uint8_t index = 0;
+    void Write(ByteBuffer& b) const { b.WriteU8(index); }
+    bool Read(ByteBuffer& b) { index = b.ReadU8(); return b.Ok(); }
+};
+struct DialogCloseReq {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgDlg::C2S_DialogClose);
+    void Write(ByteBuffer&) const {}
+    bool Read(ByteBuffer& b) { return b.Ok(); }
+};
+struct DialogOpen {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgDlg::S2C_DialogOpen);
+    uint32_t npc = 0;   // critter id
+    std::string name;   // speaker name
+    void Write(ByteBuffer& b) const { b.WriteU32(npc); b.WriteString(name); }
+    bool Read(ByteBuffer& b) { npc = b.ReadU32(); name = b.ReadString(64); return b.Ok(); }
+};
+struct DialogNode {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgDlg::S2C_DialogNode);
+    struct Reply { uint32_t replyId = 0; std::string text; };
+    uint32_t npc = 0;
+    uint32_t textId = 0;
+    std::string text;
+    std::vector<Reply> replies;
+    void Write(ByteBuffer& b) const {
+        b.WriteU32(npc); b.WriteU32(textId); b.WriteString(text);
+        b.WriteU8(static_cast<uint8_t>(replies.size()));
+        for (auto& r : replies) { b.WriteU32(r.replyId); b.WriteString(r.text); }
+    }
+    bool Read(ByteBuffer& b) {
+        npc = b.ReadU32(); textId = b.ReadU32(); text = b.ReadString(2048);
+        uint8_t n = b.ReadU8();
+        replies.clear();
+        for (uint8_t i = 0; i < n && b.Ok(); ++i) { Reply r; r.replyId = b.ReadU32(); r.text = b.ReadString(1024); replies.push_back(r); }
+        return b.Ok();
+    }
+};
+struct DialogClose {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgDlg::S2C_DialogClose);
+    void Write(ByteBuffer&) const {}
+    bool Read(ByteBuffer& b) { return b.Ok(); }
+};
+}  // namespace gnet
+}  // namespace f3

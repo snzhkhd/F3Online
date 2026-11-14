@@ -106,6 +106,10 @@ public:
     void Say(Critter& speaker, const std::string& text);  // local chat, heard in view radius
     void Tell(Critter& player, const std::string& text);  // system message to one player
     void Broadcast(const std::string& text);              // system message to all players
+    void SendBuf(Critter& to, const ByteBuffer& b) { Send(to, b); }  // raw message to one player (AMX dialogue engine)
+    AmxHost* Amx() { return amx_.get(); }
+    void TalkTo(Critter& pc, CritterId npc);   // dialogue: walk next to the NPC, then run its .scra conversation
+    void RunTalk(Critter& pc);                 // per-tick continuation of TalkTo
 
 private:
     void HandleEvents(int timeoutMs);
