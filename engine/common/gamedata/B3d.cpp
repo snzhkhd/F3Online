@@ -29,6 +29,7 @@ struct State {
     std::vector<Material> materials;
     B3dModel* out = nullptr;
     bool haveBounds = false;
+    size_t boneCount = 0;  // bones seen before the mesh token
 };
 
 uint8_t ToByte(float f) { f = f < 0 ? 0 : (f > 1 ? 1 : f); return static_cast<uint8_t>(f * 255.0f + 0.5f); }
@@ -57,9 +58,19 @@ void ReadMesh(Reader& r, State& st) {
         float bmin[3], bmax[3];
         r.fl(bmin, 3); r.fl(bmax, 3);
         if (!st.haveBounds) { std::memcpy(m.bmin, bmin, 12); std::memcpy(m.bmax, bmax, 12); st.haveBounds = true; }
-        if (r.u8()) {  // 4 lightmap uv sets: skipped
-            if (r.u32() != 4) throw ParseError("lightmap set count != 4");
-            r.skip(static_cast<size_t>(4) * cnt * 8);
+        const bool wantSkin = st.boneCount > 0;
+        if (wantSkin) { m.boneIdx.resize(m.boneIdx.size() + static_cast<size_t>(cnt) * 4, 0); m.boneW.resize(m.boneW.size() + static_cast<size_t>(cnt) * 4, 0.0f); }
+        if (r.u8()) {  // 4 sets x vertex x {u32 bone index (0xFFFFFFFF = unused), f32 weight}: the skin influences of critters
+            if (r.u32() != 4) throw ParseError("influence set count != 4");
+            if (static_cast<uint64_t>(4) * cnt * 8 > r.n - r.p) throw ParseError("influence sets overrun file");
+            for (uint32_t s = 0; s < 4; ++s)
+                for (uint32_t i = 0; i < cnt; ++i) {
+                    uint32_t bi = r.u32(); float w = r.f32();
+                    if (wantSkin && bi < st.boneCount && w > 0) {
+                        m.boneIdx[(vbase + i) * 4 + s] = static_cast<uint8_t>(bi);
+                        m.boneW[(vbase + i) * 4 + s] = w;
+                    }
+                }
         }
         uint32_t G = r.u32();
         if (G > 4096) throw ParseError("absurd group count");
@@ -106,7 +117,16 @@ void ReadMesh(Reader& r, State& st) {
             m.uv1.insert(m.uv1.end(), uv[1], uv[1] + 2);
             uint32_t nw = r.u32();
             if (nw > 64) throw ParseError("absurd weight count");
-            r.skip(static_cast<size_t>(nw) * 8);
+            if (nw && st.boneCount > 0) {
+                if (m.boneW.size() < (m.VertexCount()) * 4) { m.boneW.resize(m.VertexCount() * 4, 0.0f); m.boneIdx.resize(m.VertexCount() * 4, 0); }
+                const size_t vi = m.VertexCount() - 1;
+                for (uint32_t k = 0; k < nw; ++k) {
+                    uint32_t bi = r.u32(); float w = r.f32();
+                    if (k < 4 && bi < st.boneCount) { m.boneIdx[vi * 4 + k] = static_cast<uint8_t>(bi); m.boneW[vi * 4 + k] = w; }
+                }
+            } else {
+                r.skip(static_cast<size_t>(nw) * 8);
+            }
         }
         uint32_t ng = r.u32();
         if (ng > 4096) throw ParseError("absurd group count");
@@ -201,6 +221,7 @@ bool ParseB3d(const uint8_t* data, size_t size, B3dModel& out, std::string* err)
                     if (b.flags & 2) r.fl(b.axisAngle, 4);
                     if (b.flags & 4) r.skip(12);
                     out.bones.push_back(std::move(b));
+                    st.boneCount = out.bones.size();
                     break;
                 }
                 case 0x16: r.u32(); break;
@@ -209,6 +230,18 @@ bool ParseB3d(const uint8_t* data, size_t size, B3dModel& out, std::string* err)
             }
         }
     done:
+        if (!out.boneW.empty()) {
+            const size_t nv = out.VertexCount();
+            out.boneW.resize(nv * 4, 0.0f); out.boneIdx.resize(nv * 4, 0);
+            bool any = false;
+            for (size_t v = 0; v < nv; ++v) {
+                float sum = 0;
+                for (int k = 0; k < 4; ++k) sum += out.boneW[v * 4 + k];
+                if (sum > 1e-6f) { any = true; for (int k = 0; k < 4; ++k) out.boneW[v * 4 + k] /= sum; }
+                else { out.boneW[v * 4] = 1.0f; out.boneIdx[v * 4] = 0; }
+            }
+            if (!any) { out.boneW.clear(); out.boneIdx.clear(); }
+        }
         // Legacy groups with no texture of their own fall back to the first model texture.
         for (auto& g : out.groups) if (g.texture.empty() && !out.textures.empty()) g.texture = out.textures[0];
         return true;

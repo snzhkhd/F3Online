@@ -25,6 +25,11 @@ struct B3dModel {
     std::vector<uint8_t> col;      // RGBA8 per vertex (0x7f = neutral, engine modulates x2)
     std::vector<B3dGroup> groups;
     std::vector<B3dBone> bones;
+    // Skinning (critters): up to 4 influences per vertex; index = position in `bones`, weights sum to ~1.
+    // Empty when the model has no skin data. See docs/formats/models.md ("bone weights").
+    std::vector<uint8_t> boneIdx;  // 4 per vertex
+    std::vector<float> boneW;      // 4 per vertex
+    bool HasSkin() const { return !boneW.empty(); }
     std::vector<std::string> textures;  // top-level texture list (file names)
     float bmin[3] = {}, bmax[3] = {};
     bool preconverted = false;
