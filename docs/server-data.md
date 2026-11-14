@@ -73,7 +73,7 @@ work as melee items with a default damage of 2-6 plus the Strength bonus.
   globals table used by `get_global/set_global` and the AMX natives). Prototype ids (`pid`, u16) are the index in the **key-sorted**
   order of `protos.json` (`nlohmann::json` objects are sorted), so a client that reads the same `.een` set can reproduce them;
   `ItemAdd.pid` and every `InvEntry.pid` are such ids. A pid lookup by key is case-insensitive.
-* `Map` (`World.h`): `blocked[]` = `walk == 0x2f` at 2 cells per world unit (cell = `(floor(2x), floor(2z))`), `entries[]` (id -> slots),
+* `Map` (`World.h`): `blocked[]` = `CellSolid(walk)` (walls, prop footprints, fences; `engine/common/gamedata/CellClass.h`) at 2 cells per world unit; the grid starts at the map origin `originX/originZ` (map json `origin_x`, `origin_z`, `origin_verified`; tre root bbox min), cell = `(floor(2(x-originX)), floor(2(z-originZ)))`, `entries[]` (id -> slots),
   `regions[]` (polygon in cell units, ray-casting point test), `paths[]`, `items` (ground items, doors, containers, usables).
   All 39 maps are loaded at start (13 MB of grids); only maps with players are simulated (NPC scripts, movement, combat, AMX).
 * Pathfinding: A* on the real grid (8-connected, no corner cutting), per-thread scratch buffers with generation stamps so a search on a
@@ -86,7 +86,7 @@ work as melee items with a default damage of 2-6 plus the Strength bonus.
   `equipment` worn, instance (or template) `inventory` carried; first weapon auto-equipped). Props flagged `static` are placed exactly
   on their (usually blocked) cell and never move. If the cell is blocked for a normal critter the nearest free cell within 6 is used.
 * `WEA/ARM/AMO/ITM` -> ground object. `CON` -> container with contents from EEOV + template inventory (stackables merged).
-  `DOR` -> door; its footprint is the blocked cells of the 3x3 around its position, released while open (see gaps).
+  `DOR` -> door; its footprint is the nearest 8-connected `0x1b` doorway component (radius 12, cap 800 cells); only a locked closed door blocks it.
   `USE` -> usable object (reported to the Lua hook `on_use`).
 * Instances whose template does not resolve (11 stale references in the test maps) are skipped with a count in the log.
 * Entry points: login uses the start map and `start_entry` (`sys.ini` says 0, Junktown has ids 1 and 2, so an unknown id falls back
@@ -102,8 +102,9 @@ All numbers below are placeholders unless noted; formulas of the original game a
   (all SPECIAL 6, 33 HP), team 1. Starter kit (Lua `on_login`): 9mm autoloader (equipped), 30 x 9mm, leather outfit (worn), .44 revolver.
 * Inventory: stackable ammo/misc, one equipped weapon and one armor, carry weight limit for players, drop to ground, pick up (the server walks
   the player next to the item first, then picks up; pending actions are cancelled by a new move), take from containers.
-* Doors toggle on `Use` (blocked cells released/restored, `CellsSet` sent to every player on the map; closing is refused while a critter
-  stands in the doorway).
+* Doors: `Use` toggles; unlocked doors also open by proximity (a critter within 5 cells) and auto-close after 3 s with nobody near (`TickDoors`, every 5 ticks).
+  A locked door (`doorLocked` from GDOR byte 1, or `LockDoor`/`UnlockDoor` from scripts, `IsLocked`) refuses to open with a message and blocks its footprint.
+  `CellsSet` is sent to every player on the map; closing is refused while a critter stands in the doorway.
 * Combat is **real time**, not the original 6 s rounds (sys.ini `Seconds Per Round = 6`): `Attack(target)` makes the critter approach until the
   weapon range (ranged: `range * 2` cells and line of sight on the grid; melee: adjacent) and fire once per cooldown. Action duration (see section 9) in seconds =
   `clamp(GWAM cost / 10, 0.5, 4)` (guess). Hit chance `45 + 4A (+2S melee) - AC - 2 * max(0, distance_units - P)` clamped 5..95; damage = ammo
@@ -200,7 +201,7 @@ transition region which loads the Vault (384x334), and opening a door.
 ## 8. Known gaps
 
 * Real-time combat instead of 6 s rounds; hit/damage/AP numbers are placeholders; no skills, perks, traits, XP or levels, no called shots, no burst fire or area damage.
-* Doors: footprint heuristic (3x3 blocked cells around the door position); doors standing on walkable cells simply do nothing when opened. Locks, keys, container/door
+* Doors: the GDOR locked flag is a guess; Junktown doors have no `0x1b` footprint, so they never block; doors of the 8 stale-grid test maps use an unverified origin. Locks, keys, container/door
   scripts are not applied. No stealing, no usable-skill system (`UseSkill`, `GetUsableSkills`).
 * No dialogue engine (see AMX gaps), no stores, no party/squad system, no persistence/accounts, no weights or item values from the data.
 * Map content is only what the emap holds: sound/effect emitters, waypoint paths (stored, unused), automap icons and `EMTR` kind-6 volumes are imported but ignored by the server;

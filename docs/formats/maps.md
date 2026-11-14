@@ -35,11 +35,17 @@ have no emap of their own; `Test_Building`, `Test_Junktown_fences_metas`, `Weapo
 ## 1. World coordinates, grid, units
 
 * **Y is up**; world position = `(x, y, z)` floats, the ground plane is x/z (entity y is height: 0 on the floor, 2.5 for windows).
-* **Grid resolution: 2 cells per world unit.** Evidence: (a) tre `LVLD/INFO` is `(w, h, 0.5, 0.5)` with the same w,h as the mapdata;
-  (b) the root bounding box of the spatial tree equals `w/2 x h/2` (Junktown mapdata 384x624 -> bbox x -1..191, z -1..311;
-  Test_Brian 84x84 -> 4..46; Mainmenu 380x204 -> x -95..95); (c) every entity/entry point lies inside `[0,w/2] x [0,h/2]`
-  (Junktown entities x 26..161, z 38..289). Cell for world point: `(floor(2x), floor(2z))`, row = z. Mainmenu is the exception (tre
-  bbox is centred on x=0), origin offset of that map is unknown.
+* **Grid resolution: 2 cells per world unit, origin = min corner of the tre root bounding box.** The mapdata grid does NOT start at
+  world (0,0). Cell for a world point: `cx = floor(2*(x - ox))`, `cy = floor(2*(z - oz))` with `(ox, oz) = (treeBox.minX, treeBox.minZ)`
+  (tre `NODE/INFO` of the root), identity axis order (x = column, z = row), no mirroring. Cell centre: `(ox + (cx+.5)/2, oz + (cy+.5)/2)`.
+  Evidence: (a) tre `LVLD/INFO` is `(w, h, 0.5, 0.5)` and the root bbox extent equals `w/2 x h/2` on 31 of 39 maps (all shipped maps;
+  the 8 others are stale test-map grids: aarontemp, aarontemp2, canyon_random_01, scotte_test1/2, test_city_building01/02,
+  test_int_vault1_5x5, whose origin is unverified and assumed to be the same rule); (b) with this origin all 106 entity placements
+  (critters, items, entry points) land on walkable cells (with the old origin-0 assumption most did not); (c) doors land on `0x1b`/blocked
+  cells (11 of 16 checked, the rest are doors of maps without a footprint). Origins: 04_Tutorial_Vault `(-44, -4)` (the old code was
+  wrong by 88 cells in x and 8 in z), 03_Tutorial_Junktown `(-1, -1)` (2 cells off), Test_Brian `(4, 4)`, Mainmenu `(-95, ...)`.
+  Run `mapinfo verify <extracted>` to reproduce; it is the regression test (gate: 0 bad placements, >= 29 verified origins).
+  The importer writes `origin_x`, `origin_z`, `origin_verified` into each server map json.
 * Tile size: `Ext5x5_*` tiles are 5x5 world units = 10x10 cells; `Int10x10_*` are 10x10 units = 20x20 cells (grid dims are always
   `4 + 10*k` for 5x5 sets: Test_Ext5x5_City1 174x114 -> 17x11 tiles; Sewers 624x624 -> 31x31 tiles of 10). b3d tile meshes are
   stored at 1/10 of that (`models.md`: 5x5 tile = 0.5 file units), so **world units = b3d file units x 10** (inferred from the grid
@@ -70,13 +76,30 @@ Values seen over the 39 maps (cells): `0x2f` 1,981,523; `0x01` 501,785; `0x02` 3
 * The other values are **walkable ground classes** (surface/material ids): critters, items and every player entry slot start on
   `0x01/0x02/0x05/0x09/0x00` (151 of 163 points checked; the rest sit on props that carry `0x2c`/`0x2f`). Per-map dominant value follows
   the tile set (`0x01` desert/mesa, `0x09` city asphalt/concrete, `0x05` vault metal, `0x02` cave/test, `0x00` mines/sewer).
-* **Unknown:** the exact enumeration of values (`0x2c` forms thin scatter next to props = prop footprint/obstacle; `0x22`, `0x17`, `0x1b`,
-  `0x26` appear as small patches), and whether non-`0x2f` classes also encode walkable-but-slow or footstep sound. The sound
-  scripts `FX_Foot_Hum_{Asphalt,Carpet,Metal,Sand,Wood}_Base` suggest surface classes feed footsteps. F3.exe's mapdata loader was not located
-  (no `.rle`/`mapdata` string; the emap header names the file `<Map>.rle`, an older extension).
+* **Cell classes (audited by overlaying them on the tre geometry and entity footprints):**
+  * `0x2f` wall / void; `0x2c` prop footprint (solid, a thin outline around props that have collision).
+  * `0x1b` **doorway**: the cells under a door entity (a 2-4 cell wide strip across the opening). Doors are NOT `0x2f` (the old 3x3
+    heuristic only worked by accident). A closed locked door blocks them; open or unlocked, they are walkable.
+  * `0x26` door frame posts (walkable ground beside a doorway).
+  * Fence-like classes `0x1f`, `0x2a`, `0x21`, `0x1a`, `0x17`, `0x0c`, `0x22` follow fences, railings and low walls: treated as solid.
+  * `0x16` ambiguous (about 10k cells, appears on both sides of obstacles): left walkable.
+  * The remaining values (`0x00 0x01 0x02 0x04 0x05 0x09 0x0b 0x10 0x18 0x23`) are walkable surface/material ids.
+  The exact meaning of `0x16`, `0x26` and the rare classes is inferred, not read from F3.exe (the loader was not located).
+  Constants live in `engine/common/gamedata/CellClass.h` (`CellSolid()`), used by importer, server and client.
 
-For a server: use this grid as the walkability bitmap (`blocked = (v == 0x2f)`), 2 cells per world unit. Dynamic blockers (doors, props with
-`0x2c` footprints) are inside the grid already.
+For a server: `blocked = CellSolid(v)` on the grid, 2 cells per world unit, origin as above. Dynamic blockers: locked closed doors
+(their `0x1b` footprint is blocked by the server at runtime, see `server-data.md`).
+
+### Doors (DOR / GDOR)
+
+* Map door entities are `*.DOR` templates (model + `*_Open_In_01.anim.gr2`); their game record is `GDOR` (byte 1 is probably a
+  locked flag: only Vault Door02 has it set, a guess). Scripts use the natives `UnlockDoor`, `LockDoor`, `IsLocked`, `OnOpen`.
+* Footprint of a door = the nearest 8-connected `0x1b` component (radius 12 cells, capped at 800 cells).
+* Models: b3d meshes with `preconverted == false` are in 1/10 world units and need x10 (unconverted doors, the Mesa console);
+  preconverted ones (critters, `JT_DoorL`, City1 doors, Overseer door) are x1. Doors were sunk and tiny before because of this.
+* Open animation: skeleton from `<model>.mesh.gr2`, clip `<model>_Open_In_01` (Bone01 drops from 0 to -0.794 over 1 s: the slab sinks
+  into the floor). Doors without a skeleton (Overseer door) are hidden while open.
+* Junktown doors have no `0x1b` footprint: they only animate, they never block.
 
 ## 3. `.emap` (type 1300 MAP)
 
@@ -275,7 +298,7 @@ were readable text" are `globals.ini`/`locals.ini`, not scripts. 119 scripts (36
 
 ## 9. Still unknown / not done
 
-1. `mapdata` value enumeration (surface vs collision classes) and the exact loader (code not located).
+1. `mapdata` value enumeration (see section 2: `0x16`, `0x26` and rare classes guessed), the GDOR locked flag, the unverified origin of the 8 stale test-map grids, and the exact loader (code not located).
 2. `.tre`: `LVL0` encoding, `HEAD` counts, `MATR` parameter block, vertex/index payload decoding (needed only for client rendering; models.md has the b3d vertex format).
 3. `EMTR` kind 6 semantics (building volume / roof fade is a guess), `ECAM`, `EMNP`, `EPTH` extras, header 27-byte tail, `2MWT` water layout.
 4. GCRE field names (only SPECIAL is certain), GITM/GIWP/GIAR/GIAM/GOBJ/GDOR/GCON bodies, GWAM semantics, `EEOV` flags `f178/f179/f17a`.

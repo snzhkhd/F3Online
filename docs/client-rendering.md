@@ -19,7 +19,7 @@ unusable gamedir / map missing from the game data) and how to fix it.
 Test options: `--shot FILE.png`, `--shots PREFIX --shot-times 5,8,11` (timed series, logged with frame timestamps),
 `--cam AZ,EL,FOV`, `--target X,Z`, `--clipy Y`, `--noentities`, `--modelscale S`, `--size W,H`, `--protos FILE`,
 `--no-assets`, `--legacy` (do not announce the timing capability; tests per-cell CritterMove), `--say TEXT` (repeatable),
-`--autowalk`, `--autoattack`, `--autopickup`, `--trace` (movement smoothness summary), `--run-seconds N`.
+`--grid` (start with the G walk-grid overlay, drawn around the player, on top of the terrain), `--autowalk`, `--autoattack`, `--autopickup`, `--trace` (movement smoothness summary), `--run-seconds N`.
 Note: under MSYS bash set `MSYS_NO_PATHCONV=1` or `/tp ...` is rewritten into a Windows path.
 
 Controls (network): LMB acts according to the cursor mode, RMB click cycles the mode (Move/Attack/Use/Talk/Pickup, or
@@ -86,9 +86,9 @@ Client side: `GameAssets` (textures with mipmaps, B3D to raylib meshes, entity t
 
 Original data is left-handed, Y up (Direct3D). Renderer space is right-handed Y up: `(x, y, -z)`, triangle winding
 flipped (indices 1 and 2 swapped). Back-face culling is on (ceilings face down, so interiors show as a dollhouse;
-PgUp/PgDn cut roofs). World unit = metre; the walk grid has 2 cells per unit (cell centre
-`((cx+.5)/2, -(cy+.5)/2)`). B3D models are scaled by `MapView::modelScale = 0.3` (a human comes out about 1.8 m).
-Entity yaw: `MatrixRotateY(-yaw)`. Server tile to world: `((tx+.5)*cw, 0, -(ty+.5)*ch)` with `cw = gridW*0.5/mapWidth`.
+PgUp/PgDn cut roofs). World unit = metre; the walk grid has 2 cells per unit and starts at the tre root bbox min `(ox, oz)` (cell centre
+`(ox+(cx+.5)/2, -(oz+(cy+.5)/2))`; see `formats/maps.md` section 1). B3D models are scaled by `MapView::modelScale = 0.3` (a human comes out about 1.8 m).
+Entity yaw: `MatrixRotateY(-yaw)`. Server tile to world: `(ox+(tx+.5)*cw, 0, -(oz+(ty+.5)*ch))` with `cw = gridW*0.5/mapWidth`.
 
 ## Camera
 
@@ -112,7 +112,7 @@ Vault: 47 k triangles. All geometry is static GPU meshes; no per-frame allocatio
 ## Known gaps
 
 * Critters are drawn as base body (plus skin override) only: no outfit/hair parts, no weapon-specific clips.
-* Talk mode only examines (no dialogue); an open door is shown by hiding the door model.
+* Talk mode only examines (no dialogue); doors with a skeleton play `<model>_Open_In_01` (the slab sinks into the floor), doors without one are hidden while open.
 * The server does not send `S2C_CritterProto` yet, so NPC models come from the name lookup.
 * No particles, VFX, decals, water; no per-light dynamic lighting (baked lightmaps plus a sun term on props).
 * Ground picking uses up-facing triangles only; multi-storey interiors pick the first hit from the camera.
@@ -126,3 +126,11 @@ Vault: 47 k triangles. All geometry is static GPU meshes; no per-frame allocatio
 * Cursor: RMB toggles Move <-> Examine; key A enters Attack (RMB/Esc leaves); Pickup / Use / Talk are automatic on hover (`ResolveCursor`); keys 1-5 removed. WASD pans only in the viewer.
 * Walk/Run clip rates follow server speed (9/18 cells/s).
 * Known gaps: a few wall rims remain in the height field; no dialogue engine (Talk examines).
+
+## Doors and model unit scale (update)
+
+* b3d meshes with `preconverted == false` are in 1/10 world units and are drawn x10 (`ModelAsset.unitScale`); preconverted meshes x1.
+  `SkinModel.skelScale` is 10 for preconverted meshes and 1 otherwise. Door models used to be tiny and sunk because of this.
+* Rigged doors (`MapView::SetRigs`, `Update`): CPU-skinned with the Granny skeleton from `<model>.mesh.gr2`, `doorT` moves 0..clip length
+  towards the server open state.
+* Known gaps: the Overseer door and other doors without skeleton just vanish when open; some Vault rooms are dark (lightmaps, pre-existing).
