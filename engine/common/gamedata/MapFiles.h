@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "CellClass.h"
 
 namespace f3::gd {
 
@@ -43,7 +44,7 @@ struct MapGrid {
     std::vector<uint8_t> cells;       // row-major, row = world z * 2
     static constexpr uint8_t kBlocked = 0x2f;
     bool Blocked(int x, int y) const {
-        return x < 0 || y < 0 || x >= w || y >= h || cells[static_cast<size_t>(y) * w + x] == kBlocked;
+        return x < 0 || y < 0 || x >= w || y >= h || CellSolid(cells[static_cast<size_t>(y) * w + x]);
     }
 };
 bool ParseMapData(const uint8_t* data, size_t size, MapGrid& out, std::string* err = nullptr);

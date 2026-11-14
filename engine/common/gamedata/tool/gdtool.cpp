@@ -52,6 +52,49 @@ int main(int argc, char** argv) {
         std::printf("tre triangles total=%zu undecoded sub-records=%d  (%.1fs)\n", tris, badSubs, s);
         return 0;
     }
+    if (cmd == "dumpall" && argc >= 4) {  // analysis dump: <out>/<tre>.tris (f32 x9 + nrm y), .grid, .ents (text)
+        std::string out = argv[3];
+        for (const ResourceInfo* r : gd.List(kResTre)) {
+            gd.Read(*r, buf); Tre t;
+            if (!ParseTre(buf.data(), buf.size(), t, &err)) continue;
+            std::string base = out + "/" + r->name;
+            if (FILE* f = std::fopen((base + ".tris").c_str(), "wb")) {
+                for (const TreBatch& b : t.batches) {
+                    const TreVertexBuffer& vb = t.vbs[b.vb];
+                    for (size_t i = 0; i + 2 < b.idx.size(); i += 3) {
+                        float rec[13];
+                        float ny = 0, nx = 0, nz = 0;
+                        for (int k = 0; k < 3; ++k) {
+                            for (int c = 0; c < 3; ++c) rec[k * 3 + c] = vb.xyz[b.idx[i + k] * 3 + c];
+                            if (!vb.nrm.empty()) { nx += vb.nrm[b.idx[i + k] * 3]; ny += vb.nrm[b.idx[i + k] * 3 + 1]; nz += vb.nrm[b.idx[i + k] * 3 + 2]; }
+                        }
+                        rec[9] = nx / 3; rec[10] = ny / 3; rec[11] = nz / 3; rec[12] = static_cast<float>(b.material);
+                        std::fwrite(rec, 4, 13, f);
+                    }
+                }
+                std::fclose(f);
+            }
+            if (const ResourceInfo* m = gd.Find(r->name, kResMapData)) {
+                std::vector<uint8_t> mb; MapGrid g;
+                if (gd.Read(*m, mb) && ParseMapData(mb.data(), mb.size(), g)) if (FILE* f = std::fopen((base + ".grid").c_str(), "wb")) {
+                    int hdr[2] = {g.w, g.h}; std::fwrite(hdr, 4, 2, f); std::fwrite(g.cells.data(), 1, g.cells.size(), f); std::fclose(f);
+                }
+            }
+            for (const ResourceInfo* e : gd.List(kResEmap)) {
+                std::vector<uint8_t> eb; Emap em;
+                if (!gd.Read(*e, eb) || !ParseEmap(eb.data(), eb.size(), em) || ToLower(em.treName) != ToLower(r->name)) continue;
+                if (FILE* f = std::fopen((base + ".ents").c_str(), "w")) {
+                    std::fprintf(f, "bbox %g %g %g %g %g %g\n", t.bmin[0], t.bmin[1], t.bmin[2], t.bmax[0], t.bmax[1], t.bmax[2]);
+                    for (const auto& en : em.entities) std::fprintf(f, "E %s %s %g %g %g %g\n", en.type.c_str(), en.tmpl.c_str(), en.pos[0], en.pos[1], en.pos[2], en.yaw);
+                    for (const auto& ep : em.entryPoints) for (size_t i = 0; i < ep.pos.size(); ++i) std::fprintf(f, "P %d %g %g %g %g\n", ep.id, ep.pos[i][0], ep.pos[i][1], ep.pos[i][2], ep.yaw[i]);
+                    std::fclose(f);
+                }
+                break;
+            }
+            std::printf("dumped %s\n", r->name.c_str());
+        }
+        return 0;
+    }
     if (argc < 4) return 2;
     std::string name = argv[3];
     if (cmd == "emap") {  // entity list of <Name>.emap
@@ -78,7 +121,7 @@ int main(int argc, char** argv) {
         if (!ParseB3d(buf.data(), buf.size(), m, &err)) { std::fprintf(stderr, "b3d: %s\n", err.c_str()); return 1; }
         std::printf("verts=%zu groups=%zu bbox (%g %g %g)-(%g %g %g)\n", m.VertexCount(), m.groups.size(), m.bmin[0], m.bmin[1], m.bmin[2], m.bmax[0], m.bmax[1], m.bmax[2]);
         for (auto& g : m.groups) std::printf("  %s shader=%s blend=%s tex=%s tris=%zu\n", g.name.c_str(), g.shader.c_str(), g.blend.c_str(), g.texture.c_str(), g.idx.size() / 3);
-        { std::printf("  bones=%zu hides:", m.bones.size()); for (auto& h : m.hides) std::printf(" %s", h.c_str()); std::printf(" skin=%d %c", (int)m.HasSkin(), 10); }
+        { std::printf("  bones=%zu hides:", m.bones.size()); for (auto& h : m.hides) std::printf(" %s", h.c_str()); std::printf(" skin=%d pre=%d %c", (int)m.HasSkin(), (int)m.preconverted, 10); }
         if (getenv("F3_B3D_EXTRA")) for (auto& g : m.groups) { std::printf("    %s extra:", g.name.c_str()); for (uint8_t b : g.extra) std::printf(" %02x", b); std::printf(" %c", 10); }
         if (argc >= 5) {
             FILE* f = std::fopen(argv[4], "w");

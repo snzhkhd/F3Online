@@ -991,6 +991,25 @@ static int cmdAmx(int argc, char** argv) {
     return 0;
 }
 
+
+// Grid origin: cell (cx, cy) of the mapdata covers world x in [ox + cx/2, ox + cx/2 + 0.5), z likewise with oz, where (ox, oz) is
+// the min corner of the tre root bounding box (found by fitting 39 maps, see docs/formats/maps.md section 2). `verified` is false
+// for the stale test maps whose grid extent differs from the tre extent (grid authored before the geometry was changed).
+struct MapOrigin { float x = 0, z = 0; bool known = false, verified = false; };
+static MapOrigin mapOrigin(const MapBundle& mb) {
+    MapOrigin o;
+    if (!mb.hasTre || !mb.tre.hasTreeBox) return o;
+    o.x = mb.tre.treeBox[0]; o.z = mb.tre.treeBox[2]; o.known = true;
+    o.verified = mb.hasGrid && std::fabs((mb.tre.treeBox[3] - mb.tre.treeBox[0]) * 2 - (float)mb.grid.w) < 0.01f &&
+                 std::fabs((mb.tre.treeBox[5] - mb.tre.treeBox[2]) * 2 - (float)mb.grid.h) < 0.01f;
+    return o;
+}
+static int gridValueAt(const MapBundle& mb, const MapOrigin& o, float x, float z) {
+    int cx = (int)std::floor((x - o.x) * 2), cy = (int)std::floor((z - o.z) * 2);
+    if (cx < 0 || cy < 0 || cx >= (int)mb.grid.w || cy >= (int)mb.grid.h) return -1;
+    return mb.grid.cell[(size_t)cy * mb.grid.w + cx];
+}
+
 static int cmdVerify(int argc, char** argv) {
     if (argc < 3) { fprintf(stderr, "usage: mapinfo verify <extracted-dir> [--verbose]\n"); return 2; }
     fs::path root = argv[2]; bool verbose = hasFlag(argc, argv, "--verbose");
@@ -998,6 +1017,7 @@ static int cmdVerify(int argc, char** argv) {
     std::set<std::string> all = ix.treBases;
     for (auto& p : ix.emapByTre) all.insert(p.first);
     int maps = 0, mapsOk = 0, emapN = 0, emapOk = 0, gridN = 0, gridOk = 0, treN = 0, treOk = 0, ents = 0, entTmplOk = 0, entModelOk = 0, entScriptOk = 0, entScriptN = 0, invN = 0, invOk = 0;
+    int originN = 0, originOk = 0, placeN = 0, placeBad = 0, doorN = 0, doorOk = 0;
     std::set<std::string> missing;
     auto scriptExists = [&](const std::string& s) {
         if (s.empty()) return true;
@@ -1034,6 +1054,28 @@ static int cmdVerify(int argc, char** argv) {
             }
             for (auto& g : mb.emap.regions) if (g.hasScript && !scriptExists(g.script)) missing.insert("script:" + g.script);
         }
+        if (mb.hasGrid && mb.hasTre) {
+            MapOrigin o = mapOrigin(mb);
+            if (o.known) {
+                originN++;
+                if (o.verified) {
+                    originOk++;
+                    // entities that must stand on walkable ground: every entry slot, loose items and mobile critters
+                    for (auto& ep : mb.emap.eps)
+                        for (auto& p : ep.pos) { placeN++; if (gridValueAt(mb, o, p[0], p[2]) == 0x2f) { placeBad++; printf("  %s: entry point %d slot on blocked cell\n", n.c_str(), ep.id); } }
+                    for (auto& e : mb.emap.ents) {
+                        std::string lt = lower(e.tmpl);
+                        bool prop = e.type == "DOR" || e.type == "CON" || e.type == "USE" || lt.rfind("ds_", 0) == 0 || lt.rfind("useable", 0) == 0;
+                        if (prop) continue;
+                        placeN++;
+                        if (gridValueAt(mb, o, e.pos[0], e.pos[2]) == 0x2f) { placeBad++; if (verbose) printf("  %s: %s on blocked cell\n", n.c_str(), e.name.c_str()); }
+                    }
+                    for (auto& e : mb.emap.ents)
+                        if (e.type == "DOR") { doorN++; if (gridValueAt(mb, o, e.pos[0], e.pos[2]) == 0x1b || gridValueAt(mb, o, e.pos[0], e.pos[2]) == 0x2f) doorOk++; }
+                } else printf("  %s: stale grid (grid %dx%d cells vs tre extent %gx%g units): origin not verified\n", n.c_str(), mb.grid.w, mb.grid.h,
+                              mb.tre.treeBox[3] - mb.tre.treeBox[0], mb.tre.treeBox[5] - mb.tre.treeBox[2]);
+            }
+        }
         if (ok) mapsOk++;
         if (verbose || !ok) {
             printf("%-4s %-34s emap=%d grid=%d tre=%d ents=%zu", ok ? "OK" : "FAIL", n.c_str(), mb.hasEmap, mb.hasGrid, mb.hasTre, mb.emap.ents.size());
@@ -1044,6 +1086,10 @@ static int cmdVerify(int argc, char** argv) {
     printf("\nmaps (unique tre/emap bases): %d, fully parsed: %d\n", maps, mapsOk);
     printf("emap: %d/%d  mapdata: %d/%d  tre: %d/%d\n", emapOk, emapN, gridOk, gridN, treOk, treN);
     printf("entities: %d  template .een found: %d  model b3d found: %d  ai-script found: %d/%d  inventory refs resolved: %d/%d\n", ents, entTmplOk, entModelOk, entScriptOk, entScriptN, invOk, invN);
+
+    printf("grid origin (tre root bbox min): %d/%d maps have grid extent == tre extent; placements on walkable cells: %d/%d; doors on door/blocked cells: %d/%d\n",
+           originOk, originN, placeN - placeBad, placeN, doorOk, doorN);
+    bool gridOkAll = placeBad == 0 && originOk >= 29;
 
     // all .een templates and all AMX scripts
     int eenN = 0, eenOk = 0;
@@ -1066,7 +1112,7 @@ static int cmdVerify(int argc, char** argv) {
         }
     printf("entity templates (.een): %d/%d  AMX scripts: %d/%d\n", eenOk, eenN, amxOk, amxN);
     if (!missing.empty()) { printf("unresolved references (%zu):\n", missing.size()); for (auto& s : missing) printf("  %s\n", s.c_str()); }
-    return (mapsOk == maps && eenOk == eenN && amxOk == amxN) ? 0 : 1;
+    return (mapsOk == maps && eenOk == eenN && amxOk == amxN && gridOkAll) ? 0 : 1;
 }
 
 int main(int argc, char** argv) {

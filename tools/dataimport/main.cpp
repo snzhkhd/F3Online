@@ -4,7 +4,7 @@
 //
 // Output (all under --out, never committed):
 //   manifest.json           map list, start map/entry (from Engine/sys.ini)
-//   maps/<name>.json        map description (entry points, regions, entities); coordinates in world units
+//   maps/<name>.json        map description (entry points, regions, entities); coordinates in world units + origin_x/origin_z of the grid
 //   maps/<name>.walk        "WALK" u32 w u32 h, then w*h raw mapdata class bytes (0x2f = blocked), 2 cells/unit
 //   protos.json             object prototypes from all .een templates (key "<template>.<TYPE>")
 //   strings.tsv             English.stf as id<TAB>text (escaped)
@@ -292,6 +292,12 @@ int main(int argc, char** argv) {
             j.set("width", J::I(w));
             j.set("height", J::I(h));
             j.set("cells_per_unit", J::I(2));
+            // Grid origin: world position of the min corner of cell (0,0) = min corner of the tre root bbox (docs/formats/maps.md s.2).
+            // All other coordinates in this file stay in original world units; the server subtracts the origin.
+            MapOrigin org = mapOrigin(mb);
+            j.set("origin_x", J::N(org.x));
+            j.set("origin_z", J::N(org.z));
+            j.set("origin_verified", J::B(org.verified));
             j.set("walk", J::S(name + ".walk"));
             J eps = J::A();
             for (auto& ep : mb.emap.eps) {
