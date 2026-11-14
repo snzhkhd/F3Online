@@ -179,6 +179,7 @@ void ClientCore::Handle(const uint8_t* data, size_t len) {
             floaters_.clear();
             containerOwner_ = 0;
             container_.clear();
+            dialog_ = DialogState{};
             break;
         }
         case Msg::S2C_CritterAdd: {
@@ -279,6 +280,22 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
             if (m.owner == selfId_ || selfId_ == 0) inventory_ = std::move(m.items);
             break;
         }
+        case static_cast<uint8_t>(GMsgDlg::S2C_DialogOpen): {
+            gnet::DialogOpen m;
+            if (!m.Read(b)) return;
+            dialog_ = DialogState{};
+            dialog_.open = true; dialog_.npc = m.npc; dialog_.npcName = m.name;
+            break;
+        }
+        case static_cast<uint8_t>(GMsgDlg::S2C_DialogNode): {
+            gnet::DialogNode m;
+            if (!m.Read(b)) return;
+            dialog_.open = true; dialog_.npc = m.npc; dialog_.text = m.text;
+            dialog_.replies.clear();
+            for (auto& r : m.replies) dialog_.replies.push_back(r.text);
+            break;
+        }
+        case static_cast<uint8_t>(GMsgDlg::S2C_DialogClose): dialog_ = DialogState{}; break;
         case static_cast<uint8_t>(GMsg::S2C_Container): {
             gnet::Container m;
             if (!m.Read(b)) return;
@@ -495,6 +512,9 @@ void ClientCore::Equip(uint32_t invId, bool on) { gnet::Equip m; m.id = invId; m
 void ClientCore::Use(uint32_t objectId) { gnet::Use m; m.id = objectId; SendG(m); }
 void ClientCore::Attack(CritterId id) { gnet::Attack m; m.id = id; SendG(m); }
 void ClientCore::Take(uint32_t container, uint32_t entry) { gnet::Take m; m.container = container; m.entry = entry; SendG(m); }
+void ClientCore::Talk(uint32_t critter) { gnet::Talk m; m.critter = critter; SendG(m); }
+void ClientCore::DialogChoose(int index) { gnet::DialogChoose m; m.index = static_cast<uint8_t>(index); SendG(m); }
+void ClientCore::DialogClose() { if (!dialog_.open) return; gnet::DialogCloseReq m; SendG(m); dialog_ = DialogState{}; }
 void ClientCore::Examine(uint32_t id, bool isCritter) { gnet::Examine m; m.id = id; m.isCritter = isCritter ? 1 : 0; SendG(m); }
 void ClientCore::RequestState() { SendG(gnet::ReqState{}); }
 

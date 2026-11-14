@@ -85,7 +85,7 @@ struct RendererOptions {
 };
 
 struct UiCommand {
-    enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, CloseContainer } type = SetMode;
+    enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, CloseContainer, DialogChoose, DialogClose } type = SetMode;
     uint32_t a = 0, b = 0;
 };
 

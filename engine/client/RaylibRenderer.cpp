@@ -868,6 +868,7 @@ private:
 
         if (st.inventory) DrawInventory(ui);
         if (core.hasContainer()) DrawContainer(ui);
+        if (core.dialog().open) DrawDialog(ui);
         if (st.charSheet) DrawCharSheet(ui);
     }
 
@@ -898,6 +899,45 @@ private:
             y += 27;
         }
         if (core.inventory().empty()) DrawText("(empty)", static_cast<int>(p.x) + 10, static_cast<int>(y) + 4, 14, Color{140, 140, 150, 255});
+    }
+
+    // Conversation window: NPC text (word wrapped) and one button per reply (answers go back as DialogChoose commands).
+    void DrawDialog(const UiView& ui) {
+        const ClientCore::DialogState& d = ui.core->dialog();
+        const int sw = GetScreenWidth(), sh = GetScreenHeight();
+        const float w = std::min(680.0f, sw - 20.0f);
+        const int fs = 16;
+        std::vector<std::string> lines;
+        {   // greedy word wrap
+            std::string cur, word;
+            auto flush = [&]() { if (!cur.empty()) lines.push_back(cur); cur.clear(); };
+            std::string t = d.text + " ";
+            for (char ch : t) {
+                if (ch == '\n') { cur += (cur.empty() ? "" : " ") + word; word.clear(); flush(); continue; }
+                if (ch != ' ') { word.push_back(ch); continue; }
+                std::string tryLine = cur.empty() ? word : cur + " " + word;
+                if (!cur.empty() && MeasureText(tryLine.c_str(), fs) > w - 24) { flush(); cur = word; } else cur = tryLine;
+                word.clear();
+            }
+            flush();
+        }
+        const float textH = 28 + static_cast<float>(lines.size()) * (fs + 4);
+        const float h = textH + 12 + static_cast<float>(d.replies.size()) * 28 + 10;
+        Rectangle p{(sw - w) / 2, std::max(40.0f, sh - h - 150.0f), w, h};
+        DrawRectangleRec(p, Color{12, 12, 18, 240});
+        DrawRectangleLinesEx(p, 1, Color{200, 170, 90, 255});
+        uiRects_.push_back(p);
+        DrawText(d.npcName.c_str(), static_cast<int>(p.x) + 10, static_cast<int>(p.y) + 6, 14, Color{255, 220, 120, 255});
+        float y = p.y + 26;
+        for (auto& l : lines) { DrawText(l.c_str(), static_cast<int>(p.x) + 12, static_cast<int>(y), fs, RAYWHITE); y += fs + 4; }
+        y = p.y + textH + 8;
+        for (size_t i = 0; i < d.replies.size(); ++i) {
+            std::string label = std::to_string(i + 1) + ". " + d.replies[i];
+            while (label.size() > 8 && MeasureText(label.c_str(), 14) > w - 28) label = label.substr(0, label.size() - 4) + "...";
+            if (Button(Rectangle{p.x + 8, y, p.width - 16, 24}, label.c_str(), false))
+                ui.commands->push_back(UiCommand{UiCommand::DialogChoose, static_cast<uint32_t>(i), 0});
+            y += 28;
+        }
     }
 
     void DrawContainer(const UiView& ui) {

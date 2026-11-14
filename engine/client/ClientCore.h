@@ -108,6 +108,12 @@ public:
     void Attack(CritterId id);   // 0 = stop
     void Take(uint32_t container, uint32_t entry);   // entry 0 = everything
     void Examine(uint32_t id, bool isCritter);
+    // ---- dialogue (protocol_game.h dialogue block)
+    struct DialogState { bool open = false; uint32_t npc = 0; std::string npcName, text; std::vector<std::string> replies; };
+    void Talk(uint32_t critter);          // walk to the NPC and start its conversation
+    void DialogChoose(int index);         // answer with reply `index` of the current node
+    void DialogClose();                   // leave the conversation
+    const DialogState& dialog() const { return dialog_; }
     void RequestState();
     void SetLegacyOnly(bool v) { legacyOnly_ = v; }   // do not announce the timing capability (tests the per-cell CritterMove path)
 
@@ -189,6 +195,7 @@ private:
     gnet::Stats stats_;
     std::vector<gnet::InvEntry> inventory_;
     uint32_t containerOwner_ = 0;
+    DialogState dialog_;
     std::vector<gnet::InvEntry> container_;
 
     bool legacyOnly_ = false;

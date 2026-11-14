@@ -229,7 +229,8 @@ int main(int argc, char** argv) {
             if (in.keyChar) uiState.charSheet = !uiState.charSheet;
             if (in.keyStop) core.Attack(0);
             if (in.escape) {
-                if (core.hasContainer()) core.CloseContainer();
+                if (core.dialog().open) core.DialogClose();
+                else if (core.hasContainer()) core.CloseContainer();
                 else if (uiState.inventory || uiState.charSheet) uiState.inventory = uiState.charSheet = false;
                 else uiState.mode = CursorMode::Move;
             }
@@ -269,7 +270,7 @@ int main(int argc, char** argv) {
                         if (item) core.Use(item->id);
                         break;
                     case CursorMode::Talk:
-                        core.Examine(pr.critter, true);   // no dialogue engine on the server yet: examine instead
+                        if (pr.critter != core.selfId()) core.Talk(pr.critter);
                         break;
                     case CursorMode::Pickup:
                         if (item) core.PickUp(item->id);
@@ -399,6 +400,8 @@ int main(int argc, char** argv) {
                 case UiCommand::Drop: core.Drop(c.a); break;
                 case UiCommand::Take: core.Take(c.a, c.b); break;
                 case UiCommand::CloseContainer: core.CloseContainer(); break;
+                case UiCommand::DialogChoose: core.DialogChoose(static_cast<int>(c.a)); break;
+                case UiCommand::DialogClose: core.DialogClose(); break;
             }
         }
         commands.clear();
