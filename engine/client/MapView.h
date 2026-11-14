@@ -62,6 +62,11 @@ public:
     // Ray against upward-facing level geometry. hit in renderer space.
     bool PickGround(const Ray& ray, Vector3& hit) const;
 
+    // Walkable ground surface height under a renderer-space (x, z): a smoothed, continuous height field precomputed
+    // from the up-facing tre triangles (the server map data has no height). 0 when the map has no geometry.
+    float GroundHeight(float x, float z) const;
+    bool hasHeightField() const { return hfW_ > 0; }
+
     // Grid (2 cells per unit). Cell centre in renderer space, y = 0.
     int gridW() const { return grid_.w; }
     int gridH() const { return grid_.h; }
@@ -117,6 +122,13 @@ private:
     int pickW_ = 0, pickH_ = 0;
     float pickOx_ = 0, pickOz_ = 0;
     static constexpr float kPickCell = 4.0f;
+
+    // ground height field (see GroundHeight)
+    void BuildHeightField();
+    std::vector<float> hf_;
+    int hfW_ = 0, hfH_ = 0;
+    float hfOx_ = 0, hfOz_ = 0;
+    static constexpr float kHfStep = 0.25f;
 };
 
 }  // namespace f3

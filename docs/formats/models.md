@@ -233,3 +233,7 @@ Textures/Materials are always 0 in GR2 (materials come from the matching b3d / i
 In meshes with the converted flag (vertex stride 44) the block read as "4 lightmap uv sets" is 4 skin influences per
 vertex, `{u32 boneIndex (0xFFFFFFFF = unused), f32 weight}`, indexing the tok 0e bone list. Bone names match the Granny
 skeleton; b3d vertex units are exactly 10x Granny units. Skin matrix (row vectors) = `inverseWorld[j] * poseWorld[j]`.
+
+## B3D critter atlas and hides
+
+Human part meshes sample a shared 512x512 atlas (slots listed in docs/client-rendering.md). Node token 0x1b lists base-body groups an outfit piece replaces (`B3dModel::hides`).

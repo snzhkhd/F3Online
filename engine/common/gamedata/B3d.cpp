@@ -80,8 +80,9 @@ void ReadMesh(Reader& r, State& st) {
             B3dGroup& g = m.groups[g0 + gi];
             g.name = r.str(); g.shader = r.str(); r.skip(64 + 4);
             g.blend = r.str(); g.surface = r.str();
-            r.skip(3);
+            { const size_t e0 = r.p; r.skip(3);
             r.skip(4); r.skip(1); r.skip(4); r.skip(1); r.skip(8); r.skip(1); r.skip(8); r.skip(1); r.skip(12); r.skip(1); r.skip(16);
+            g.extra.assign(r.d + e0, r.d + r.p); }
             uint32_t k = r.u32();
             if (k > 64) throw ParseError("absurd texture count");
             if (k) g.texture = r.str();
@@ -172,7 +173,7 @@ void ReadNode(Reader& r, State& st) {
             case 0x0c: r.str(); break;
             case 0x0a: ReadNode(r, st); break;
             case 0x0f: ReadMesh(r, st); break;
-            case 0x1b: { uint32_t n = r.u32(); if (n > 4096) throw ParseError("absurd list"); for (uint32_t i = 0; i < n; ++i) r.str(); break; }
+            case 0x1b: { uint32_t n = r.u32(); if (n > 4096) throw ParseError("absurd list"); for (uint32_t i = 0; i < n; ++i) st.out->hides.push_back(r.str()); break; }
             default: throw ParseError("unknown node token");
         }
     }

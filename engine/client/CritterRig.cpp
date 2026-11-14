@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <set>
 #include "common/log.h"
 #include "gamedata/B3d.h"
+#include "gamedata/Tga.h"
 
 namespace f3 {
 
@@ -78,11 +80,13 @@ SkinnedInstance::SkinnedInstance(const SkinModel* m) : model_(m) {
         dp.mesh = BuildDynamicMesh(sp);
         dp.tex = sp.tex;
         dp.flags = sp.flags;
-        dp.skin = sp.skinTex;
+        dp.skin = false;
         dp.texName = sp.texName;
         inst_.parts.push_back(std::move(dp));
     }
-    palette_.assign(m->boneMap.size() * 16, 0.0f);
+    palette_.assign((m->sk.bones.size() + 1) * 16, 0.0f);
+    float* idm = &palette_[m->sk.bones.size() * 16];
+    idm[0] = idm[5] = idm[10] = idm[15] = 1.0f;
 }
 
 SkinnedInstance::~SkinnedInstance() {
@@ -112,12 +116,8 @@ void SkinnedInstance::Pose(const Clip* a, float ta, const Clip* b, float tb, flo
         }
     }
     std::vector<float> world = gr2::worldMatrices(sk, &pose);
-    for (size_t i = 0; i < m.boneMap.size(); ++i) {
-        float* P = &palette_[i * 16];
-        const int j = m.boneMap[i];
-        if (j < 0) { std::memset(P, 0, 16 * sizeof(float)); P[0] = P[5] = P[10] = P[15] = 1; continue; }
-        Mul4(&m.invWorld[static_cast<size_t>(j) * 16], &world[static_cast<size_t>(j) * 16], P);
-    }
+    const size_t nb = sk.bones.size();
+    for (size_t j = 0; j < nb; ++j) Mul4(&m.invWorld[j * 16], &world[j * 16], &palette_[j * 16]);
     const float inv = 1.0f / kSkelToModel;
     for (size_t pi = 0; pi < m.parts.size(); ++pi) {
         const SkinPartSrc& sp = m.parts[pi];
@@ -151,73 +151,240 @@ void SkinnedInstance::Pose(const Clip* a, float ta, const Clip* b, float tb, flo
     }
 }
 
-SkinModel* RigLibrary::Model(const std::string& name) {
-    const std::string key = Lower(name);
-    auto it = models_.find(key);
-    if (it != models_.end()) return it->second->ok ? it->second.get() : nullptr;
-    auto sm = std::make_unique<SkinModel>();
-    sm->name = name;
-    SkinModel* out = sm.get();
-    models_[key] = std::move(sm);
+std::string Appearance::Key() const {
+    std::string k = Lower(model) + "|" + Lower(skin);
+    for (const auto& w : worn) k += "|" + Lower(w.first) + ":" + Lower(w.second);
+    return k;
+}
 
-    gd::GameData& data = assets_.data();
-    std::vector<uint8_t> buf;
+struct RigLibrary::Core {
+    bool ok = false;
+    std::string name, animPrefix;
     gd::B3dModel b3d;
+    gr2::Skeleton sk;
+    std::vector<float> invWorld;
+    ClipSet* clips = nullptr;
+};
+
+namespace {
+
+// Slot of each appearance part inside the 512x512 critter texture atlas (pixels: x, y, size). The b3d uv0 of every critter
+// mesh already addresses the atlas: the body skin is the top-left 256x256 quadrant, outfits, hair, ... have their own slots.
+struct Slot { int x, y, size; };
+bool SlotOf(const std::string& part, Slot& s) {
+    const std::string p = Lower(part.substr(0, 3));
+    if (p == "skn") s = {0, 0, 256};
+    else if (p == "bod") s = {0, 256, 256};
+    else if (p == "sho") s = {256, 0, 128};
+    else if (p == "hea") s = {384, 0, 128};
+    else if (p == "han") s = {384, 128, 128};
+    else if (p == "fee") s = {384, 256, 128};
+    else if (p == "bac") s = {256, 256, 128};
+    else if (p == "hai") s = {256, 128, 64};
+    else if (p == "pon") s = {288, 224, 32};
+    else if (p == "bea") s = {256, 192, 32};
+    else if (p == "mus") s = {256, 224, 32};
+    else if (p == "eye") s = {320, 192, 64};
+    else if (p == "van") s = {320, 128, 64};
+    else return false;
+    return true;
+}
+
+void Blit(std::vector<uint8_t>& atlas, const gd::Image& im, const Slot& s) {
+    if (im.w <= 0 || im.h <= 0) return;
+    for (int y = 0; y < s.size; ++y)
+        for (int x = 0; x < s.size; ++x) {
+            // box sample of the source area covered by this destination pixel (downscale) or nearest (upscale)
+            const int x0 = x * im.w / s.size, x1 = std::max(x0 + 1, (x + 1) * im.w / s.size);
+            const int y0 = y * im.h / s.size, y1 = std::max(y0 + 1, (y + 1) * im.h / s.size);
+            int acc[4] = {0, 0, 0, 0}, n = 0;
+            for (int sy = y0; sy < y1 && sy < im.h; ++sy)
+                for (int sx = x0; sx < x1 && sx < im.w; ++sx) {
+                    const uint8_t* q = &im.rgba[(static_cast<size_t>(sy) * im.w + sx) * 4];
+                    for (int c = 0; c < 4; ++c) acc[c] += q[c];
+                    ++n;
+                }
+            uint8_t* d = &atlas[(static_cast<size_t>(s.y + y) * 512 + s.x + x) * 4];
+            for (int c = 0; c < 4; ++c) d[c] = static_cast<uint8_t>(n ? acc[c] / n : 0);
+            if (!im.hasAlpha) d[3] = 255;
+        }
+}
+
+}  // namespace
+
+RigLibrary::RigLibrary(GameAssets& a) : assets_(a) {}
+
+RigLibrary::~RigLibrary() {
+    for (auto& [k, m] : models_)
+        if (m && m->atlas.id) UnloadTexture(m->atlas);
+}
+
+RigLibrary::Core* RigLibrary::GetCore(const std::string& name) {
+    const std::string key = Lower(name);
+    auto it = cores_.find(key);
+    if (it != cores_.end()) return it->second->ok ? it->second.get() : nullptr;
+    auto core = std::make_unique<Core>();
+    Core* c = core.get();
+    cores_[key] = std::move(core);
+    c->name = name;
+    gd::GameData& data = assets_.data();
+    std::vector<uint8_t> buf, gb;
     std::string err;
-    if (!data.Read(name, gd::kResB3d, buf) || !gd::ParseB3d(buf.data(), buf.size(), b3d, &err) || !b3d.HasSkin() || b3d.bones.empty()) {
+    if (!data.Read(name, gd::kResB3d, buf) || !gd::ParseB3d(buf.data(), buf.size(), c->b3d, &err) || !c->b3d.HasSkin() || c->b3d.bones.empty())
         return nullptr;
-    }
-    std::vector<uint8_t> gb;
     gr2::File f;
     gr2::Scene sc;
     if (!data.Read(name, gd::kResMeshGr2, gb) || !f.load(gb.data(), gb.size(), &err) || !gr2::loadScene(f, sc, &err) || sc.skeletons.empty()) {
         log::Warn("rig %s: skeleton: %s", name.c_str(), err.c_str());
         return nullptr;
     }
-    out->sk = sc.skeletons[0];
-    out->invWorld.resize(out->sk.bones.size() * 16);
-    for (size_t i = 0; i < out->sk.bones.size(); ++i)
-        std::memcpy(&out->invWorld[i * 16], out->sk.bones[i].inverseWorld, 16 * sizeof(float));
-    out->boneMap.assign(b3d.bones.size(), -1);
+    c->sk = sc.skeletons[0];
+    c->invWorld.resize(c->sk.bones.size() * 16);
+    for (size_t i = 0; i < c->sk.bones.size(); ++i)
+        std::memcpy(&c->invWorld[i * 16], c->sk.bones[i].inverseWorld, 16 * sizeof(float));
     int mapped = 0;
-    for (size_t i = 0; i < b3d.bones.size(); ++i) {
-        const std::string bn = Lower(b3d.bones[i].name);
-        for (size_t j = 0; j < out->sk.bones.size(); ++j)
-            if (Lower(out->sk.bones[j].name) == bn) { out->boneMap[i] = static_cast<int>(j); ++mapped; break; }
-    }
-    if (mapped < static_cast<int>(b3d.bones.size()) / 2) { log::Warn("rig %s: only %d/%zu bones matched", name.c_str(), mapped, b3d.bones.size()); return nullptr; }
-
+    for (const auto& bb : c->b3d.bones)
+        for (const auto& sb : c->sk.bones)
+            if (Lower(sb.name) == Lower(bb.name)) { ++mapped; break; }
+    if (mapped < static_cast<int>(c->b3d.bones.size()) / 2) { log::Warn("rig %s: only %d/%zu bones matched", name.c_str(), mapped, c->b3d.bones.size()); return nullptr; }
     // animation prefix: HumMNor -> HumM, HumFWir -> HumF, CR_Dog -> CR_Dog
-    if (name.size() >= 4 && Lower(name.substr(0, 3)) == "hum") out->animPrefix = name.substr(0, 4);
-    else out->animPrefix = name;
+    if (name.size() >= 4 && Lower(name.substr(0, 3)) == "hum") c->animPrefix = name.substr(0, 4);
+    else c->animPrefix = name;
+    auto& cs = clipSets_[key];
+    if (!cs) cs = std::make_unique<ClipSet>();
+    c->clips = cs.get();
+    c->ok = true;
+    return c;
+}
 
-    // parts: one per material group, vertices deduplicated per group
-    const size_t nv = b3d.VertexCount();
-    std::vector<int32_t> remap(nv);
-    for (const auto& g : b3d.groups) {
-        if (g.idx.empty()) continue;
-        std::fill(remap.begin(), remap.end(), -1);
-        SkinPartSrc sp;
-        for (uint32_t v : g.idx) {
-            if (remap[v] < 0) {
-                remap[v] = static_cast<int32_t>(sp.pos.size() / 3);
-                sp.pos.insert(sp.pos.end(), &b3d.pos[v * 3], &b3d.pos[v * 3] + 3);
-                sp.nrm.insert(sp.nrm.end(), &b3d.nrm[v * 3], &b3d.nrm[v * 3] + 3);
-                sp.uv0.insert(sp.uv0.end(), &b3d.uv0[v * 2], &b3d.uv0[v * 2] + 2);
-                sp.col.insert(sp.col.end(), &b3d.col[v * 4], &b3d.col[v * 4] + 4);
-                sp.bidx.insert(sp.bidx.end(), &b3d.boneIdx[v * 4], &b3d.boneIdx[v * 4] + 4);
-                sp.bw.insert(sp.bw.end(), &b3d.boneW[v * 4], &b3d.boneW[v * 4] + 4);
-            }
-            sp.idx.push_back(static_cast<uint32_t>(remap[v]));
-        }
-        if (sp.pos.size() / 3 > 65535) continue;
-        sp.flags = FlagsFromShader(g.shader, g.blend);
-        sp.texName = g.texture;
-        sp.skinTex = g.texture.size() >= 5 && Lower(g.texture.substr(0, 5)) == "skin_";
-        if (!sp.flags.noTexture && !g.texture.empty()) sp.tex = assets_.Texture(g.texture);
-        out->parts.push_back(std::move(sp));
+SkinModel* RigLibrary::Model(const Appearance& app) {
+    const std::string key = app.Key();
+    auto it = models_.find(key);
+    if (it != models_.end()) return it->second->ok ? it->second.get() : nullptr;
+    auto sm = std::make_unique<SkinModel>();
+    sm->name = app.model;
+    SkinModel* out = sm.get();
+    models_[key] = std::move(sm);
+
+    Core* core = GetCore(app.model);
+    if (!core) return nullptr;
+    gd::GameData& data = assets_.data();
+    out->sk = core->sk;
+    out->invWorld = core->invWorld;
+    out->animPrefix = core->animPrefix;
+    out->clipSet = core->clips;
+    const bool human = Lower(app.model.substr(0, 3)) == "hum";
+
+    // pieces: the base body plus every worn part that exists for this body type
+    struct Piece { gd::B3dModel own; const gd::B3dModel* b3d = nullptr; std::string part, tex; };
+    std::vector<std::unique_ptr<Piece>> pieces;
+    {
+        auto base = std::make_unique<Piece>();
+        base->b3d = &core->b3d;
+        base->part = "skn";
+        pieces.push_back(std::move(base));
     }
-    out->height = b3d.bmax[1];
+    std::set<std::string> hidden;
+    if (human) {
+        for (const auto& w : app.worn) {
+            std::vector<uint8_t> pb;
+            auto pc = std::make_unique<Piece>();
+            std::string err;
+            if (!data.Read(app.model + "_" + w.first, gd::kResB3d, pb) || !gd::ParseB3d(pb.data(), pb.size(), pc->own, &err) || !pc->own.HasSkin()) {
+                log::Warn("critter part %s_%s: %s", app.model.c_str(), w.first.c_str(), err.empty() ? "not found" : err.c_str());
+                continue;
+            }
+            pc->b3d = &pc->own;
+            pc->part = w.first;
+            pc->tex = w.second;
+            for (const auto& h : pc->own.hides) hidden.insert(Lower(h));
+            pieces.push_back(std::move(pc));
+        }
+    }
+
+    // texture atlas (humans)
+    std::vector<uint8_t> atlas;
+    if (human) {
+        atlas.assign(512 * 512 * 4, 0);
+        for (size_t i = 3; i < atlas.size(); i += 4) atlas[i] = 255;
+    }
+    auto loadImage = [&](const std::string& name, gd::Image& im) {
+        std::vector<uint8_t> tb;
+        return !name.empty() && data.Read(name, gd::kResTga, tb) && gd::DecodeTga(tb.data(), tb.size(), im);
+    };
+    bool skinDone = false;
+    auto putSkin = [&](const std::string& fallback) {
+        if (skinDone || !human) return;
+        gd::Image im;
+        if (loadImage(app.skin, im) || loadImage(fallback, im)) { Slot s; SlotOf("skn", s); Blit(atlas, im, s); skinDone = true; }
+        else log::Warn("critter skin '%s' / '%s' not found", app.skin.c_str(), fallback.c_str());
+    };
+
+    const size_t nBones = out->sk.bones.size();
+    for (const auto& pcs : pieces) {
+        const gd::B3dModel& b3d = *pcs->b3d;
+        const bool isBase = pcs->part == "skn";
+        // b3d bone index -> skeleton bone
+        std::vector<int> boneMap(b3d.bones.size(), -1);
+        for (size_t i = 0; i < b3d.bones.size(); ++i) {
+            const std::string bn = Lower(b3d.bones[i].name);
+            for (size_t j = 0; j < nBones; ++j)
+                if (Lower(out->sk.bones[j].name) == bn) { boneMap[i] = static_cast<int>(j); break; }
+        }
+        bool texPlaced = false;
+        const size_t nv = b3d.VertexCount();
+        std::vector<int32_t> remap(nv);
+        for (const auto& g : b3d.groups) {
+            if (g.idx.empty()) continue;
+            if (isBase && hidden.count(Lower(g.name))) continue;
+            const bool isSkinGroup = g.texture.size() >= 5 && Lower(g.texture.substr(0, 5)) == "skin_";
+            if (human) {
+                if (isSkinGroup) putSkin(g.texture);
+                else if (!texPlaced) {
+                    Slot s;
+                    gd::Image im;
+                    if (SlotOf(pcs->part, s) && (loadImage(pcs->tex, im) || loadImage(g.texture, im))) Blit(atlas, im, s);
+                    else log::Warn("critter part %s: texture '%s' / '%s' not usable", pcs->part.c_str(), pcs->tex.c_str(), g.texture.c_str());
+                    texPlaced = true;
+                }
+            }
+            std::fill(remap.begin(), remap.end(), -1);
+            SkinPartSrc sp;
+            for (uint32_t v : g.idx) {
+                if (remap[v] < 0) {
+                    remap[v] = static_cast<int32_t>(sp.pos.size() / 3);
+                    sp.pos.insert(sp.pos.end(), &b3d.pos[v * 3], &b3d.pos[v * 3] + 3);
+                    sp.nrm.insert(sp.nrm.end(), &b3d.nrm[v * 3], &b3d.nrm[v * 3] + 3);
+                    sp.uv0.insert(sp.uv0.end(), &b3d.uv0[v * 2], &b3d.uv0[v * 2] + 2);
+                    sp.col.insert(sp.col.end(), &b3d.col[v * 4], &b3d.col[v * 4] + 4);
+                    for (int k = 0; k < 4; ++k) {
+                        const float w = b3d.boneW[v * 4 + k];
+                        const int bi = boneMap[b3d.boneIdx[v * 4 + k]];
+                        sp.bw.push_back(bi >= 0 ? w : 0.0f);
+                        sp.bidx.push_back(static_cast<uint16_t>(bi >= 0 ? bi : static_cast<int>(nBones)));
+                    }
+                }
+                sp.idx.push_back(static_cast<uint32_t>(remap[v]));
+            }
+            if (sp.pos.size() / 3 > 65535) continue;
+            sp.flags = FlagsFromShader(g.shader, g.blend);
+            sp.texName = g.texture;
+            sp.skinTex = false;
+            if (!human && !sp.flags.noTexture && !g.texture.empty()) sp.tex = assets_.Texture(g.texture);
+            out->parts.push_back(std::move(sp));
+        }
+    }
+    if (human) {
+        putSkin(core->b3d.groups.empty() ? std::string() : core->b3d.groups[0].texture);
+        Image img{atlas.data(), 512, 512, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        out->atlas = LoadTextureFromImage(img);
+        GenTextureMipmaps(&out->atlas);
+        SetTextureFilter(out->atlas, TEXTURE_FILTER_TRILINEAR);
+        SetTextureFilter(out->atlas, TEXTURE_FILTER_ANISOTROPIC_8X);
+        SetTextureWrap(out->atlas, TEXTURE_WRAP_CLAMP);
+        for (auto& p : out->parts) p.tex = &out->atlas;
+    }
+    out->height = core->b3d.bmax[1];
     out->ok = !out->parts.empty();
     return out->ok ? out : nullptr;
 }
@@ -250,8 +417,9 @@ bool RigLibrary::LoadClip(SkinModel& m, const std::string& animName, Clip& out) 
 
 const Clip* RigLibrary::Get(SkinModel& m, ClipKind k) {
     const int ki = static_cast<int>(k);
-    if (!m.clipsTried[ki]) {
-        m.clipsTried[ki] = true;
+    ClipSet& cs = *m.clipSet;
+    if (!cs.tried[ki]) {
+        cs.tried[ki] = true;
         const std::string& P = m.animPrefix;
         std::vector<std::string> cands;
         switch (k) {
@@ -264,10 +432,10 @@ const Clip* RigLibrary::Get(SkinModel& m, ClipKind k) {
             default: break;
         }
         for (const std::string& c : cands)
-            if (LoadClip(m, c, m.clips[ki])) break;
-        if (!m.clips[ki].valid) log::Warn("rig %s: no '%s' clip", m.name.c_str(), ClipKey(k));
+            if (LoadClip(m, c, cs.clips[ki])) break;
+        if (!cs.clips[ki].valid) log::Warn("rig %s: no '%s' clip", m.name.c_str(), ClipKey(k));
     }
-    return m.clips[ki].valid ? &m.clips[ki] : nullptr;
+    return cs.clips[ki].valid ? &cs.clips[ki] : nullptr;
 }
 
 }  // namespace f3

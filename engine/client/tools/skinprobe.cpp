@@ -61,6 +61,19 @@ int main(int argc, char** argv) {
                 std::printf("  t=%.2f Root(%.3f %.3f %.3f) Head(%.3f %.3f %.3f) RHand(%.3f %.3f %.3f)\n", t, ww[1 * 16 + 12], ww[1 * 16 + 13], ww[1 * 16 + 14],
                             ww[20 * 16 + 12], ww[20 * 16 + 13], ww[20 * 16 + 14], ww[12 * 16 + 12], ww[12 * 16 + 13], ww[12 * 16 + 14]);
             }
+            // foot travel over the cycle (skeleton units): the stance foot slides back at the body speed of a walk cycle
+            for (size_t bi = 0; bi < sk.bones.size(); ++bi) {
+                const std::string& bn = sk.bones[bi].name;
+                if (bn.find("Foot") == std::string::npos && bn.find("foot") == std::string::npos) continue;
+                float mn[3] = {1e9f, 1e9f, 1e9f}, mx[3] = {-1e9f, -1e9f, -1e9f};
+                for (int s = 0; s <= 60; ++s) {
+                    auto pose = gr2::samplePose(sk, tg, an.duration * s / 60.0f);
+                    auto ww = gr2::worldMatrices(sk, &pose);
+                    for (int c = 0; c < 3; ++c) { mn[c] = std::min(mn[c], ww[bi * 16 + 12 + c]); mx[c] = std::max(mx[c], ww[bi * 16 + 12 + c]); }
+                }
+                std::printf("  foot %-10s range x %.3f y %.3f z %.3f (b3d units x10)  -> walking speed ~ %.2f b3d units/s\n", bn.c_str(), mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2],
+                            10.0f * std::max(mx[0] - mn[0], mx[2] - mn[2]) / (0.6f * an.duration));
+            }
             break;
         }
     }

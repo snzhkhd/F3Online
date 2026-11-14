@@ -9,12 +9,20 @@
 
 namespace f3 {
 
+// One appearance attachment of a critter: b3d part ("BodPrisonSuit" -> <model>_BodPrisonSuit.b3d) and an optional texture
+// override ("BacPrisonSuit_13_LG.dds"; empty = the part's own default texture).
+struct WornPart {
+    std::string part, tex;
+};
+
 struct ProtoInfo {
     std::string key;     // "Critters00_TMBobby.CRT"
     std::string cls;     // critter weapon armor ammo item door container usable
     std::string model;   // b3d resource name ("HumMNor"), may be empty
     std::string name;    // English display name
     std::string skin;    // texture override for "Skin_*" parts, may be empty
+    std::vector<WornPart> worn;  // critters: appearance sockets (hair, beard, ...) plus the parts of equipped armor
+    bool hasDialog = false;  // critters: the prototype names a dialogue
     bool isStatic = false;  // critter-class props (barrels, windows): drawn by the map, never animated
     bool isCritter() const { return cls == "critter"; }
 };

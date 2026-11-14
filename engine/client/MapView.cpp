@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstdlib>
 #include <cstring>
 #include <raymath.h>
 #include <set>
@@ -11,7 +13,7 @@
 
 namespace f3 {
 
-float MapView::modelScale = 0.3f;
+float MapView::modelScale = 1.0f;
 
 namespace {
 
@@ -50,6 +52,8 @@ void MapView::Unload() {
     entities_.clear();
     pickTris_.clear();
     pickCells_.clear();
+    hf_.clear();
+    hfW_ = hfH_ = 0;
     loaded_ = false;
 }
 
@@ -174,6 +178,8 @@ bool MapView::BuildTre(GameAssets& assets, const gd::Tre& tre) {
     // blended batches last
     std::stable_sort(batches_.begin(), batches_.end(), [](const MapBatch& a, const MapBatch& b) { return a.flags.blend < b.flags.blend; });
 
+    BuildHeightField();
+
     // pick grid
     if (!pickTris_.empty()) {
         pickOx_ = bmin_.x; pickOz_ = bmin_.z;
@@ -276,6 +282,132 @@ void MapView::SetDoorOpen(const Vector3& p, bool open) {
         if (d < bd) { bd = d; best = &e; }
     }
     if (best) best->hidden = open;
+}
+
+// Ground height field: every up-facing triangle is rasterised onto a regular XZ sample grid; per sample the lowest
+// layer is the walkable floor (roof tops and upper storeys lie above it, ceilings face down and are not collected).
+// Samples without geometry are filled from their neighbours, then the field is smoothed with a small blur so that the
+// bilinear lookup is continuous and free of single-triangle bumps (rocks, props baked into the level).
+void MapView::BuildHeightField() {
+    hf_.clear();
+    hfW_ = hfH_ = 0;
+    if (pickTris_.empty()) return;
+    hfOx_ = bmin_.x; hfOz_ = bmin_.z;
+    hfW_ = static_cast<int>((bmax_.x - bmin_.x) / kHfStep) + 2;
+    hfH_ = static_cast<int>((bmax_.z - bmin_.z) / kHfStep) + 2;
+    const size_t n = static_cast<size_t>(hfW_) * hfH_;
+    const float kNone = 1e30f;
+    std::vector<float> lo(n, kNone);
+    std::vector<float> hi(n, -kNone);
+    for (const PickTri& t : pickTris_) {
+        const float* v = t.v;
+        const float x0 = std::min({v[0], v[3], v[6]}), x1 = std::max({v[0], v[3], v[6]});
+        const float z0 = std::min({v[2], v[5], v[8]}), z1 = std::max({v[2], v[5], v[8]});
+        const int i0 = std::max(0, static_cast<int>(std::ceil((x0 - hfOx_) / kHfStep)));
+        const int i1 = std::min(hfW_ - 1, static_cast<int>(std::floor((x1 - hfOx_) / kHfStep)));
+        const int j0 = std::max(0, static_cast<int>(std::ceil((z0 - hfOz_) / kHfStep)));
+        const int j1 = std::min(hfH_ - 1, static_cast<int>(std::floor((z1 - hfOz_) / kHfStep)));
+        const float det = (v[5] - v[8]) * (v[0] - v[6]) + (v[6] - v[3]) * (v[2] - v[8]);
+        if (std::fabs(det) < 1e-9f) continue;
+        for (int j = j0; j <= j1; ++j)
+            for (int i = i0; i <= i1; ++i) {
+                const float px = hfOx_ + i * kHfStep, pz = hfOz_ + j * kHfStep;
+                const float l1 = ((v[5] - v[8]) * (px - v[6]) + (v[6] - v[3]) * (pz - v[8])) / det;
+                const float l2 = ((v[8] - v[2]) * (px - v[6]) + (v[0] - v[6]) * (pz - v[8])) / det;
+                const float l3 = 1.0f - l1 - l2;
+                if (l1 < -1e-4f || l2 < -1e-4f || l3 < -1e-4f) continue;
+                const float y = l1 * v[1] + l2 * v[4] + l3 * v[7];
+                const size_t k = static_cast<size_t>(j) * hfW_ + i;
+                lo[k] = std::min(lo[k], y);
+                hi[k] = std::max(hi[k], y);
+            }
+    }
+    hf_.assign(n, 0.0f);
+    std::vector<uint8_t> have(n, 0);
+    size_t covered = 0, multi = 0;
+    for (size_t k = 0; k < n; ++k)
+        if (lo[k] < kNone) { hf_[k] = lo[k]; have[k] = 1; ++covered; if (hi[k] - lo[k] > 1.0f) ++multi; }
+    // fill holes: repeated 4-neighbour propagation (bounded)
+    for (int pass = 0; pass < 64; ++pass) {
+        bool any = false;
+        std::vector<float> nv = hf_;
+        std::vector<uint8_t> nh = have;
+        for (int j = 0; j < hfH_; ++j)
+            for (int i = 0; i < hfW_; ++i) {
+                const size_t k = static_cast<size_t>(j) * hfW_ + i;
+                if (have[k]) continue;
+                float s = 0; int c = 0;
+                const int di[4] = {1, -1, 0, 0}, dj[4] = {0, 0, 1, -1};
+                for (int d = 0; d < 4; ++d) {
+                    const int ii = i + di[d], jj = j + dj[d];
+                    if (ii < 0 || jj < 0 || ii >= hfW_ || jj >= hfH_) continue;
+                    const size_t kk = static_cast<size_t>(jj) * hfW_ + ii;
+                    if (have[kk]) { s += hf_[kk]; ++c; }
+                }
+                if (c) { nv[k] = s / c; nh[k] = 1; any = true; }
+            }
+        hf_.swap(nv); have.swap(nh);
+        if (!any) break;
+    }
+    // thin walls have no floor under them: their top would be the lowest layer. A 9x9 median (2.25 units) removes every
+    // feature narrower than about 4 samples while keeping real steps and slopes; flat areas are skipped for speed.
+    std::vector<float> tmp(n);
+    {
+        tmp = hf_;
+        const int R = 4;
+        std::vector<float> win;
+        win.reserve((2 * R + 1) * (2 * R + 1));
+        auto at = [&](int i, int j) { return hf_[static_cast<size_t>(std::clamp(j, 0, hfH_ - 1)) * hfW_ + std::clamp(i, 0, hfW_ - 1)]; };
+        for (int j = 0; j < hfH_; ++j)
+            for (int i = 0; i < hfW_; ++i) {
+                const float c = at(i, j);
+                if (std::fabs(at(i - R, j) - c) < 0.05f && std::fabs(at(i + R, j) - c) < 0.05f && std::fabs(at(i, j - R) - c) < 0.05f &&
+                    std::fabs(at(i, j + R) - c) < 0.05f && std::fabs(at(i - R, j - R) - c) < 0.05f && std::fabs(at(i + R, j + R) - c) < 0.05f)
+                    continue;
+                win.clear();
+                for (int dj = -R; dj <= R; ++dj)
+                    for (int di = -R; di <= R; ++di) win.push_back(at(i + di, j + dj));
+                std::nth_element(win.begin(), win.begin() + win.size() / 2, win.end());
+                tmp[static_cast<size_t>(j) * hfW_ + i] = win[win.size() / 2];
+            }
+        hf_ = tmp;
+    }
+    // smoothing: two passes of a separable [1 2 1] blur (about +-0.5 unit footprint)
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int j = 0; j < hfH_; ++j)
+            for (int i = 0; i < hfW_; ++i) {
+                const float a = hf_[static_cast<size_t>(j) * hfW_ + std::max(0, i - 1)], b = hf_[static_cast<size_t>(j) * hfW_ + i];
+                const float c = hf_[static_cast<size_t>(j) * hfW_ + std::min(hfW_ - 1, i + 1)];
+                tmp[static_cast<size_t>(j) * hfW_ + i] = (a + 2 * b + c) * 0.25f;
+            }
+        for (int j = 0; j < hfH_; ++j)
+            for (int i = 0; i < hfW_; ++i) {
+                const float a = tmp[static_cast<size_t>(std::max(0, j - 1)) * hfW_ + i], b = tmp[static_cast<size_t>(j) * hfW_ + i];
+                const float c = tmp[static_cast<size_t>(std::min(hfH_ - 1, j + 1)) * hfW_ + i];
+                hf_[static_cast<size_t>(j) * hfW_ + i] = (a + 2 * b + c) * 0.25f;
+            }
+    }
+    if (const char* dump = std::getenv("F3_DUMP_HF")) {   // debug: grey-scale PGM of the height field (-5..25 units)
+        if (FILE* f = std::fopen(dump, "wb")) {
+            std::fprintf(f, "P5 %d %d 255 ", hfW_, hfH_);
+            for (int j = hfH_ - 1; j >= 0; --j)
+                for (int i = 0; i < hfW_; ++i) std::fputc(static_cast<int>(std::clamp((hf_[static_cast<size_t>(j) * hfW_ + i] + 5.0f) * 8.5f, 0.0f, 255.0f)), f);
+            std::fclose(f);
+        }
+    }
+    log::Info("ground height field: %dx%d samples, %.1f%% covered, %.1f%% multi-layer", hfW_, hfH_, 100.0 * covered / n, 100.0 * multi / n);
+}
+
+float MapView::GroundHeight(float x, float z) const {
+    if (hfW_ <= 0) return 0.0f;
+    const float fx = std::clamp((x - hfOx_) / kHfStep, 0.0f, static_cast<float>(hfW_ - 1) - 0.001f);
+    const float fz = std::clamp((z - hfOz_) / kHfStep, 0.0f, static_cast<float>(hfH_ - 1) - 0.001f);
+    const int i = static_cast<int>(fx), j = static_cast<int>(fz);
+    const float tx = fx - i, tz = fz - j;
+    const float* r0 = &hf_[static_cast<size_t>(j) * hfW_ + i];
+    const float* r1 = r0 + hfW_;
+    const float a = r0[0] + (r0[1] - r0[0]) * tx, b = r1[0] + (r1[1] - r1[0]) * tx;
+    return a + (b - a) * tz;
 }
 
 bool MapView::PickGround(const Ray& ray, Vector3& hit) const {

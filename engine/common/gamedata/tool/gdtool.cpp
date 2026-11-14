@@ -54,6 +54,14 @@ int main(int argc, char** argv) {
     }
     if (argc < 4) return 2;
     std::string name = argv[3];
+    if (cmd == "emap") {  // entity list of <Name>.emap
+        if (!gd.Read(name, kResEmap, buf)) { std::fprintf(stderr, "no emap %s\n", name.c_str()); return 1; }
+        Emap m;
+        if (!ParseEmap(buf.data(), buf.size(), m, &err)) { std::fprintf(stderr, "emap: %s\n", err.c_str()); return 1; }
+        for (const auto& e : m.entities)
+            std::printf("%-6s %-50s pos %.2f %.2f %.2f yaw %.2f skin=%s\n", e.type.c_str(), e.tmpl.c_str(), e.pos[0], e.pos[1], e.pos[2], e.yaw, e.skin.c_str());
+        return 0;
+    }
     if (cmd == "map") {
         if (!gd.Read(name, kResTre, buf)) { std::fprintf(stderr, "no tre %s\n", name.c_str()); return 1; }
         Tre t;
@@ -70,6 +78,21 @@ int main(int argc, char** argv) {
         if (!ParseB3d(buf.data(), buf.size(), m, &err)) { std::fprintf(stderr, "b3d: %s\n", err.c_str()); return 1; }
         std::printf("verts=%zu groups=%zu bbox (%g %g %g)-(%g %g %g)\n", m.VertexCount(), m.groups.size(), m.bmin[0], m.bmin[1], m.bmin[2], m.bmax[0], m.bmax[1], m.bmax[2]);
         for (auto& g : m.groups) std::printf("  %s shader=%s blend=%s tex=%s tris=%zu\n", g.name.c_str(), g.shader.c_str(), g.blend.c_str(), g.texture.c_str(), g.idx.size() / 3);
+        { std::printf("  bones=%zu hides:", m.bones.size()); for (auto& h : m.hides) std::printf(" %s", h.c_str()); std::printf(" skin=%d %c", (int)m.HasSkin(), 10); }
+        if (getenv("F3_B3D_EXTRA")) for (auto& g : m.groups) { std::printf("    %s extra:", g.name.c_str()); for (uint8_t b : g.extra) std::printf(" %02x", b); std::printf(" %c", 10); }
+        if (argc >= 5) {
+            FILE* f = std::fopen(argv[4], "w");
+            for (size_t gi = 0; gi < m.groups.size(); ++gi)
+                for (size_t t = 0; t + 2 < m.groups[gi].idx.size(); t += 3)
+                    for (int set = 0; set < 2; ++set) {
+                        const auto& uv = set ? m.uv1 : m.uv0;
+                        if (uv.empty()) continue;
+                        std::fprintf(f, "%zu %d", gi, set);
+                        for (int k = 0; k < 3; ++k) { uint32_t v = m.groups[gi].idx[t + k]; std::fprintf(f, " %g %g", uv[v * 2], uv[v * 2 + 1]); }
+                        std::fputc(10, f);
+                    }
+            std::fclose(f);
+        }
         return 0;
     }
     return 2;

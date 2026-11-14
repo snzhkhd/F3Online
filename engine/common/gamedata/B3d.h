@@ -10,6 +10,7 @@ namespace f3::gd {
 struct B3dGroup {
     std::string name, shader, blend, surface;
     std::string texture;           // diffuse TGA resource name (".tga" suffix, case-insensitive), may be empty
+    std::vector<uint8_t> extra;    // raw preconverted group state bytes (diagnostics)
     std::vector<uint32_t> idx;     // triangle list into B3dModel vertex pool
 };
 
@@ -31,6 +32,8 @@ struct B3dModel {
     std::vector<float> boneW;      // 4 per vertex
     bool HasSkin() const { return !boneW.empty(); }
     std::vector<std::string> textures;  // top-level texture list (file names)
+    // Node token 0x1b: names of the base-body groups ("Chest", "Legs", ...) an outfit piece replaces; empty otherwise.
+    std::vector<std::string> hides;
     float bmin[3] = {}, bmax[3] = {};
     bool preconverted = false;
     size_t VertexCount() const { return pos.size() / 3; }

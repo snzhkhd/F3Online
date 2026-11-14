@@ -14,6 +14,40 @@ std::string Lower(std::string s) {
     for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
+
+bool IsPartName(const std::string& n) {
+    static const char* kPrefix[] = {"Hea", "Bod", "Han", "Fee", "Sho", "Bac", "Eye", "Mus", "Hai", "Bea", "Pon", "Van"};
+    if (n.size() < 6) return false;
+    bool ok = false;
+    for (const char* p : kPrefix) if (n.compare(0, 3, p) == 0) ok = true;
+    if (!ok) return false;
+    for (char c : n) if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') return false;
+    return true;
+}
+
+// Armor items store the worn parts as length-prefixed strings inside their opaque item record ("raw_hex"):
+// `u16 len, name` for the part and optionally another one ending in "_LG" for its texture.
+std::vector<WornPart> ParseArmorParts(const std::string& hex) {
+    std::vector<uint8_t> b;
+    for (size_t i = 0; i + 1 < hex.size(); i += 2) b.push_back(static_cast<uint8_t>(std::stoi(hex.substr(i, 2), nullptr, 16)));
+    std::vector<WornPart> out;
+    for (size_t i = 0; i + 2 < b.size();) {
+        const size_t len = b[i] | (static_cast<size_t>(b[i + 1]) << 8);
+        if (len >= 6 && len <= 48 && i + 2 + len <= b.size()) {
+            std::string s(reinterpret_cast<const char*>(&b[i + 2]), len);
+            if (IsPartName(s)) {
+                const bool isTex = s.size() > 3 && Lower(s.substr(s.size() - 3)) == "_lg";
+                if (isTex && !out.empty() && out.back().tex.empty()) out.back().tex = s;
+                else if (!isTex) out.push_back(WornPart{s, ""});
+                i += 2 + len;
+                continue;
+            }
+        }
+        ++i;
+    }
+    return out;
+}
+
 bool FileExists(const std::string& p) { std::ifstream f(p, std::ios::binary); return f.good(); }
 }  // namespace
 
@@ -38,6 +72,8 @@ bool ProtoDb::Load(const std::string& hint, std::string* err) {
     try {
         std::ifstream f(path_, std::ios::binary);
         nlohmann::json j = nlohmann::json::parse(f);
+        std::map<uint32_t, std::vector<std::string>> equip;   // critter pid -> equipment keys
+        std::map<std::string, std::vector<WornPart>> armorParts;
         std::map<std::string, std::map<std::string, int>> modelVotes;  // name -> model -> count
         std::unordered_map<std::string, std::unordered_map<std::string, uint32_t>> firstOf;  // name -> model -> first pid
         for (auto it = j.begin(); it != j.end(); ++it) {
@@ -49,6 +85,7 @@ bool ProtoDb::Load(const std::string& hint, std::string* err) {
             p.name = v.value("name", "");
             p.skin = v.value("skin", "");
             p.isStatic = v.value("static", false);
+            p.hasDialog = v.contains("dialog") && v["dialog"].is_string() && !v["dialog"].get<std::string>().empty();
             uint32_t pid = static_cast<uint32_t>(protos_.size());
             byKey_[Lower(p.key)] = pid;
             if (p.isCritter() && !p.isStatic && !p.name.empty() && !p.model.empty()) {
@@ -57,7 +94,37 @@ bool ProtoDb::Load(const std::string& hint, std::string* err) {
             } else if (p.isCritter() && p.isStatic && !p.name.empty()) {
                 byName_.emplace(Lower(p.name), pid);  // static props only claim a name nobody else has
             }
+            if (p.isCritter()) {
+                // sockets: "socket<N>": "Part|Texture" (N orders them); equipped armor overrides a socket of the same slot
+                const nlohmann::json& cj = v.contains("critter") ? v["critter"] : nlohmann::json::object();
+                if (cj.contains("sockets") && cj["sockets"].is_object()) {
+                    std::map<int, WornPart> byN;
+                    for (auto sk = cj["sockets"].begin(); sk != cj["sockets"].end(); ++sk) {
+                        const std::string val = sk.value().is_string() ? sk.value().get<std::string>() : "";
+                        const size_t bar = val.find('|');
+                        WornPart w{val.substr(0, bar), bar == std::string::npos ? "" : val.substr(bar + 1)};
+                        if (w.part.empty()) continue;
+                        byN[std::atoi(sk.key().c_str() + std::min<size_t>(6, sk.key().size()))] = std::move(w);
+                    }
+                    for (auto& [n, w] : byN) p.worn.push_back(std::move(w));
+                }
+                if (cj.contains("equipment") && cj["equipment"].is_array())
+                    for (const auto& e : cj["equipment"]) equip[protos_.size()].push_back(e.is_string() ? e.get<std::string>() : "");
+            }
+            if (p.cls == "armor" && v.contains("item") && v["item"].contains("raw_hex") && v["item"]["raw_hex"].is_string())
+                armorParts[p.key] = ParseArmorParts(v["item"]["raw_hex"].get<std::string>());
             protos_.push_back(std::move(p));
+        }
+        for (auto& [pid, keys] : equip) {
+            for (const std::string& k : keys) {
+                auto it = armorParts.find(k);
+                if (it == armorParts.end()) continue;
+                for (const WornPart& w : it->second) {
+                    auto& worn = protos_[pid].worn;
+                    worn.erase(std::remove_if(worn.begin(), worn.end(), [&](const WornPart& o) { return o.part.compare(0, 3, w.part, 0, 3) == 0; }), worn.end());
+                    worn.push_back(w);
+                }
+            }
         }
         for (auto& [name, votes] : modelVotes) {
             std::string best; int bc = -1;

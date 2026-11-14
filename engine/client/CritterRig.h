@@ -26,7 +26,7 @@ struct Clip {
 
 struct SkinPartSrc {
     std::vector<float> pos, nrm;       // bind pose, b3d space (left-handed), 3 per vertex
-    std::vector<uint8_t> bidx;         // 4 per vertex, b3d bone indices
+    std::vector<uint16_t> bidx;        // 4 per vertex, Granny skeleton bone indices (skeleton.size() = identity slot)
     std::vector<float> bw;             // 4 per vertex
     std::vector<float> uv0;
     std::vector<uint8_t> col;
@@ -37,16 +37,29 @@ struct SkinPartSrc {
     const Texture2D* tex = nullptr;
 };
 
-// One skinned model (shared between instances).
+// Everything that makes two critters of the same model look different: skin texture plus worn parts.
+struct Appearance {
+    std::string model;                                   // base b3d ("HumMNor")
+    std::string skin;                                    // replacement for the body skin texture, may be empty
+    std::vector<std::pair<std::string, std::string>> worn;  // (part, texture override), see WornPart
+    std::string Key() const;
+};
+
+// Per base model, shared by all appearances: animation clips (same skeleton).
+struct ClipSet {
+    Clip clips[static_cast<int>(ClipKind::Count)];
+    bool tried[static_cast<int>(ClipKind::Count)] = {};
+};
+
+// One skinned model for one appearance (shared between instances).
 struct SkinModel {
     std::string name, animPrefix;
     bool ok = false;
     std::vector<SkinPartSrc> parts;
     gr2::Skeleton sk;
     std::vector<float> invWorld;        // 16 per skeleton bone
-    std::vector<int> boneMap;           // b3d bone -> skeleton bone or -1
-    Clip clips[static_cast<int>(ClipKind::Count)];
-    bool clipsTried[static_cast<int>(ClipKind::Count)] = {};
+    ClipSet* clipSet = nullptr;
+    Texture2D atlas{};                  // humans: the composed 512x512 critter texture (owned by RigLibrary)
     float height = 6.0f;                // b3d units
 };
 
@@ -65,23 +78,28 @@ public:
 private:
     const SkinModel* model_;
     ModelAsset inst_;
-    std::vector<float> palette_;  // 16 per b3d bone
+    std::vector<float> palette_;  // 16 per skeleton bone + one identity matrix
 };
 
 class RigLibrary {
 public:
-    explicit RigLibrary(GameAssets& a) : assets_(a) {}
-    ~RigLibrary() = default;
+    explicit RigLibrary(GameAssets& a);
+    ~RigLibrary();
     // nullptr when the model has no skin data / skeleton.
-    SkinModel* Model(const std::string& name);
+    SkinModel* Model(const std::string& name) { return Model(Appearance{name, "", {}}); }
+    SkinModel* Model(const Appearance& app);
     // Loads (once) the clip of the given kind for this model; returns nullptr if the game has none.
     const Clip* Get(SkinModel& m, ClipKind k);
     static const char* ClipKey(ClipKind k);
 
 private:
+    struct Core;   // parsed base b3d + skeleton, shared by appearances of one model
+    Core* GetCore(const std::string& name);
     bool LoadClip(SkinModel& m, const std::string& animName, Clip& out);
     GameAssets& assets_;
+    std::unordered_map<std::string, std::unique_ptr<Core>> cores_;
     std::unordered_map<std::string, std::unique_ptr<SkinModel>> models_;
+    std::unordered_map<std::string, std::unique_ptr<ClipSet>> clipSets_;
 };
 
 }  // namespace f3
