@@ -105,7 +105,7 @@ All numbers below are placeholders unless noted; formulas of the original game a
 * Doors toggle on `Use` (blocked cells released/restored, `CellsSet` sent to every player on the map; closing is refused while a critter
   stands in the doorway).
 * Combat is **real time**, not the original 6 s rounds (sys.ini `Seconds Per Round = 6`): `Attack(target)` makes the critter approach until the
-  weapon range (ranged: `range * 2` cells and line of sight on the grid; melee: adjacent) and fire once per cooldown. Cooldown seconds =
+  weapon range (ranged: `range * 2` cells and line of sight on the grid; melee: adjacent) and fire once per cooldown. Action duration (see section 9) in seconds =
   `clamp(GWAM cost / 10, 0.5, 4)` (guess). Hit chance `45 + 4A (+2S melee) - AC - 2 * max(0, distance_units - P)` clamped 5..95; damage = ammo
   damage range (needs matching ammo in the inventory, one round consumed per shot; NPCs have infinite ammo) else weapon range, melee uses GWAM
   min/max + Strength bonus; critical on `Luck %` for double damage; armor reduces by threshold but never below a quarter of the roll.
@@ -207,3 +207,54 @@ transition region which loads the Vault (384x334), and opening a door.
   `mapdata` surface classes other than `0x2f` are all treated as walkable.
 * The client does not know the protocol extension yet (it ignores the new messages); `protocol_game.h` is the contract.
 * Entities are placed with yaw only mapped to the 8 square-grid directions; the grid is square 8-connected (not hex, not 1:1 with the original movement).
+
+## 9. Real-time timing
+
+The server models time the way FOnline does (reference: `sdk/Server/scripts/config.fos`, `Critter::IsFree/IsBusy`, `cr.Wait`, client `ApRegenerationTick`). It is **not** turn based and nothing is tied to grid steps.
+Code: `engine/server/Timing.cpp` (clock, AP, gating), `Move.cpp` (continuous movement), `GameConfig.h` + `Scripting::ApplyConfig` (tunables), `scripts/config.lua`.
+
+### Model
+
+* **Clock**: `Server::NowMs()`, milliseconds since server start (+1000, never 0). Sent as `u32`; clients never sync clocks because every timed message also carries `nowMs`.
+* **Wait / breaktime**: every critter has `waitEndMs`. The critter is *free* when `now >= waitEndMs`. Item actions (equip, drop, pick up, use door/container/usable, take from container) are rejected while busy and, when accepted, set `wait = Breaktime` (500 ms). Starting a walk is rejected while busy as well. An attack sets its own duration: `clamp(weapon cost word * AttackMsPerCost, AttackMinMs, AttackMaxMs)` (the 9mm autoloader has cost 20, so 2000 ms). A map transfer resets the wait (`player.Wait(0)` in the FOnline scripts). Actions that walk first (pickup/use/take) are gated at request time and again on arrival; if the critter is still busy on arrival they stay pending.
+* **Rejection feedback**: every gated request is answered with `WaitState` (`action` = the request id, `result` = `Ok`/`Busy`/`NoAp`/`Invalid`/`Dead`); `WaitState` is also sent on login/`ReqState`/battle changes (`result = None`). Rejected requests are not queued.
+* **AP**: stored in 1/100 AP (`AP_DIVIDER = 100`), max AP = `ApBase + Agility / ApAgilityDiv` (Default_PC: Agility 6 gives 8 AP = 800). Regeneration is linear, `ApRegeneration` ms for a full bar (FOnline: `ap += max * delta / ApRegeneration`), computed lazily on every query (`Server::SyncAp`); the client can mirror it from `WaitState`. Costs (1/100 AP): `RtApCostPickItem, DropItem, MoveItemInventory (equip), MoveItemContainer (take), UseItem (doors/containers), CritterWalk/Run (per cell crossed)`; attack = `max(RtApCostAttackMin, weapon cost word * RtApCostAttackPerCost)` (9mm: 200). An attack waits (does not fire) until enough AP have regenerated; other actions are rejected with `NoAp`. `RtApCostUseSkill, ReloadWeapon, PickCritter` are parsed but have no action behind them yet.
+* **Battle flag**: attacker and target get `battleEndMs = now + TimeoutBattle` on every shot. While set, map-transition regions do not fire, and with `RunOnCombat = false` critters walk instead of run. `WaitState.battleEndMs` carries it to the client.
+* **NPCs** use the same rules (combat goes through `TickCombat`: approach, wait until free and enough AP, shoot, wait). Lua direct calls (`cr:pickup/drop/equip/use_object`) are not gated; scripts decide and may call `cr:wait(ms)`.
+
+### Movement
+
+* Positions are float cell coordinates (cell (cx,cy) has its centre at (cx+0.5, cy+0.5); 1 cell = 0.5 world unit); `Critter::pos` is `floor()` of them. The 0.5-unit walk grid is used only for collision and A*.
+* A move request is pathfound with the existing A* (8-connected, no corner cutting), then **string pulled** (`Move.cpp: Smooth`): from each point the farthest later point is chosen whose straight segment is walkable with `MoveClearance` (0.3 cells) on both sides and without squeezing through a diagonal corner; consecutive grid cells are always accepted. The result (typically 2-6 points) is sent as one `MovePath` with `startMs` and `speed` (cells/s: `WalkSpeed` 3.0, `RunSpeed` 6.0; players run when `RtAlwaysRun`, NPCs run only while chasing a target).
+* The server integrates the same polyline every tick in sub-steps of at most 0.5 cell and checks every cell it enters (blocked cells / closed doors, diagonal squeeze, other critters, AP per cell). On a failure the critter stops and viewers get `CritterStop(reason 1)`; at the end `CritterStop(reason 0)`. `MoveToF` allows a precise end point inside a walkable cell (validated: the last hop must stay on free cells, else the cell centre is used).
+* Old clients: a client that does not send `ClientCaps(bit0)` keeps receiving the legacy `CritterMove`, one per cell crossed (`snap=1` for teleports goes to everyone and cancels any path). `LoginOk.moveTicks` is legacy and unused by the continuous model.
+
+### Messages (`protocol_game.h`, block "REAL-TIME TIMING"); floats are IEEE-754 bit patterns in a little-endian u32
+
+| id | message | payload |
+|---|---|---|
+| C 28 | ClientCaps | `u32 caps` (bit0 = continuous movement + WaitState); send once after `LoginOk` |
+| C 29 | MoveToF | `f32 x, f32 y` (cells, centre = +0.5), `u8 run` |
+| S 127 | MovePath | `u32 id, u32 nowMs, u32 startMs, f32 speed (cells/s), u8 run, u16 n, n x {f32 x, f32 y}` (pts[0] = position at startMs; age = nowMs - startMs) |
+| S 128 | CritterStop | `u32 id, f32 x, f32 y, u8 dir, u8 reason` (0 arrived, 1 blocked/rejected/out of AP, 2 teleport, 3 resync after CritterAdd/caps) |
+| S 129 | WaitState | `u32 nowMs, u32 waitEndMs, u16 ap, u16 maxAp, u32 apRegenMs, u32 battleEndMs, u8 action, u8 result` (result: 0 Ok, 1 Busy, 2 NoAp, 3 Invalid, 4 Dead, 255 None) |
+
+A rejected walk request while the critter is moving re-sends the remaining `MovePath` (the old path stays authoritative); while standing it sends `CritterStop(1)`.
+
+### Config (`scripts/config.lua`, Lua table `config`, hot reloaded when the file changes (about 1 s poll) and on console `reload`)
+
+FOnline names/defaults from config.fos: `CritterIdleTick 1000, Breaktime 500, TimeoutTransfer 0, TimeoutBattle 500, ApRegeneration 7000, RtApCostCritterWalk 0, RtApCostCritterRun 0, RtApCostMoveItemContainer 0, RtApCostMoveItemInventory 0, RtApCostPickItem 0, RtApCostDropItem 0, RtApCostReloadWeapon 0, RtApCostPickCritter 0, RtApCostUseItem 0, RtApCostUseSkill 2, RtAlwaysRun true, RunOnCombat true`.
+F3Online additions: `ApBase 5, ApAgilityDiv 2, WalkSpeed 3.0, RunSpeed 6.0, MoveClearance 0.3, AttackMinMs 500, AttackMaxMs 4000, AttackMsPerCost 100, RtApCostAttackPerCost 10, RtApCostAttackMin 50, TransferLock 3000`. A broken edit keeps the previous values. The TbApCost* keys of config.fos are not used (no turn based mode).
+
+### Lua API
+
+Critter: `wait(ms) is_free() is_busy() wait_left() ap() max_ap() set_ap(v) use_ap(cost) in_battle() set_battle() think_due(ms) fx fy`, `move_to(x,y[,run])`, `is_moving()` (true while a path is active). Globals: `now_ms()`, `config` (the table). The `/ap` chat command prints the state.
+`hostile.lua` throttles its target search with `npc:think_due(config.CritterIdleTick)`.
+
+### Tests
+
+`f3_gametest` (bot A announces `ClientCaps`, bot B stays legacy) additionally asserts: initial `WaitState` (800/800 AP, free), `MovePath` segments all on walkable cells and smoothed, stop at the exact cell centre, `MoveToF` exact end point and walk speed, legacy per-cell `CritterMove` for B and B's `MovePath` seen by A at run speed, attack shots at least one action duration apart with AP spent and a 2000 ms wait, AP regenerated server-side after 2 s, a second `Equip` within the breaktime rejected as `Busy`, a move request while busy rejected, accepted again after 500 ms.
+
+### Gaps
+
+No reload/skill/pick-critter actions (their `RtApCost*` keys are inert); no queueing of rejected actions; walk requests are rejected while busy (FOnline-like), so a click right after an attack is dropped; critters still occupy whole cells (collision between critters is cell based, visual overlap during interpolation is possible); a chasing NPC re-paths every 0.5 s (one `MovePath` each); no lag compensation; AP/attack numbers are placeholders like the rest of combat.

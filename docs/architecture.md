@@ -69,6 +69,7 @@ the same interface; networking and state do not change.
 ## Known gaps
 
 - Square 8-direction tile grid, not hex (isolated in `types.h` and `FindPath`).
+- Movement is continuous (float positions, string-pulled paths, MovePath), actions are real-time with breaktime and AP: see docs/server-data.md section 9.
 - No client-side prediction; no login timeout for idle connections; no persistence/accounts/passwords.
 - With `gamedata/server` the server runs the 39 real maps (entry points, transitions, NPCs, items, doors, containers, stats, inventory, real-time combat); without it only the Lua test map. Remaining gaps (rounds, skills, dialogue, original-script coverage): `docs/server-data.md`.
 - Visibility diff is O(players x critters) per dirty map; fine for MVP scale.

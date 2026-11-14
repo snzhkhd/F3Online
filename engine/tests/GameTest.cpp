@@ -2,11 +2,15 @@
 //   f3_gametest [--port N] [--expect-map NAME]
 // Two bots log in on the real start map: verifies the map size/grid, stats and starter inventory, walking
 // with real-grid pathfinding, pickup of a ground item, an attack between the bots (hit/damage events),
-// and a map transition (walk into the Junktown -> Vault region). Exit code 0 = all checks passed.
+// and a map transition (walk into the Junktown -> Vault region). Real-time timing checks (bot A announces the
+// continuous-move capability, bot B is a legacy client): MovePath validated against the grid, MoveToF, legacy per-cell
+// CritterMove for B, breaktime rejection (Equip twice, move while busy), attack action duration, AP spend + regeneration.
+// Exit code 0 = all checks passed.
 #include <enet/enet.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -54,6 +58,14 @@ struct Bot {
     std::map<ItemId, gnet::ObjectInfo> objInfo;
     std::vector<gnet::CombatEvent> combat;
     std::vector<std::string> chat;
+    // real-time state (continuous-move capable clients only)
+    struct Timed { gnet::WaitState w; double localMs; };
+    std::vector<Timed> waits;
+    std::vector<gnet::MovePath> paths;
+    std::vector<gnet::CritterStop> stops;
+    float fx = 0, fy = 0;
+    std::vector<double> combatMs;  // local arrival time of each CombatEvent
+    static double LocalMs() { return std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count(); }
 
     bool Connect(uint16_t port) {
         host = enet_host_create(nullptr, 1, 2, 0, 0);
@@ -104,7 +116,18 @@ struct Bot {
             case (uint8_t)GMsg::S2C_Inventory: { gnet::Inventory m; if (m.Read(b)) { inv = m.items; ++invUpdates; } break; }
             case (uint8_t)GMsg::S2C_ObjectInfo: { gnet::ObjectInfo m; m.Read(b); objInfo[m.id] = m; break; }
             case (uint8_t)GMsg::S2C_CritterState: { gnet::CritterState m; m.Read(b); states[m.id] = m; break; }
-            case (uint8_t)GMsg::S2C_CombatEvent: { gnet::CombatEvent m; m.Read(b); combat.push_back(m); break; }
+            case (uint8_t)GMsg::S2C_CombatEvent: { gnet::CombatEvent m; m.Read(b); combat.push_back(m); combatMs.push_back(LocalMs()); break; }
+            case (uint8_t)GMsgRt::S2C_MovePath: { gnet::MovePath m; if (m.Read(b)) paths.push_back(m); break; }
+            case (uint8_t)GMsgRt::S2C_CritterStop: {
+                gnet::CritterStop m;
+                if (!m.Read(b)) break;
+                stops.push_back(m);
+                TilePos cell{static_cast<int16_t>(std::floor(m.x)), static_cast<int16_t>(std::floor(m.y))};
+                if (critters.count(m.id)) { critters[m.id].x = cell.x; critters[m.id].y = cell.y; }
+                if (m.id == myId) { pos = cell; fx = m.x; fy = m.y; havePos = true; }
+                break;
+            }
+            case (uint8_t)GMsgRt::S2C_WaitState: { gnet::WaitState m; if (m.Read(b)) waits.push_back({m, LocalMs()}); break; }
             default: break;
         }
     }
@@ -129,6 +152,24 @@ static bool WaitFor(std::vector<Bot*> bots, double seconds, const std::function<
     return pred();
 }
 
+// every sample of the segment must lie on a walkable cell (authoritative path check from the client side)
+static bool SegmentWalkable(const Bot& b, float ax, float ay, float bx, float by) {
+    float dx = bx - ax, dy = by - ay, len = std::sqrt(dx * dx + dy * dy);
+    int n = static_cast<int>(len / 0.1f) + 1;
+    for (int i = 0; i <= n; ++i) {
+        float t = static_cast<float>(i) / n;
+        int cx = static_cast<int>(std::floor(ax + dx * t)), cy = static_cast<int>(std::floor(ay + dy * t));
+        if (cx < 0 || cy < 0 || cx >= b.map.width || cy >= b.map.height || b.map.blocked[static_cast<size_t>(cy) * b.map.width + cx]) return false;
+    }
+    return true;
+}
+
+static const gnet::WaitState* LastWait(const Bot& b, uint8_t action) {
+    for (size_t i = b.waits.size(); i-- > 0;)
+        if (b.waits[i].w.action == action) return &b.waits[i].w;
+    return nullptr;
+}
+
 static bool Walkable(const Bot& b, int x, int y) {
     return x >= 0 && y >= 0 && x < b.map.width && y < b.map.height && b.map.blocked[static_cast<size_t>(y) * b.map.width + x] == 0;
 }
@@ -146,6 +187,16 @@ int main(int argc, char** argv) {
     if (!a.Connect(port) || !b.Connect(port)) { std::printf("FAIL: cannot connect to 127.0.0.1:%u\n", port); return 1; }
     a.Login("GameBotA");
     CHECK(WaitFor({&a}, 8, [&] { return a.loggedIn && a.mapInfoCount > 0 && a.havePos && a.haveStats && a.invUpdates > 0; }), "bot A logged in with map, stats, inventory");
+    {
+        gnet::ClientCaps cp; cp.caps = gnet::kCapContinuousMove;
+        a.Send(gnet::PackG(cp));  // bot A is a continuous-movement client, bot B stays legacy
+        CHECK(WaitFor({&a}, 3, [&] { return !a.waits.empty(); }), "WaitState received after ClientCaps");
+        if (!a.waits.empty()) {
+            const gnet::WaitState& w = a.waits.back().w;
+            CHECK(w.maxAp == 800 && w.ap == w.maxAp, "initial AP is full: %u/%u (5 + Agility 6 / 2 = 8 AP)", w.ap, w.maxAp);
+            CHECK(w.apRegenMs == 7000 && w.waitEndMs - w.nowMs < 100000 && w.waitEndMs <= w.nowMs + 1, "free at login, ApRegeneration %u ms", w.apRegenMs);
+        }
+    }
     b.Login("GameBotB");
     CHECK(WaitFor({&a, &b}, 8, [&] { return b.loggedIn && b.havePos && b.haveStats; }), "bot B logged in");
     if (a.failed || b.failed || !a.loggedIn || !b.loggedIn) return 1;
@@ -174,7 +225,58 @@ int main(int argc, char** argv) {
         net::MoveToReq mv; mv.x = target.x; mv.y = target.y;
         a.Send(net::Pack(mv));
     }
-    CHECK(WaitFor({&a, &b}, 10, [&] { return a.pos == target; }), "bot A walked to %d,%d (at %d,%d)", target.x, target.y, a.pos.x, a.pos.y);
+    CHECK(WaitFor({&a, &b}, 10, [&] { return a.pos == target && !a.stops.empty() && a.stops.back().reason == 0; }), "bot A walked to %d,%d (at %d,%d)", target.x, target.y, a.pos.x, a.pos.y);
+    {
+        const gnet::MovePath* mp = nullptr;
+        for (auto& p : a.paths) if (p.id == a.myId) mp = &p;
+        CHECK(mp && mp->pts.size() >= 2 && mp->speed > 0, "MovePath received for bot A (%zu points, %.1f cells/s)", mp ? mp->pts.size() : 0, mp ? mp->speed : 0.f);
+        bool allOk = mp != nullptr;
+        float len = 0;
+        if (mp)
+            for (size_t i = 0; i + 1 < mp->pts.size(); ++i) {
+                allOk = allOk && SegmentWalkable(a, mp->pts[i].x, mp->pts[i].y, mp->pts[i + 1].x, mp->pts[i + 1].y);
+                len += std::hypot(mp->pts[i + 1].x - mp->pts[i].x, mp->pts[i + 1].y - mp->pts[i].y);
+            }
+        CHECK(allOk, "every MovePath segment lies on walkable cells (length %.1f cells)", len);
+        CHECK(mp && mp->pts.size() <= 8, "path is smoothed (%zu points for a %d-cell hop)", mp ? mp->pts.size() : 0, mp ? TileDist(target, TilePos{(int16_t)mp->pts[0].x, (int16_t)mp->pts[0].y}) : 0);
+        CHECK(std::fabs(a.fx - (target.x + 0.5f)) < 0.02f && std::fabs(a.fy - (target.y + 0.5f)) < 0.02f, "stopped at the cell centre (%.2f,%.2f)", a.fx, a.fy);
+        WaitFor({&a, &b}, 0.7, [] { return false; });  // let the pickup/walk breaktime pass
+    }
+    // precise (sub-cell) destination
+    {
+        TilePos t2 = a.pos;
+        bool f2 = false;
+        for (int dx = 5; dx >= 2 && !f2; --dx)
+            if (SegmentWalkable(a, a.pos.x + 0.5f, a.pos.y + 0.5f, a.pos.x + dx + 0.75f, a.pos.y + 0.25f)) { t2 = {static_cast<int16_t>(a.pos.x + dx), a.pos.y}; f2 = true; }
+        if (f2) {
+            size_t sc = a.stops.size();
+            gnet::MoveToF mv; mv.x = t2.x + 0.75f; mv.y = t2.y + 0.25f; mv.run = 0;
+            a.Send(gnet::PackG(mv));
+            CHECK(WaitFor({&a, &b}, 8, [&] { return a.stops.size() > sc && a.stops.back().reason == 0; }) && std::fabs(a.fx - (t2.x + 0.75f)) < 0.02f && std::fabs(a.fy - (t2.y + 0.25f)) < 0.02f,
+                  "MoveToF stops at the exact point (%.2f,%.2f), not snapped to a cell", a.fx, a.fy);
+            CHECK(!a.paths.empty() && a.paths.back().run == 0 && a.paths.back().speed < 4.0f, "walk flag respected (speed %.1f)", a.paths.back().speed);
+        } else {
+            CHECK(false, "no sub-cell target found next to bot A");
+        }
+    }
+    // legacy client B: per-cell CritterMove, A sees B's MovePath at run speed (RtAlwaysRun)
+    {
+        TilePos tb = b.pos;
+        bool fb = false;
+        for (int dx = 4; dx >= 2 && !fb; --dx)
+            if (Walkable(b, b.pos.x + dx, b.pos.y) && SegmentWalkable(b, b.pos.x + 0.5f, b.pos.y + 0.5f, b.pos.x + dx + 0.5f, b.pos.y + 0.5f)) { tb = {static_cast<int16_t>(b.pos.x + dx), b.pos.y}; fb = true; }
+        if (fb) {
+            net::MoveToReq mv; mv.x = tb.x; mv.y = tb.y;
+            size_t pc = a.paths.size();
+            b.Send(net::Pack(mv));
+            CHECK(WaitFor({&a, &b}, 8, [&] { return b.pos == tb; }), "legacy bot B reached %d,%d via per-cell CritterMove (at %d,%d)", tb.x, tb.y, b.pos.x, b.pos.y);
+            bool seen = false;
+            for (size_t i = pc; i < a.paths.size(); ++i) if (a.paths[i].id == b.myId && a.paths[i].speed >= 5.5f && a.paths[i].run) seen = true;
+            CHECK(seen, "bot A received B's MovePath (run speed from config RunSpeed)");
+        } else {
+            CHECK(false, "no walk target for B");
+        }
+    }
 
     // --- pickup: nearest plain ground item (weapons/ammo lying in the town)
     {
@@ -231,15 +333,72 @@ int main(int argc, char** argv) {
             return false;
         });
         CHECK(ok, "combat: bot A hit bot B (%zu combat events)", a.combat.size());
+        WaitFor({&a, &b}, 4, [&] { return a.combat.size() >= 3; });  // a few shots for the interval check
         WaitFor({&a, &b}, 1, [] { return false; });
         auto st = b.states.find(b.myId);
         CHECK(st != b.states.end() && st->second.hp < st->second.maxHp, "bot B received HP update (hp %d)", st != b.states.end() ? st->second.hp : -1);
         gnet::Attack stop; stop.id = 0;
         a.Send(gnet::PackG(stop));
+        // real-time attack timing: shots are at least one action duration apart; each shot spends AP and sets a wait
+        double minGap = 1e9;
+        std::vector<double> mine;
+        for (size_t i = 0; i < a.combat.size(); ++i) if (a.combat[i].attacker == a.myId) mine.push_back(a.combatMs[i]);
+        for (size_t i = 1; i < mine.size(); ++i) minGap = std::min(minGap, mine[i] - mine[i - 1]);
+        CHECK(mine.size() < 2 || minGap >= 400, "attack breaktime: shots at least %.0f ms apart (%zu shots, config AttackMinMs 500)", minGap, mine.size());
+        const gnet::WaitState* aw = LastWait(a, (uint8_t)GMsg::C2S_Attack);
+        CHECK(aw && aw->result == gnet::ActionResult::Ok && aw->waitEndMs - aw->nowMs >= 450 && aw->ap < aw->maxAp,
+              "attack WaitState: wait %u ms, ap %u/%u (action cost spent)", aw ? aw->waitEndMs - aw->nowMs : 0, aw ? aw->ap : 0, aw ? aw->maxAp : 0);
+        if (aw) {
+            uint16_t apAfter = aw->ap;
+            double t0 = Bot::LocalMs();
+            WaitFor({&a, &b}, 2.0, [] { return false; });
+            size_t wc = a.waits.size();
+            gnet::ReqState rq;
+            a.Send(gnet::PackG(rq));
+            WaitFor({&a, &b}, 2, [&] { return a.waits.size() > wc; });
+            const gnet::WaitState& nw = a.waits.back().w;
+            double dt = Bot::LocalMs() - t0;
+            // 800 AP-units over 7000 ms = 0.114 per ms; after ~2 s expect about +230 (or full)
+            CHECK(a.waits.size() > wc && (nw.ap > apAfter || nw.ap == nw.maxAp) && (nw.ap >= nw.maxAp || nw.ap - apAfter < 0.114 * (dt + 400)),
+                  "AP regenerated server-side: %u -> %u of %u after %.0f ms (ApRegeneration 7000)", apAfter, nw.ap, nw.maxAp, dt);
+        }
+    }
+    // --- breaktime: Equip twice in a row, the second one is rejected as Busy; moving while busy is rejected too
+    {
+        ItemId gun = 0;
+        for (auto& e : a.inv) if (e.equipped && e.name.find("9mm") != std::string::npos) gun = e.id;
+        if (!gun) for (auto& e : a.inv) if (e.name.find("9mm") != std::string::npos) gun = e.id;
+        CHECK(gun != 0, "found the 9mm autoloader in the inventory");
+        WaitFor({&a, &b}, 4.5, [&] { return false; });  // let the last attack's wait end
+        size_t w0 = a.waits.size();
+        gnet::Equip e1; e1.id = gun; e1.on = 0;
+        gnet::Equip e2; e2.id = gun; e2.on = 1;
+        a.Send(gnet::PackG(e1));
+        a.Send(gnet::PackG(e2));
+        CHECK(WaitFor({&a, &b}, 3, [&] { return a.waits.size() >= w0 + 2; }), "two WaitState answers for two quick Equip requests");
+        if (a.waits.size() >= w0 + 2) {
+            const gnet::WaitState& r1 = a.waits[w0].w;
+            const gnet::WaitState& r2 = a.waits[w0 + 1].w;
+            CHECK(r1.action == (uint8_t)GMsg::C2S_Equip && r1.result == gnet::ActionResult::Ok && r1.waitEndMs - r1.nowMs >= 450 && r1.waitEndMs - r1.nowMs <= 520,
+                  "first Equip accepted, breaktime %u ms (config Breaktime 500)", r1.waitEndMs - r1.nowMs);
+            CHECK(r2.action == (uint8_t)GMsg::C2S_Equip && r2.result == gnet::ActionResult::Busy && r2.waitEndMs > r2.nowMs,
+                  "second Equip rejected as Busy (%u ms left)", r2.waitEndMs - r2.nowMs);
+        }
+        size_t pc = a.paths.size(), w1 = a.waits.size();
+        gnet::MoveToF mv; mv.x = a.fx + 2; mv.y = a.fy; mv.run = 1;
+        a.Send(gnet::PackG(mv));
+        CHECK(WaitFor({&a, &b}, 2, [&] { return a.waits.size() > w1; }) && a.waits.back().w.result == gnet::ActionResult::Busy && a.paths.size() == pc,
+              "move request while busy is rejected (no MovePath)");
+        WaitFor({&a, &b}, 0.7, [] { return false; });
+        w1 = a.waits.size();
+        a.Send(gnet::PackG(e2));
+        CHECK(WaitFor({&a, &b}, 2, [&] { return a.waits.size() > w1; }) && a.waits.back().w.result == gnet::ActionResult::Ok, "Equip accepted again after the breaktime (%zu entries)", a.inv.size());
+        WaitFor({&a, &b}, 0.7, [] { return false; });
     }
 
     // --- map transition: go to the Vault side of Junktown's transition region
     {
+        WaitFor({&a, &b}, 0.2, [] { return false; });
         net::ChatReq c; c.text = "/goto 00_03_Tutorial_Junktown 2";
         a.Send(net::Pack(c));
         int maps = a.mapInfoCount;
