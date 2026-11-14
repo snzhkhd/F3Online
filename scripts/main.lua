@@ -93,6 +93,11 @@ end
 function commands.maps(c)
     c:tell(table.concat(map_names(), ", "))
 end
+-- dev helper: /tp x y  (cell coordinates on the current map)
+function commands.tp(c, arg)
+    local x, y = (arg or ""):match("^(%d+)%s+(%d+)")
+    if not x or not c:teleport(c.map_id, tonumber(x), tonumber(y)) then c:tell("usage: /tp x y (walkable cell)") end
+end
 function commands.heal(c) c:heal(c.max_hp) end
 -- dev helper: /spawn <proto key>  puts a real item (e.g. Weapons44_Revolver.WEA) two cells next to you
 function commands.spawn(c, arg)

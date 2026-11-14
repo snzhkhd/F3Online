@@ -77,6 +77,7 @@ bool Server::Init() {
         }
         if (!dd.empty()) {
             if (!data_.Load(dd, err)) { log::Error("data: %s", err.c_str()); return false; }
+            amx_ = std::make_unique<AmxHost>(*this, dd / "scripts");
             if (!LoadWorldData()) { log::Error("data: no maps could be loaded"); return false; }
         }
     }
@@ -350,6 +351,7 @@ ItemId Server::SpawnItem(MapId mapId, uint16_t pid, const std::string& name, Til
 void Server::RemoveCritter(CritterId id) {
     Critter* c = world_.GetCritter(id);
     if (!c) return;
+    if (amx_) amx_->DetachCritter(id);
     UnplaceCritter(*c);
     if (c->peer) {
         c->peer->data = nullptr;
@@ -527,6 +529,7 @@ void Server::DoTick() {
         Critter* c = world_.GetCritter(id);
         if (c && c->IsNpc() && c->mapId != 0 && !c->dead && active.count(c->mapId)) scripting_->OnNpcTick(*c, tick_);
     }
+    if (amx_) amx_->Tick(tick_, active);
     scripting_->OnTick(tick_);
 
     for (auto& m : world_.Maps())
@@ -558,6 +561,13 @@ void Server::ExecCommand(const std::string& line) {
         log::Info("tick %llu, %zu player(s), %zu npc(s), %zu map(s)", static_cast<unsigned long long>(tick_), players, npcs, world_.Maps().size());
         for (auto& [id, c] : world_.Critters())
             if (c->IsPlayer()) log::Info("  #%u %s map %u at %d,%d", c->id, c->name.c_str(), c->mapId, c->pos.x, c->pos.y);
+    } else if (cmd == "amx") {  // amx <script name without extension> <public>   (traces every native call)
+        std::vector<std::string> tok;
+        for (std::string t; ss >> t;) tok.push_back(t);
+        std::string sc, pub;
+        if (tok.size() >= 2) { pub = tok.back(); for (size_t i = 0; i + 1 < tok.size(); ++i) sc += (i ? " " : "") + tok[i]; }  // script names may contain spaces
+        if (!amx_ || sc.empty() || pub.empty()) log::Info("usage: amx <script> <public>   (needs game data); %zu amx instances", amx_ ? amx_->Count() : 0);
+        else log::Info("amx %s.%s: %s", sc.c_str(), pub.c_str(), amx_->RunTest(sc, pub).c_str());
     } else if (cmd == "say") {
         std::string rest;
         std::getline(ss, rest);
@@ -565,7 +575,7 @@ void Server::ExecCommand(const std::string& line) {
     } else if (cmd == "quit" || cmd == "stop" || cmd == "exit") {
         RequestStop();
     } else {
-        log::Info("commands: reload | status | say <text> | quit");
+        log::Info("commands: reload | status | amx <script> <public> | say <text> | quit");
     }
 }
 

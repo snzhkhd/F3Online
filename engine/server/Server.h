@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "AmxHost.h"
 #include "DataStore.h"
 #include "World.h"
 #include "common/buffer.h"
@@ -124,6 +125,7 @@ private:
     std::vector<std::string> warnedMaps_;
     _ENetHost* host_ = nullptr;
     std::unique_ptr<Scripting> scripting_;
+    std::unique_ptr<AmxHost> amx_;  // original AMX scripts (prototype), only with game data
     std::atomic<bool> running_{false};
     uint64_t tick_ = 0;
 

@@ -147,6 +147,7 @@ Critter* Server::SpawnCritterProto(MapId mapId, const Proto& p, TilePos pos, con
     if (!hasWeapon)
         for (auto& it : c->inventory)
             if (data_.GetProto(it.pid)->cls == PClass::Weapon) { EquipItem(*c, it.id, true); break; }
+    if (amx_) amx_->AttachCritter(*c);
     return c;
 }
 
@@ -190,6 +191,7 @@ ItemId Server::SpawnObjectProto(MapId mapId, const Proto& p, TilePos pos, uint16
     ItemId id = it.id;
     m->items[id] = std::move(it);
     m->dirty = true;
+    if (amx_) amx_->AttachObject(m->items[id]);
     return id;
 }
 
@@ -725,6 +727,7 @@ void Server::KillCritter(Critter& c, Critter* killer) {
     if (c.IsNpc()) DropAllToGround(c);
     SendCritterState(c);
     if (c.IsPlayer()) { SendStats(c); Tell(c, "You have died."); }
+    if (amx_) amx_->OnDeath(c);
     if (Map* m = world_.GetMap(c.mapId)) m->dirty = true;
     if (scripting_) {
         Critter* cp = world_.GetCritter(cid);

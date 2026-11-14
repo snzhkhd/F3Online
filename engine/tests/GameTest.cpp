@@ -203,6 +203,24 @@ int main(int argc, char** argv) {
         }
     }
 
+    // --- NPC AI: the Junktown insurgent (team 2, cell ~183,226) must attack a nearby player (hostile.lua + server combat)
+    {
+        net::ChatReq c; c.text = "/tp 183 232";
+        b.Send(net::Pack(c));
+        CritterId bid = b.myId;
+        bool ok = WaitFor({&a, &b}, 25, [&] {
+            for (auto& e : b.combat) if (e.target == bid && e.attacker != bid) return true;
+            return false;
+        });
+        CHECK(ok, "hostile NPC attacked bot B near the insurgent (%zu combat events)", b.combat.size());
+        net::ChatReq h; h.text = "/heal";
+        b.Send(net::Pack(h));
+        net::ChatReq back; back.text = "/tp " + std::to_string(a.pos.x + 3) + " " + std::to_string(a.pos.y);
+        b.Send(net::Pack(back));
+        WaitFor({&a, &b}, 3, [&] { return false; });
+        b.combat.clear();
+    }
+
     // --- combat: A attacks B (both players, team 1; the server does not forbid PvP)
     {
         CritterId bid = b.myId;

@@ -7,8 +7,9 @@ Authoritative server + thin client + Lua scripts, in the spirit of FOnline.
 | Path | Contents |
 |---|---|
 | `engine/common` | `protocol.h` (message ids + structs), `buffer.h` (bounds-checked LE serializer), `types.h` (tile coords, dirs), `lua_bind.h` (sandboxed sol2 state, safe hook calls), `log.h` |
-| `engine/server` | `f3_server`: `World` (Item/Critter/Map + A*), `Server` (ENet, 20 Hz tick, login, validated movement, chat, visibility), `Scripting` (sol2 API + hooks + hot reload) |
+| `engine/server` | `f3_server`: `World` (Item/Critter/Map + A*), `Server` (ENet, 20 Hz tick, login, validated movement, chat, visibility), `Scripting` (sol2 API + hooks + hot reload), `DataStore` + `Game.cpp` (original data, stats, inventory, combat, transitions), `Amx`/`AmxHost` (prototype runner for the original Pawn scripts); see `docs/server-data.md` |
 | `engine/client` | `ClientCore` (net + replicated state, no rendering), `IRenderer` + `RaylibRenderer` (placeholder), `f3_client` (raylib), `f3_testclient` (headless bot) |
+| `tools/dataimport` | `f3_dataimport`: original data -> `gamedata/server` (maps, prototypes, strings, scripts) |
 | `scripts/` | `main.lua`, `npc/*.lua`, `maps/test_map.lua` |
 | `engine/tests/smoke_test.ps1` | starts server + bot, checks round trips (also `ctest`) |
 
@@ -36,7 +37,7 @@ Client: left click = move, Enter = chat, mouse wheel = zoom. Chat commands from 
 ## Protocol
 
 UDP via ENet, channel 0 reliable, packet = `u8 id` + payload (see `protocol.h`).
-Client to server: `Login{version,name}`, `MoveTo{x,y}`, `Chat{text}`, `Ping`.
+Client to server: `Login{version,name}`, `MoveTo{x,y}`, `Chat{text}`, `Ping`; gameplay extension (pickup, equip, use, attack, ...) in `engine/common/protocol_game.h`, documented in `docs/server-data.md`.
 Server to client: `LoginOk`, `LoginFail`, `MapInfo` (size + blocked bitmap), `CritterAdd/Remove/Move`, `ItemAdd/Remove`, `Chat`, `Pong`.
 The client never sends positions, only intent; the server pathfinds (A*), steps one tile per
 `moveTicks` ticks (default 4 = 5 tiles/s), validates every step (bounds, walls, corner cutting, occupancy)
@@ -69,8 +70,7 @@ the same interface; networking and state do not change.
 
 - Square 8-direction tile grid, not hex (isolated in `types.h` and `FindPath`).
 - No client-side prediction; no login timeout for idle connections; no persistence/accounts/passwords.
-- Single map entry point; one map in sample content; no map transitions from scripts besides `teleport`.
-- Items are visible markers only (no pickup/inventory); no combat, stats, or dialogue system.
+- With `gamedata/server` the server runs the 39 real maps (entry points, transitions, NPCs, items, doors, containers, stats, inventory, real-time combat); without it only the Lua test map. Remaining gaps (rounds, skills, dialogue, original-script coverage): `docs/server-data.md`.
 - Visibility diff is O(players x critters) per dirty map; fine for MVP scale.
 - Server-only console is stdin; no remote admin. Scripts are one global Lua state (no per-script sandbox quotas/instruction limits).
 - Client GUI was launched but visually verified only minimally; automated smoke test is headless.
