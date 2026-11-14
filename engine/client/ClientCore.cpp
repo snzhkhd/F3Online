@@ -349,6 +349,7 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
             wait_.maxAp = m.maxAp;
             wait_.apRegenMs = std::max<uint32_t>(1, m.apRegenMs);
             wait_.result = m.result;
+            wait_.action = m.action;
             break;
         }
         case static_cast<uint8_t>(GMsgRt::S2C_MovePath): {

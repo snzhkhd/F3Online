@@ -146,6 +146,7 @@ public:
     bool InBattle() const;
     gnet::ActionResult lastResult() const { return wait_.result; }
     double lastResultTime() const { return wait_.recvLocal; }
+    uint8_t lastAction() const { return wait_.action; }   // request id the last WaitState answered
 
     // ---- sampling for the renderer -----------------------------------------------------------------------
     CritterPose Pose(const ClientCritter& c, double t) const;
@@ -199,6 +200,7 @@ private:
         uint16_t maxAp = 0;
         uint32_t apRegenMs = 20000;
         gnet::ActionResult result = gnet::ActionResult::None;
+        uint8_t action = 0;
     } wait_;
 
     ProtoDb protos_;

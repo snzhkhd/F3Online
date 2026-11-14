@@ -106,7 +106,7 @@ public:
         // initial camera
         cam_ = OrbitCam{};
         cam_.target = map_.startTarget();
-        if (opt_.network) { cam_.fov = 3.2f; cam_.elevation = 50.0f; }
+        if (opt_.network) { cam_.fov = 6.0f; cam_.elevation = 50.0f; }
         if (opt_.hasTarget) cam_.target = Vector3{opt_.targetX, 0, -opt_.targetZ};
         if (opt_.hasCam) { cam_.azimuth = opt_.camAzimuth; cam_.elevation = opt_.camElevation; cam_.fov = opt_.camFov; }
         panOffset_ = Vector3{0, 0, 0};
@@ -130,13 +130,12 @@ public:
         in.escape = IsKeyPressed(KEY_ESCAPE);
         in.shift = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
         in.ctrl = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
-        const int modeKeys[5] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR, KEY_FIVE};
-        for (int i = 0; i < 5; ++i) in.keyMode[i] = IsKeyPressed(modeKeys[i]);
+        in.keyAttack = IsKeyPressed(KEY_A);
         in.keyInventory = IsKeyPressed(KEY_I);
         in.keyChar = IsKeyPressed(KEY_C);
         in.keyExamine = IsKeyPressed(KEY_X);
         in.keyStop = IsKeyPressed(KEY_TAB);
-        // right button: a click (cycle cursor mode) unless the mouse was dragged (camera orbit)
+        // right button: a click (toggle cursor mode) unless the mouse was dragged (camera orbit)
         if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) { rmbDown_ = true; rmbTravel_ = 0; }
         if (rmbDown_) {
             Vector2 d = GetMouseDelta();
@@ -421,6 +420,12 @@ private:
         const Texture2D* skin = nullptr;
     };
 
+    // Puts a renderer-space position on the walkable ground surface (continuous height field of the level geometry).
+    Vector3 OnGround(Vector3 w, float lift = 0.0f) const {
+        w.y = map_.GroundHeight(w.x, w.z) + lift;
+        return w;
+    }
+
     bool PickAt(int sx, int sy, Vector3& hit) const {
         Ray r = GetScreenToWorldRay(Vector2{static_cast<float>(sx), static_cast<float>(sy)}, lastCam_);
         return map_.PickGround(r, hit);
@@ -438,10 +443,11 @@ private:
         const Vector3 fwd{-std::sin(az), 0, -std::cos(az)}, right{std::cos(az), 0, -std::sin(az)};
         Vector3 move{0, 0, 0};
         const float speed = cam_.fov * 3.5f * (IsKeyDown(KEY_LEFT_SHIFT) ? 3.0f : 1.0f);
-        if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) move = Vector3Add(move, fwd);
-        if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) move = Vector3Subtract(move, fwd);
-        if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) move = Vector3Add(move, right);
-        if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) move = Vector3Subtract(move, right);
+        const bool wasd = s.viewer;   // in the game A is the attack cursor; WASD pans only in the map viewer
+        if ((wasd && IsKeyDown(KEY_W)) || IsKeyDown(KEY_UP)) move = Vector3Add(move, fwd);
+        if ((wasd && IsKeyDown(KEY_S)) || IsKeyDown(KEY_DOWN)) move = Vector3Subtract(move, fwd);
+        if ((wasd && IsKeyDown(KEY_D)) || IsKeyDown(KEY_RIGHT)) move = Vector3Add(move, right);
+        if ((wasd && IsKeyDown(KEY_A)) || IsKeyDown(KEY_LEFT)) move = Vector3Subtract(move, right);
         move = Vector3Scale(move, speed * dt);
         if (IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) {
             float k = cam_.fov * 0.0105f;
@@ -482,7 +488,7 @@ private:
         } else if (c.hitT >= 0 && clipOf(ClipKind::Hit) && now - c.hitT < clipOf(ClipKind::Hit)->duration) {
             want = ClipKind::Hit; start = c.hitT;
         } else if (sc.pose.moving) {
-            want = (c.run || sc.pose.speed > 4.5f) ? ClipKind::Run : ClipKind::Walk;
+            want = (c.run || sc.pose.speed > 13.5f) ? ClipKind::Run : ClipKind::Walk;
         }
         const bool oneShot = want == ClipKind::Attack || want == ClipKind::Hit || want == ClipKind::Death;
         const bool changed = want != a.cur || (oneShot && std::fabs(start - a.curStart) > 0.01);
@@ -496,8 +502,8 @@ private:
             const Clip* cl = clipOf(k);
             if (!cl) return 0;
             float rate = 1.0f;
-            if (k == ClipKind::Walk) rate = std::clamp(sc.pose.speed / 3.0f, 0.6f, 1.8f);
-            else if (k == ClipKind::Run) rate = std::clamp(sc.pose.speed / 7.0f, 0.7f, 1.6f);
+            if (k == ClipKind::Walk) rate = std::clamp(sc.pose.speed / 9.6f, 0.5f, 1.8f);   // clip stride ~4.8 units/s = 9.6 cells/s
+            else if (k == ClipKind::Run) rate = std::clamp(sc.pose.speed / 19.5f, 0.6f, 1.6f);   // ~9.8 units/s
             float t = static_cast<float>((now - st)) * rate;
             const bool loop = k == ClipKind::Idle || k == ClipKind::Walk || k == ClipKind::Run;
             if (loop) t = std::fmod(std::max(0.0f, t), cl->duration);
@@ -548,7 +554,7 @@ private:
         const float dt = GetFrameTime();
         HandleCameraInput(s, dt);
         if (follow_) {
-            Vector3 w = map_.TileToWorld(s.cameraX, s.cameraY, tw, th);
+            Vector3 w = OnGround(map_.TileToWorld(s.cameraX, s.cameraY, tw, th));
             cam_.target = Vector3Add(w, panOffset_);   // exact follow: the critter pose is already smooth
         }
         lastCam_ = cam_.Build();
@@ -587,12 +593,12 @@ private:
                             int cx = hx + dx, cy = hy + dy;
                             if (cx < 0 || cy < 0 || (tw > 0 && cx >= tw) || (th > 0 && cy >= th)) continue;
                             bool blocked = nm ? nm->IsBlocked(cx, cy) : map_.Blocked(cx, cy);
-                            Vector3 c = map_.TileToWorld(static_cast<float>(cx), static_cast<float>(cy), tw, th, hover_.y + 0.04f);
+                            Vector3 c = OnGround(map_.TileToWorld(static_cast<float>(cx), static_cast<float>(cy), tw, th), 0.04f);
                             DrawPlane(c, Vector2{cw * 0.94f, ch * 0.94f}, blocked ? Color{220, 40, 40, 110} : Color{60, 220, 90, 40});
                         }
                 }
                 if (!hoverCrit_ && !hoverItem_) {
-                    Vector3 c = map_.TileToWorld(static_cast<float>(hx), static_cast<float>(hy), tw, th, hover_.y + 0.06f);
+                    Vector3 c = OnGround(map_.TileToWorld(static_cast<float>(hx), static_cast<float>(hy), tw, th), 0.06f);
                     DrawPlane(c, Vector2{cw, ch}, Color{255, 255, 255, 120});
                 }
             }
@@ -623,14 +629,21 @@ private:
         if (c.pid < 0) proto = nullptr;
         if (proto && proto->isStatic) return;  // barrels, windows: baked into the map
         std::string model = proto && !proto->model.empty() ? proto->model : "HumMNor";
-        Vector3 w = map_.TileToWorld(sc.x, sc.y, tw, th);
+        Vector3 w = OnGround(map_.TileToWorld(sc.x, sc.y, tw, th));
         seen.insert(c.id);
 
         Visual& v = visuals_[c.id];
-        if (v.model != model) {
+        Appearance app;
+        app.model = model;
+        if (proto) {
+            app.skin = proto->skin;
+            for (const WornPart& w : proto->worn) app.worn.emplace_back(w.part, w.tex);
+        }
+        const std::string appKey = app.Key();
+        if (v.model != appKey) {
             v = Visual{};
-            v.model = model;
-            if (SkinModel* sm = rigs_->Model(model)) v.inst = std::make_unique<SkinnedInstance>(sm);
+            v.model = appKey;
+            if (SkinModel* sm = rigs_->Model(app)) v.inst = std::make_unique<SkinnedInstance>(sm);
             else v.staticModel = assets_->Model(model);
             const std::string& skinName = proto ? proto->skin : std::string();
             if (!skinName.empty()) v.skin = assets_->Texture(skinName);
@@ -649,53 +662,53 @@ private:
         Color tint = WHITE;
         if (v.inst) MapView::DrawModel(*assets_, v.inst->asset(), m, tint, v.skin, dopt_, true);
         else if (v.staticModel) MapView::DrawModel(*assets_, *v.staticModel, m, tint, v.skin, dopt_, true);
-        else DrawCylinder(w, 0.35f, 0.35f, 1.8f, 10, Unpack(c.color));
+        else DrawCylinder(w, 1.0f, 1.0f, 6.0f, 10, Unpack(c.color));
 
         const bool hovered = hoverCrit_ == c.id;
         if (hovered || sc.isSelf) {
             Color rc = sc.isSelf ? Color{80, 220, 120, 200} : (c.kind == CritterKind::Npc ? Color{255, 90, 70, 220} : Color{255, 220, 80, 220});
-            if (!sc.isSelf || hovered) DrawCircle3D(Vector3{w.x, w.y + 0.03f, w.z}, hovered ? 0.62f : 0.5f, Vector3{1, 0, 0}, 90.0f, rc);
+            if (!sc.isSelf || hovered) DrawCircle3D(Vector3{w.x, w.y + 0.05f, w.z}, hovered ? 1.7f : 1.4f, Vector3{1, 0, 0}, 90.0f, rc);
         }
-        pickRects_.push_back(PickRect{ProjectRect(w, height, 0.5f), true, c.id, Vector3Distance(w, lastCam_.position)});
-        labels_.push_back({Vector3{w.x, w.y + height + 0.25f, w.z}, c.name,
+        pickRects_.push_back(PickRect{ProjectRect(w, height, 0.45f), true, c.id, Vector3Distance(w, lastCam_.position)});
+        labels_.push_back({Vector3{w.x, w.y + height + 0.7f, w.z}, c.name,
                            c.kind == CritterKind::Npc ? Color{255, 220, 140, 255} : RAYWHITE, c.id, c.hp, c.maxHp, c.dead});
         critterWorld_[c.id] = Vector3{w.x, w.y + height * 0.8f, w.z};
     }
 
     void DrawItem(const SceneView& s, const ClientItem& it, int tw, int th) {
         const ProtoInfo* proto = s.protos ? s.protos->ByPid(it.pid) : nullptr;
-        Vector3 w = map_.TileToWorld(static_cast<float>(it.pos.x), static_cast<float>(it.pos.y), tw, th, 0.0f);
+        Vector3 w = OnGround(map_.TileToWorld(static_cast<float>(it.pos.x), static_cast<float>(it.pos.y), tw, th));
         bool drawn = false;
-        float height = 0.7f;
+        float height = 2.0f;
         if (it.kind == gnet::ObjectKind::Ground) {
             const ModelAsset* ma = proto && !proto->model.empty() ? assets_->Model(proto->model) : nullptr;
             const float k = MapView::modelScale;
             if (ma) {
-                Matrix m = MatrixMultiply(MatrixScale(k, k, k), MatrixTranslate(w.x, 0.08f, w.z));
+                Matrix m = MatrixMultiply(MatrixScale(k, k, k), MatrixTranslate(w.x, w.y + 0.08f, w.z));
                 MapView::DrawModel(*assets_, *ma, m, WHITE, nullptr, dopt_, true);
                 drawn = true;
-                height = std::max(0.4f, (ma->bmax.y - ma->bmin.y) * k);
+                height = std::max(1.2f, (ma->bmax.y - ma->bmin.y) * k);
             }
-            if (!drawn) DrawCube(Vector3{w.x, 0.2f, w.z}, 0.4f, 0.4f, 0.4f, Color{240, 210, 70, 255});
+            if (!drawn) DrawCube(Vector3{w.x, w.y + 0.5f, w.z}, 1.0f, 1.0f, 1.0f, Color{240, 210, 70, 255});
         } else {
             // doors, containers and usables are baked into the map; a door has no open pose, so hide it while open
             auto d = doorState_.find(it.id);
             const bool wasOpen = d != doorState_.end() && d->second;
             if (it.kind == gnet::ObjectKind::Door && wasOpen != it.open) { map_.SetDoorOpen(w, it.open); doorState_[it.id] = it.open; }
             else if (d == doorState_.end()) doorState_[it.id] = false;
-            height = 1.6f;
+            height = 4.5f;
         }
         const bool hovered = hoverItem_ == it.id;
         if (hovered) {
             Color rc = it.kind == gnet::ObjectKind::Ground ? Color{255, 220, 80, 230} : Color{120, 200, 255, 230};
-            DrawCircle3D(Vector3{w.x, 0.05f, w.z}, 0.55f, Vector3{1, 0, 0}, 90.0f, rc);
+            DrawCircle3D(Vector3{w.x, w.y + 0.05f, w.z}, 1.4f, Vector3{1, 0, 0}, 90.0f, rc);
         }
-        Rectangle r = ProjectRect(Vector3{w.x, 0.0f, w.z}, height, 1.0f);
+        Rectangle r = ProjectRect(Vector3{w.x, w.y, w.z}, height, 1.0f);
         r.width = std::max(r.width, 26.0f);
         r.height = std::max(r.height, 26.0f);
         pickRects_.push_back(PickRect{r, false, it.id, Vector3Distance(w, lastCam_.position) + 0.5f});
         if (hovered || (it.kind == gnet::ObjectKind::Ground)) {
-            labels_.push_back({Vector3{w.x, 0.55f, w.z}, hovered ? it.name : std::string(), Color{255, 230, 140, 255}, 0, -1, -1, false});
+            labels_.push_back({Vector3{w.x, w.y + 1.6f, w.z}, hovered ? it.name : std::string(), Color{255, 230, 140, 255}, 0, -1, -1, false});
         }
     }
 
@@ -744,6 +757,7 @@ private:
     static Color ModeColor(CursorMode m) {
         switch (m) {
             case CursorMode::Move: return Color{120, 220, 120, 255};
+            case CursorMode::Examine: return Color{190, 190, 255, 255};
             case CursorMode::Attack: return Color{255, 90, 80, 255};
             case CursorMode::Use: return Color{120, 190, 255, 255};
             case CursorMode::Talk: return Color{255, 220, 120, 255};
@@ -761,14 +775,16 @@ private:
         uiRects_.push_back(hud);
 
         // mode buttons
-        const char* names[] = {"1 Move", "2 Attack", "3 Use", "4 Talk", "5 Pickup"};
-        for (int i = 0; i < 5; ++i) {
+        // only Move, Examine and Attack are manual; Pickup / Use / Talk follow the mouse
+        const char* names[] = {"Move", "Examine", "A Attack"};
+        for (int i = 0; i < 3; ++i) {
             Rectangle b{hud.x + 8 + i * 74.0f, hud.y + 8, 70, 24};
             if (Button(b, names[i], st.mode == static_cast<CursorMode>(i)))
                 ui.commands->push_back(UiCommand{UiCommand::SetMode, static_cast<uint32_t>(i), 0});
         }
-        if (Button(Rectangle{hud.x + 8 + 5 * 74.0f + 6, hud.y + 8, 66, 24}, "I Inv", st.inventory)) ui.commands->push_back(UiCommand{UiCommand::ToggleInventory, 0, 0});
-        if (Button(Rectangle{hud.x + 8 + 5 * 74.0f + 78, hud.y + 8, 66, 24}, "C Char", st.charSheet)) ui.commands->push_back(UiCommand{UiCommand::ToggleChar, 0, 0});
+        DrawText("auto: pickup / use / talk", static_cast<int>(hud.x) + 8 + 3 * 74, static_cast<int>(hud.y) + 14, 10, Color{140, 140, 150, 255});
+        if (Button(Rectangle{hud.x + 420, hud.y + 8, 56, 24}, "I Inv", st.inventory)) ui.commands->push_back(UiCommand{UiCommand::ToggleInventory, 0, 0});
+        if (Button(Rectangle{hud.x + 484, hud.y + 8, 56, 24}, "C Char", st.charSheet)) ui.commands->push_back(UiCommand{UiCommand::ToggleChar, 0, 0});
 
         // HP
         const ClientCritter* me = core.self();
@@ -831,7 +847,8 @@ private:
         DrawRectangleLinesEx(bt, 1, locked ? Color{200, 60, 60, 255} : Color{80, 60, 60, 255});
         if (core.waitKnown() && core.lastResult() != gnet::ActionResult::Ok && core.lastResult() != gnet::ActionResult::None &&
             ui.now - core.lastResultTime() < 1.5) {
-            const char* why = core.lastResult() == gnet::ActionResult::Busy ? "busy" : core.lastResult() == gnet::ActionResult::NoAp ? "not enough AP" :
+            const bool isMove = core.lastAction() == static_cast<uint8_t>(GMsgRt::C2S_MoveToF) || core.lastAction() == static_cast<uint8_t>(Msg::C2S_MoveTo);
+            const char* why = core.lastResult() == gnet::ActionResult::Busy ? (isMove ? "busy - walking as soon as ready" : "busy") : core.lastResult() == gnet::ActionResult::NoAp ? "not enough AP" :
                               core.lastResult() == gnet::ActionResult::Dead ? "dead" : "invalid";
             DrawText(why, static_cast<int>(hud.x) + 8, static_cast<int>(hud.y) - 20, 16, Color{255, 120, 100, 255});
         }
@@ -924,10 +941,11 @@ private:
     void DrawCursorInfo(const UiView& ui) {
         const Vector2 mp = GetMousePosition();
         if (IsOverUi(static_cast<int>(mp.x), static_cast<int>(mp.y))) return;
-        const CursorMode mode = ui.state->mode;
-        std::string t = std::string("[") + CursorModeName(mode) + "]";
         PickResult pr;
-        if (Pick(static_cast<int>(mp.x), static_cast<int>(mp.y), pr)) {
+        const bool picked = Pick(static_cast<int>(mp.x), static_cast<int>(mp.y), pr);
+        const CursorMode mode = picked ? ResolveCursor(*ui.core, ui.state->mode, pr) : ui.state->mode;
+        std::string t = std::string("[") + CursorModeName(mode) + "]";
+        if (picked) {
             if (pr.kind == PickResult::Critter) {
                 if (const ClientCritter* c = ui.core->Find(pr.critter)) {
                     t += " " + c->name;

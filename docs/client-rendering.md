@@ -118,3 +118,11 @@ Vault: 47 k triangles. All geometry is static GPU meshes; no per-frame allocatio
 * Ground picking uses up-facing triangles only; multi-storey interiors pick the first hit from the camera.
 * Original material state (ADD blends, fog, per-material alpha ref) is approximated by the flag mapping.
 * 39 resources typed as TGA are actually BMP and are not decoded.
+
+## Critter appearance, cursor, ground (update)
+
+* `modelScale` is 1.0 (world unit about 1 foot, human about 6 units). Critters stand on a client height field (`MapView::GroundHeight`) built from up-facing tre triangles (0.25 unit samples, lowest layer, hole fill, 9x9 median, two [1 2 1] blurs, bilinear lookup); used for drawing, camera follow and picking. `F3_DUMP_HF=<file.pgm>` dumps it.
+* Human skin: `Appearance{model, skin, worn}` composes a 512x512 atlas from the part textures (slots: skin 0,0/256; Bod 0,256/256; Sho 256,0/128; Hea 384,0/128; Han 384,128/128; Fee 384,256/128; Bac 256,256/128; Hai 256,128/64; Pon 288,224/32; Bea 256,192/32; Mus 256,224/32; Eye 320,192/64). Parts come from proto `sockets` plus worn armor (part names in `item.raw_hex`, `_LG` suffix = texture of preceding part). Base groups listed in a worn piece's `hides` (B3D node token 0x1b) are skipped.
+* Cursor: RMB toggles Move <-> Examine; key A enters Attack (RMB/Esc leaves); Pickup / Use / Talk are automatic on hover (`ResolveCursor`); keys 1-5 removed. WASD pans only in the viewer.
+* Walk/Run clip rates follow server speed (9/18 cells/s).
+* Known gaps: a few wall rims remain in the height field; no dialogue engine (Talk examines).

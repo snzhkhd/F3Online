@@ -28,7 +28,8 @@ static const char* kUsage =
     "test:      --shot FILE.png [--shot-frame N] [--shot-exit]   --shots PREFIX --shot-times t0,t1,.. [--shot-exit]\n"
     "           --autowalk (random walks)  --trace FILE.csv  --run-seconds N\n"
     "           --cam AZ,EL,FOV  --target X,Z  --clipy Y  --noentities  --modelscale S\n"
-    "controls:  LMB act, RMB click cycles cursor mode (move/attack/use/talk/pickup) or drag to orbit, keys 1-5 modes,\n"
+    "controls:  LMB act, RMB click toggles Move/Examine cursor (A = attack cursor, RMB/Esc back) or drag to orbit;\n"
+    "           pickup / use / talk cursors switch by themselves over items / usable objects / NPCs,\n"
     "           I inventory, C character, X examine, Tab stop attack, Enter chat, wheel zoom, Shift+LMB = walk.\n";
 
 namespace {
@@ -221,9 +222,8 @@ int main(int argc, char** argv) {
         }
 
         // ---- hotkeys and mouse ----
-        auto resetMode = [&]() { if (uiState.mode != CursorMode::Attack) uiState.mode = CursorMode::Move; };
         if (!typing && inGame) {
-            for (int i = 0; i < 5; ++i) if (in.keyMode[i]) uiState.mode = static_cast<CursorMode>(i);
+            if (in.keyAttack) uiState.mode = CursorMode::Attack;
             if (in.keyInventory) uiState.inventory = !uiState.inventory;
             if (in.keyChar) uiState.charSheet = !uiState.charSheet;
             if (in.keyStop) core.Attack(0);
@@ -232,8 +232,8 @@ int main(int argc, char** argv) {
                 else if (uiState.inventory || uiState.charSheet) uiState.inventory = uiState.charSheet = false;
                 else uiState.mode = CursorMode::Move;
             }
-            if (in.mouseRightClick && !renderer->IsOverUi(in.mouseX, in.mouseY))
-                uiState.mode = static_cast<CursorMode>((static_cast<int>(uiState.mode) + 1) % static_cast<int>(CursorMode::Count));
+            if (in.mouseRightClick && !renderer->IsOverUi(in.mouseX, in.mouseY))   // Move <-> Examine; Attack -> Move
+                uiState.mode = uiState.mode == CursorMode::Move ? CursorMode::Examine : CursorMode::Move;
 
             PickResult pr;
             const bool over = renderer->IsOverUi(in.mouseX, in.mouseY);
@@ -252,29 +252,26 @@ int main(int argc, char** argv) {
                     auto it = core.items().find(pr.item);
                     if (it != core.items().end()) item = &it->second;
                 }
-                switch (uiState.mode) {
+                switch (ResolveCursor(core, uiState.mode, pr)) {
                     case CursorMode::Move:
                         moveTo();
+                        break;
+                    case CursorMode::Examine:
+                        if (pr.kind == PickResult::Critter) core.Examine(pr.critter, true);
+                        else if (item) core.Examine(item->id, false);
                         break;
                     case CursorMode::Attack:
                         if (pr.kind == PickResult::Critter && pr.critter != core.selfId()) core.Attack(pr.critter);
                         else moveTo();
                         break;
                     case CursorMode::Use:
-                        if (item) { core.Use(item->id); resetMode(); }
-                        else if (pr.kind == PickResult::Critter) { core.Examine(pr.critter, true); resetMode(); }
-                        else moveTo();
+                        if (item) core.Use(item->id);
                         break;
                     case CursorMode::Talk:
-                        if (pr.kind == PickResult::Critter) {
-                            core.Examine(pr.critter, true);   // no dialogue engine on the server yet: examine instead
-                            resetMode();
-                        } else moveTo();
+                        core.Examine(pr.critter, true);   // no dialogue engine on the server yet: examine instead
                         break;
                     case CursorMode::Pickup:
-                        if (item && item->kind == gnet::ObjectKind::Ground) { core.PickUp(item->id); resetMode(); }
-                        else if (item) { core.Use(item->id); resetMode(); }
-                        else moveTo();
+                        if (item) core.PickUp(item->id);
                         break;
                     default: break;
                 }
@@ -394,7 +391,7 @@ int main(int argc, char** argv) {
         // ---- UI commands produced while drawing the HUD ----
         for (const UiCommand& c : commands) {
             switch (c.type) {
-                case UiCommand::SetMode: uiState.mode = static_cast<CursorMode>(std::min<uint32_t>(c.a, 4)); break;
+                case UiCommand::SetMode: uiState.mode = c.a == 1 ? CursorMode::Examine : c.a == 2 ? CursorMode::Attack : CursorMode::Move; break;
                 case UiCommand::ToggleInventory: uiState.inventory = !uiState.inventory; break;
                 case UiCommand::ToggleChar: uiState.charSheet = !uiState.charSheet; break;
                 case UiCommand::Equip: core.Equip(c.a, c.b != 0); break;

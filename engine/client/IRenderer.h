@@ -12,11 +12,15 @@
 
 namespace f3 {
 
-// FOnline-style cursor modes; the right mouse button cycles through them.
-enum class CursorMode : int { Move = 0, Attack, Use, Talk, Pickup, Count };
+// FOnline-style cursor. Only Move, Examine and Attack are chosen by the player (UiState::mode): RMB toggles
+// Move <-> Examine, key A enters Attack, RMB or Esc leaves it. Use, Talk and Pickup are never selected by hand: with the
+// Move cursor they appear by themselves while the mouse hovers a usable object / an NPC with a dialogue / a loose item
+// (see ResolveCursor).
+enum class CursorMode : int { Move = 0, Examine, Attack, Use, Talk, Pickup, Count };
 inline const char* CursorModeName(CursorMode m) {
     switch (m) {
         case CursorMode::Move: return "Move";
+        case CursorMode::Examine: return "Examine";
         case CursorMode::Attack: return "Attack";
         case CursorMode::Use: return "Use";
         case CursorMode::Talk: return "Talk";
@@ -33,7 +37,7 @@ struct FrameInput {
     std::string typed;  // UTF-8 characters typed this frame
     bool enter = false, backspace = false, escape = false;
     bool shift = false, ctrl = false;
-    bool keyMode[5] = {};             // 1..5 select a cursor mode
+    bool keyAttack = false;           // A: attack cursor
     bool keyInventory = false;        // I
     bool keyChar = false;             // C
     bool keyExamine = false;          // X
@@ -85,7 +89,7 @@ struct UiCommand {
 };
 
 struct UiState {
-    CursorMode mode = CursorMode::Move;
+    CursorMode mode = CursorMode::Move;   // chosen by the player: Move, Examine or Attack
     bool inventory = false;
     bool charSheet = false;
 };
@@ -109,6 +113,29 @@ struct PickResult {
     float fx = 0, fy = 0;  // ground position, tile units (tile centre = integer)
     TilePos tile;
 };
+
+// The cursor the game shows (and acts with) for the thing under the mouse, given the cursor the player selected.
+// Attack and Examine are sticky and apply to everything; the Move cursor adapts to the target:
+// loose item -> Pickup, door / container / usable -> Use, NPC with a dialogue -> Talk, other critters -> Examine.
+inline CursorMode ResolveCursor(const ClientCore& core, CursorMode manual, const PickResult& pr) {
+    if (manual == CursorMode::Attack || manual == CursorMode::Examine) return manual;
+    if (pr.kind == PickResult::Item) {
+        auto it = core.items().find(pr.item);
+        if (it == core.items().end()) return CursorMode::Examine;
+        return it->second.kind == gnet::ObjectKind::Ground ? CursorMode::Pickup : CursorMode::Use;
+    }
+    if (pr.kind == PickResult::Critter) {
+        if (pr.critter == core.selfId()) return CursorMode::Move;
+        const ClientCritter* c = core.Find(pr.critter);
+        if (!c || c->dead) return CursorMode::Examine;
+        if (c->kind == CritterKind::Npc && c->pid >= 0) {
+            const ProtoInfo* p = core.protos().ByPid(static_cast<uint32_t>(c->pid));
+            if (p && p->hasDialog) return CursorMode::Talk;
+        }
+        return CursorMode::Examine;
+    }
+    return CursorMode::Move;
+}
 
 class IRenderer {
 public:
