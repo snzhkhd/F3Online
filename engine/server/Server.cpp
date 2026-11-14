@@ -7,6 +7,7 @@
 #include <cstring>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 #include "Scripting.h"
 #include "common/log.h"
 
@@ -67,6 +68,18 @@ bool Server::Init() {
     host_ = enet_host_create(&addr, static_cast<size_t>(cfg_.maxClients), 2, 0, 0);
     if (!host_) { log::Error("cannot listen on port %u (already in use?)", cfg_.port); enet_deinitialize(); return false; }
 
+    if (!cfg_.noData) {
+        std::filesystem::path dd = cfg_.dataDir;
+        std::string err;
+        if (!dd.empty() && !std::filesystem::exists(dd / "manifest.json")) {
+            log::Error("data dir %s has no manifest.json (run f3_dataimport)", dd.string().c_str());
+            return false;
+        }
+        if (!dd.empty()) {
+            if (!data_.Load(dd, err)) { log::Error("data: %s", err.c_str()); return false; }
+            if (!LoadWorldData()) { log::Error("data: no maps could be loaded"); return false; }
+        }
+    }
     scripting_ = std::make_unique<Scripting>(*this, cfg_.scriptsDir);
     if (!scripting_->Load()) { log::Error("scripts failed to load from %s", cfg_.scriptsDir.string().c_str()); return false; }
     if (!world_.FirstMap()) { log::Error("scripts created no map (call create_map in on_init)"); return false; }
@@ -162,7 +175,13 @@ void Server::HandlePacket(ENetPeer* peer, const uint8_t* data, size_t len) {
             if (ok) SendRaw(peer, net::Pack(net::Pong{m.token}));
             break;
         }
-        default: ok = false; break;
+        default:
+            if (static_cast<uint8_t>(id) >= 20 && static_cast<uint8_t>(id) < 40) {
+                if (c) HandleGamePacket(peer, c, static_cast<GMsg>(id), b, ok);
+            } else {
+                ok = false;
+            }
+            break;
     }
     if (!ok) {
         log::Warn("malformed/unknown packet (id %u), disconnecting peer", static_cast<unsigned>(id));
@@ -179,15 +198,24 @@ void Server::OnLogin(ENetPeer* peer, const net::LoginReq& req) {
     if (req.version != kProtocolVersion) return fail("protocol version mismatch");
     if (!ValidName(req.name)) return fail("invalid name (2-16 chars, letters/digits/_)");
     if (world_.FindPlayerByName(req.name)) return fail("name already in use");
-    Map* m = world_.FirstMap();
+    Map* m = data_.Loaded() ? world_.FindMapByName(data_.StartMap()) : nullptr;
+    if (!m) m = world_.FirstMap();
     if (!m) return fail("server has no map");
 
     Critter* c = world_.CreateCritter(req.name, CritterKind::Player);
     c->peer = peer;
     c->color = ColorFromName(req.name);
     peer->data = reinterpret_cast<void*>(static_cast<uintptr_t>(c->id));
+    if (data_.Loaded()) {
+        if (const Proto* pc = data_.FindProto("Default_PC.CRT")) InitCritterStats(*c, *pc);
+        c->team = 1;
+        c->script.clear();
+        c->dialog.clear();
+    }
     TilePos spot = m->spawn;
-    m->FindFreeNear(m->spawn, 10, spot);
+    Dir dir = c->dir;
+    if (!PickEntryPos(*m, data_.Loaded() ? data_.StartEntry() : 0, spot, dir)) m->FindFreeNear(m->spawn, 10, spot);
+    c->dir = dir;
     PlaceCritter(*c, *m, spot);
 
     net::LoginOk ok;
@@ -196,6 +224,8 @@ void Server::OnLogin(ENetPeer* peer, const net::LoginReq& req) {
     ok.moveTicks = static_cast<uint16_t>(cfg_.moveTicks);
     SendMsg(*c, ok);
     SendMapInfo(*c, *m);
+    SendStats(*c);
+    SendInventory(*c);
 
     CritterId cid = c->id;
     if (!scripting_->OnLogin(*c)) {
@@ -226,7 +256,9 @@ void Server::OnMoveReq(Critter& c, const net::MoveToReq& req) {
     if (c.msgBudget <= 0) return;
     --c.msgBudget;
     Map* m = world_.GetMap(c.mapId);
-    if (!m) return;
+    if (!m || c.dead) return;
+    c.pending = Pending{};
+    c.target = 0;
     TilePos target{req.x, req.y};
     if (!MoveCritterTo(c, target)) {
         // Tell the client where it really is so it can drop any local assumption.
@@ -367,9 +399,9 @@ void Server::Say(Critter& speaker, const std::string& text) {
     ByteBuffer buf = net::Pack(msg);
     std::vector<CritterId> npcsNear;
     for (Critter* p : m->critters) {
-        if (TileDist(p->pos, speaker.pos) > kViewRadius && p != &speaker) continue;
+        if (TileDist(p->pos, speaker.pos) > kViewCells && p != &speaker) continue;
         if (p->IsPlayer()) Send(*p, buf);
-        else if (p != &speaker && TileDist(p->pos, speaker.pos) <= 12) npcsNear.push_back(p->id);
+        else if (p != &speaker && TileDist(p->pos, speaker.pos) <= 24) npcsNear.push_back(p->id);
     }
     // NPCs only react to players: avoids NPC<->NPC feedback loops.
     if (speaker.IsPlayer()) {
@@ -397,7 +429,11 @@ void Server::Broadcast(const std::string& text) {
 
 void Server::StepCritter(Critter& c) {
     if (c.moveCooldown > 0) { --c.moveCooldown; return; }
-    if (c.path.empty()) return;
+    if (c.dead || c.isStatic) { c.path.clear(); return; }
+    if (c.path.empty()) {
+        if (c.pending.type != PendingType::None) RunPending(c);
+        return;
+    }
     Map* m = world_.GetMap(c.mapId);
     if (!m) return;
     TilePos next = c.path.front();
@@ -420,8 +456,8 @@ void Server::StepCritter(Critter& c) {
         if (p->IsPlayer() && (p == &c || p->visCritters.count(c.id))) Send(*p, buf);
 
     CritterId id = c.id;
-    scripting_->OnCritterMove(c, from);  // c may be invalid after this
-    (void)id;
+    CheckRegions(c);  // may move the player to another map
+    if (Critter* cc = world_.GetCritter(id)) scripting_->OnCritterMove(*cc, from);
 }
 
 void Server::UpdateVisibility(Map& m) {
@@ -430,24 +466,31 @@ void Server::UpdateVisibility(Map& m) {
         if (!p->IsPlayer()) continue;
         std::unordered_set<CritterId> now;
         for (Critter* c : m.critters)
-            if (c == p || TileDist(c->pos, p->pos) <= kViewRadius) now.insert(c->id);
+            if (c == p || TileDist(c->pos, p->pos) <= kViewCells) now.insert(c->id);
         // self first so the client always knows who it is before anyone else
         if (!p->visCritters.count(p->id)) SendMsg(*p, MakeAdd(*p));
         for (Critter* c : m.critters)
-            if (c != p && now.count(c->id) && !p->visCritters.count(c->id)) SendMsg(*p, MakeAdd(*c));
+            if (c != p && now.count(c->id) && !p->visCritters.count(c->id)) {
+                SendMsg(*p, MakeAdd(*c));
+                if (c->dead || c->hp != c->maxHp) {
+                    gnet::CritterState st{c->id, static_cast<int16_t>(c->hp), static_cast<int16_t>(c->maxHp), static_cast<uint8_t>(c->dead)};
+                    Send(*p, gnet::PackG(st));
+                }
+            }
         for (CritterId old : p->visCritters)
             if (!now.count(old)) SendMsg(*p, net::CritterRemove{old});
         p->visCritters = std::move(now);
 
         std::unordered_set<ItemId> nowItems;
         for (auto& [iid, it] : m.items)
-            if (TileDist(it.pos, p->pos) <= kViewRadius) nowItems.insert(iid);
+            if (TileDist(it.pos, p->pos) <= kViewCells) nowItems.insert(iid);
         for (ItemId iid : nowItems)
             if (!p->visItems.count(iid)) {
                 const Item& it = m.items[iid];
                 net::ItemAdd ia;
                 ia.id = it.id; ia.pid = it.pid; ia.name = it.name; ia.x = it.pos.x; ia.y = it.pos.y;
                 SendMsg(*p, ia);
+                if (it.kind != ObjKind::Ground) SendObjectInfo(*p, it);
             }
         for (ItemId old : p->visItems)
             if (!nowItems.count(old)) SendMsg(*p, net::ItemRemove{old});
@@ -461,15 +504,28 @@ void Server::DoTick() {
     ids.reserve(world_.Critters().size());
     for (auto& [id, c] : world_.Critters()) ids.push_back(id);
 
+    // Only maps with players are simulated (NPC scripts, combat, movement).
+    std::unordered_set<MapId> active;
+    for (auto& m : world_.Maps())
+        for (Critter* p : m->critters)
+            if (p->IsPlayer()) { active.insert(m->id); break; }
+
     for (CritterId id : ids) {
         Critter* c = world_.GetCritter(id);
         if (!c || c->mapId == 0) continue;
         if (c->IsPlayer() && tick_ % 5 == 0 && c->msgBudget < 10) ++c->msgBudget;
+        if (!active.count(c->mapId)) continue;
+        if (c->dead) {
+            if (c->IsPlayer() && tick_ - c->deadSince >= static_cast<uint64_t>(cfg_.tickRate) * 5) Respawn(*c);
+            else if (c->IsNpc() && tick_ - c->deadSince >= static_cast<uint64_t>(cfg_.tickRate) * 90) RemoveCritter(id);
+            continue;
+        }
         StepCritter(*c);
+        if (Critter* cc = world_.GetCritter(id)) TickCombat(*cc);
     }
     for (CritterId id : ids) {
         Critter* c = world_.GetCritter(id);
-        if (c && c->IsNpc() && c->mapId != 0) scripting_->OnNpcTick(*c, tick_);
+        if (c && c->IsNpc() && c->mapId != 0 && !c->dead && active.count(c->mapId)) scripting_->OnNpcTick(*c, tick_);
     }
     scripting_->OnTick(tick_);
 

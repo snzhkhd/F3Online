@@ -9,6 +9,9 @@
 //   on_critter_move(critter, from_x, from_y)   after every validated step (players and npcs)
 //   on_chat(critter, text)       return false to swallow, a string to replace the text
 //   on_tick(tick)                every server tick
+// Gameplay hooks (all optional): on_death(c, killer), on_damage(c, attacker, amount), on_pickup(c, obj_id, proto_key),
+//   on_use(c, obj_id, proto_key), on_region_enter(c, script), on_region_leave(c, script)
+// pick_npc_type(npc) -> string chooses npc_types[...] for data-spawned critters (once, on their first tick).
 // NPC behaviours live in the global table npc_types[name] = { on_tick(npc, tick), on_heard(npc, speaker, text) }.
 //
 // Critter/Map objects handed to Lua are raw handles: use them inside the hook that
@@ -18,6 +21,7 @@
 #include <string>
 #include <sol/sol.hpp>
 #include "World.h"
+#include "common/lua_bind.h"
 
 namespace f3 {
 
@@ -38,6 +42,11 @@ public:
     void OnTick(uint64_t tick);
     void OnNpcTick(Critter& npc, uint64_t tick);
     void OnNpcHeard(Critter& npc, Critter& speaker, const std::string& text);
+
+    // Generic hook call (on_death, on_damage, on_pickup, on_use, on_region_enter/leave, ...). Missing hooks are ignored.
+    template <class... A> void Call(const char* fn, A&&... args) {
+        if (L_) lua::CallGlobal(*L_, fn, nullptr, std::forward<A>(args)...);
+    }
 
     const std::filesystem::path& Dir() const { return dir_; }
 

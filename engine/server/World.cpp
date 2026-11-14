@@ -8,8 +8,24 @@ namespace f3 {
 
 Critter* Map::CritterAt(TilePos p) const {
     for (Critter* c : critters)
-        if (c->pos == p) return c;
+        if (c->pos == p && !c->dead) return c;
     return nullptr;
+}
+
+const EntryPoint* Map::FindEntry(int eid) const {
+    for (auto& e : entries)
+        if (e.id == eid) return &e;
+    return entries.empty() ? nullptr : &entries.front();
+}
+
+bool Region::Contains(float x, float y) const {
+    if (x < minx || x > maxx || y < miny || y > maxy || poly.size() < 3) return false;
+    bool in = false;
+    for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+        float xi = poly[i].first, yi = poly[i].second, xj = poly[j].first, yj = poly[j].second;
+        if (((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) in = !in;
+    }
+    return in;
 }
 
 bool Map::FindFreeNear(TilePos p, int radius, TilePos& out) const {
@@ -41,8 +57,13 @@ Map* World::GetMap(MapId id) {
 }
 
 Map* World::FindMapByName(const std::string& name) {
+    auto lower = [](std::string s) {
+        for (char& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return s;
+    };
+    std::string n = lower(name);
     for (auto& m : maps_)
-        if (m->name == name) return m.get();
+        if (lower(m->name) == n) return m.get();
     return nullptr;
 }
 
@@ -84,9 +105,15 @@ bool FindPath(const Map& map, TilePos from, TilePos to, std::deque<TilePos>& out
     const int W = map.width;
     auto idx = [W](int x, int y) { return y * W + x; };
     const size_t N = static_cast<size_t>(map.width) * map.height;
-    std::vector<float> g(N, 1e30f);
-    std::vector<int> parent(N, -1);
-    std::vector<uint8_t> closed(N, 0);
+    // Per-thread scratch with generation stamps: no O(N) clear per search on big maps.
+    static thread_local std::vector<float> g;
+    static thread_local std::vector<int> parent;
+    static thread_local std::vector<uint32_t> stamp, closedStamp;
+    static thread_local uint32_t gen = 0;
+    if (g.size() < N) { g.assign(N, 0); parent.assign(N, -1); stamp.assign(N, 0); closedStamp.assign(N, 0); gen = 0; }
+    ++gen;
+    auto G = [&](int i) { return stamp[i] == gen ? g[i] : 1e30f; };
+    auto setG = [&](int i, float v, int par) { stamp[i] = gen; g[i] = v; parent[i] = par; };
 
     struct Node { float f; int i; };
     auto cmp = [](const Node& a, const Node& b) { return a.f > b.f; };
@@ -97,7 +124,7 @@ bool FindPath(const Map& map, TilePos from, TilePos to, std::deque<TilePos>& out
         return (dx + dy) + (1.41421356f - 2.0f) * std::min(dx, dy);  // octile
     };
 
-    g[idx(from.x, from.y)] = 0;
+    setG(idx(from.x, from.y), 0, -1);
     open.push({h(from.x, from.y), idx(from.x, from.y)});
     int expanded = 0;
     const int goal = idx(to.x, to.y);
@@ -105,8 +132,8 @@ bool FindPath(const Map& map, TilePos from, TilePos to, std::deque<TilePos>& out
     while (!open.empty()) {
         Node n = open.top();
         open.pop();
-        if (closed[n.i]) continue;
-        closed[n.i] = 1;
+        if (closedStamp[n.i] == gen) continue;
+        closedStamp[n.i] = gen;
         if (n.i == goal) break;
         if (++expanded > maxNodes) return false;
         int cx = n.i % W, cy = n.i / W;
@@ -116,16 +143,15 @@ bool FindPath(const Map& map, TilePos from, TilePos to, std::deque<TilePos>& out
             bool diag = kDirDx[d] != 0 && kDirDy[d] != 0;
             if (diag && (map.IsBlocked(cx + kDirDx[d], cy) || map.IsBlocked(cx, cy + kDirDy[d]))) continue;
             int ni = idx(nx, ny);
-            if (closed[ni]) continue;
-            float ng = g[n.i] + (diag ? 1.41421356f : 1.0f);
-            if (ng < g[ni]) {
-                g[ni] = ng;
-                parent[ni] = n.i;
+            if (closedStamp[ni] == gen) continue;
+            float ng = G(n.i) + (diag ? 1.41421356f : 1.0f);
+            if (ng < G(ni)) {
+                setG(ni, ng, n.i);
                 open.push({ng + h(nx, ny), ni});
             }
         }
     }
-    if (parent[goal] < 0) return false;
+    if (stamp[goal] != gen || parent[goal] < 0) return false;
     for (int i = goal; i != idx(from.x, from.y); i = parent[i])
         out.push_front(TilePos{static_cast<int16_t>(i % W), static_cast<int16_t>(i / W)});
     return true;

@@ -5,9 +5,22 @@ log("main.lua: loading")
 
 load_script("npc/guard.lua")
 load_script("npc/wanderer.lua")
+load_script("npc/hostile.lua")
+
+-- Behaviour of critters spawned from the original map data (called once per critter, first tick).
+function pick_npc_type(npc)
+    if npc.is_static then return "idle" end
+    if npc.team == 2 then return "hostile" end
+    return "idle"
+end
 
 -- Called once, first successful load: build the world.
 function on_init()
+    if map_count() > 0 then
+        log("world initialised from game data: " .. map_count() .. " maps")
+        return
+    end
+    -- no gamedata/server: fall back to the built-in test map
     local def = load_script("maps/test_map.lua")
     local map = create_map(def)
 
@@ -27,6 +40,15 @@ function on_reload()
 end
 
 function on_login(c)
+    if data_loaded() and #c:inventory() == 0 then
+        -- starter kit (real prototypes from the original data)
+        local gun = c:give("Weapons9mm_Autoloader.WEA")
+        c:give("Ammo9mm.AMO", 30)
+        local arm = c:give("ArmorLeather_Outfit.ARM")
+        c:give("Weapons44_Revolver.WEA")
+        if gun > 0 then c:equip(gun, true) end
+        if arm > 0 then c:equip(arm, true) end
+    end
     c:tell("Welcome to F3Online, " .. c.name .. "! Click to move, Enter to chat. Try /help")
     broadcast(c.name .. " entered the wasteland")
     return true
@@ -44,7 +66,7 @@ end
 
 local commands = {}
 function commands.help(c)
-    c:tell("Commands: /help /who /pos /steps /reload-info")
+    c:tell("Commands: /help /who /pos /steps /stats /inv /maps /goto <map> [entry] /heal /reload-info")
 end
 function commands.who(c)
     local names = {}
@@ -57,16 +79,41 @@ end
 function commands.steps(c)
     c:tell("Steps taken: " .. math.floor(c:get_var("steps")))
 end
+function commands.stats(c)
+    c:tell(string.format("HP %d/%d  S%d P%d E%d C%d I%d A%d L%d  (carry %d)", c.hp, c.max_hp,
+        c:special(1), c:special(2), c:special(3), c:special(4), c:special(5), c:special(6), c:special(7), c:weight()))
+end
+function commands.inv(c)
+    local parts = {}
+    for _, it in ipairs(c:inventory()) do
+        parts[#parts + 1] = it.name .. (it.count > 1 and (" x" .. it.count) or "") .. (it.equipped and " [E]" or "")
+    end
+    c:tell("Inventory: " .. (#parts > 0 and table.concat(parts, ", ") or "(empty)"))
+end
+function commands.maps(c)
+    c:tell(table.concat(map_names(), ", "))
+end
+function commands.heal(c) c:heal(c.max_hp) end
+-- dev helper: /spawn <proto key>  puts a real item (e.g. Weapons44_Revolver.WEA) two cells next to you
+function commands.spawn(c, arg)
+    if not arg or not data_loaded() then c:tell("usage: /spawn Weapons44_Revolver.WEA"); return end
+    if spawn_item_proto(c.map_id, arg, c.x + 2, c.y, 1) == 0 then c:tell("unknown prototype: " .. arg) end
+end
 commands["reload-info"] = function(c)
     c:tell("Admins can type 'reload' in the server console to hot-reload scripts.")
 end
 
 -- Return false to swallow the message, a string to replace it, nothing to pass it through.
 function on_chat(c, text)
+    local goto_map, goto_entry = text:match("^/goto%s+(%S+)%s*(%d*)")
+    if goto_map then
+        if not c:enter_map(goto_map, tonumber(goto_entry) or 0) then c:tell("No such map: " .. goto_map) end
+        return false
+    end
     local cmd = text:match("^/(%S+)")
     if cmd then
         local f = commands[cmd:lower()]
-        if f then f(c) else c:tell("Unknown command: /" .. cmd) end
+        if f then f(c, text:match("^/%S+%s+(.+)$")) else c:tell("Unknown command: /" .. cmd) end
         return false
     end
 end
