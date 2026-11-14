@@ -1,5 +1,6 @@
 #include "Scripting.h"
 
+#include <algorithm>
 #include <vector>
 #include "Server.h"
 #include "common/log.h"
@@ -34,7 +35,27 @@ void Scripting::BindApi(sol::state& L) {
         "npc_type", sol::property([](Critter& c) { return c.npcType; }),
         "is_npc", [](Critter& c) { return c.IsNpc(); },
         "is_player", [](Critter& c) { return c.IsPlayer(); },
-        "is_moving", [](Critter& c) { return !c.path.empty(); },
+        "is_moving", [](Critter& c) { return c.IsMoving(); },
+        // continuous position in cell units (cell centre = x + 0.5)
+        "fx", sol::property([](Critter& c) { return c.fx; }),
+        "fy", sol::property([](Critter& c) { return c.fy; }),
+        // ---- real-time timing (FOnline style): Wait/breaktime, AP (1/100 AP), battle flag
+        "wait", [&S](Critter& c, int ms) { S.Wait(c, ms); },
+        "is_free", [&S](Critter& c) { return S.IsFree(c) && !c.dead; },
+        "is_busy", [&S](Critter& c) { return !S.IsFree(c); },
+        "wait_left", [&S](Critter& c) { uint64_t n = S.NowMs(); return c.waitEndMs > n ? (int)(c.waitEndMs - n) : 0; },
+        "ap", [&S](Critter& c) { S.SyncAp(c); return c.ap; },
+        "max_ap", [&S](Critter& c) { return S.MaxAp(c); },
+        "set_ap", [&S](Critter& c, int v) { S.SyncAp(c); c.ap = std::clamp(v, 0, S.MaxAp(c)); S.SendWaitState(c); },
+        "use_ap", [&S](Critter& c, int cost) { bool ok = S.SpendAp(c, cost); if (ok) S.SendWaitState(c); return ok; },
+        "in_battle", [&S](Critter& c) { return S.NowMs() < c.battleEndMs; },
+        "set_battle", [&S](Critter& c) { S.SetBattle(c); },
+        "think_due", [&S](Critter& c, int ms) {  // true at most once per `ms` (staggered by id): npc think interval, config.CritterIdleTick
+            uint64_t n = S.NowMs();
+            if (n < c.nextThinkMs) return false;
+            c.nextThinkMs = n + (uint64_t)std::max(1, ms) + (c.id * 37) % 50;
+            return true;
+        },
         "hp", sol::property([](Critter& c) { return c.hp; }),
         "max_hp", sol::property([](Critter& c) { return c.maxHp; }),
         "level", sol::property([](Critter& c) { return c.level; }),
@@ -90,7 +111,9 @@ void Scripting::BindApi(sol::state& L) {
         "kill", [&S](Critter& c) { S.KillCritter(c, nullptr); },
         "enter_map", [&S](Critter& c, const std::string& map, sol::optional<int> entry) { return S.EnterMapByName(c, map, entry.value_or(0)); },
         "weight", [&S](Critter& c) { return S.Weight(c); },
-        "move_to", [&S](Critter& c, int x, int y) { return S.MoveCritterTo(c, TilePos{(int16_t)x, (int16_t)y}); },
+        "move_to", [&S](Critter& c, int x, int y, sol::optional<bool> run) {
+            return S.MoveCritterTo(c, TilePos{(int16_t)x, (int16_t)y}, run ? (*run ? 1 : 0) : -1);
+        },
         "stop", [&S](Critter& c) { S.StopCritter(c); },
         "teleport", [&S](Critter& c, int map, int x, int y) { return S.Teleport(c, (MapId)map, TilePos{(int16_t)x, (int16_t)y}); },
         "say", [&S](Critter& c, const std::string& t) { S.Say(c, t); },
@@ -141,6 +164,7 @@ void Scripting::BindApi(sol::state& L) {
 
     L["log"] = [](const std::string& s) { log::Info("[lua] %s", s.c_str()); };
     L["tick"] = [&S]() { return S.Tick(); };
+    L["now_ms"] = [&S]() { return (double)S.NowMs(); };  // server clock in ms (the clock of Wait/WaitState)
 
     L["get_critter"] = [&W](int id) -> Critter* { return W.GetCritter((CritterId)id); };
     L["find_player"] = [&W](const std::string& n) -> Critter* { return W.FindPlayerByName(n); };
@@ -238,6 +262,8 @@ void Scripting::BindApi(sol::state& L) {
 std::unique_ptr<sol::state> Scripting::BuildState() {
     auto L = lua::NewSandboxState();
     BindApi(*L);
+    std::filesystem::path cfgPath = dir_ / "config.lua";
+    if (std::filesystem::exists(cfgPath) && !lua::RunFile(*L, cfgPath)) return nullptr;
     std::filesystem::path main = dir_ / "main.lua";
     if (!std::filesystem::exists(main)) {
         log::Error("scripting: %s not found", main.string().c_str());
@@ -251,6 +277,7 @@ bool Scripting::Load() {
     L_ = BuildState();
     if (!L_) return false;
     ++generation_;
+    ApplyConfig(*L_);
     log::Info("scripting: loaded (generation %d)", generation_);
     lua::CallGlobal(*L_, "on_init", nullptr);
     return true;
@@ -264,9 +291,60 @@ bool Scripting::Reload() {
     }
     L_ = std::move(fresh);
     ++generation_;
+    ApplyConfig(*L_);
     log::Info("scripting: reloaded (generation %d)", generation_);
     lua::CallGlobal(*L_, "on_reload", nullptr);
     return true;
+}
+
+// Reads the global table `config` (FOnline names, see scripts/config.lua) into the server GameConfig.
+void Scripting::ApplyConfig(sol::state_view L) {
+    GameConfig& g = server_.Rt();
+    g = GameConfig{};
+    std::error_code ec;
+    cfgTime_ = std::filesystem::last_write_time(dir_ / "config.lua", ec);
+    sol::object o = L["config"];
+    if (o.get_type() != sol::type::table) { log::Warn("scripting: no config table (scripts/config.lua), using defaults"); return; }
+    sol::table t = o.as<sol::table>();
+#define F3_CFG_INT(name) g.name = t.get_or("" #name, g.name)
+#define F3_CFG_NUM(name) g.name = t.get_or("" #name, g.name)
+    F3_CFG_INT(CritterIdleTick); F3_CFG_INT(Breaktime); F3_CFG_INT(TimeoutTransfer); F3_CFG_INT(TimeoutBattle);
+    F3_CFG_INT(ApRegeneration); F3_CFG_INT(RtApCostCritterWalk); F3_CFG_INT(RtApCostCritterRun);
+    F3_CFG_INT(RtApCostMoveItemContainer); F3_CFG_INT(RtApCostMoveItemInventory); F3_CFG_INT(RtApCostPickItem);
+    F3_CFG_INT(RtApCostDropItem); F3_CFG_INT(RtApCostReloadWeapon); F3_CFG_INT(RtApCostPickCritter);
+    F3_CFG_INT(RtApCostUseItem); F3_CFG_INT(RtApCostUseSkill);
+    F3_CFG_INT(RtAlwaysRun); F3_CFG_INT(RunOnCombat);
+    F3_CFG_INT(ApBase); F3_CFG_INT(ApAgilityDiv); F3_CFG_NUM(WalkSpeed); F3_CFG_NUM(RunSpeed); F3_CFG_NUM(MoveClearance);
+    F3_CFG_INT(AttackMinMs); F3_CFG_INT(AttackMaxMs); F3_CFG_INT(AttackMsPerCost);
+    F3_CFG_INT(RtApCostAttackPerCost); F3_CFG_INT(RtApCostAttackMin); F3_CFG_INT(TransferLock);
+#undef F3_CFG_INT
+#undef F3_CFG_NUM
+    g.Breaktime = std::max(0, g.Breaktime);
+    g.WalkSpeed = std::clamp(g.WalkSpeed, 0.1, 100.0);
+    g.RunSpeed = std::clamp(g.RunSpeed, 0.1, 100.0);
+    log::Info("config: Breaktime=%d TimeoutBattle=%d ApRegeneration=%d RtAlwaysRun=%d walk=%.1f run=%.1f cells/s", g.Breaktime,
+              g.TimeoutBattle, g.ApRegeneration, g.RtAlwaysRun ? 1 : 0, g.WalkSpeed, g.RunSpeed);
+}
+
+bool Scripting::LoadConfig() {
+    if (!L_) return false;
+    std::filesystem::path p = dir_ / "config.lua";
+    if (!std::filesystem::exists(p)) return false;
+    // run on a scratch copy first so a broken edit keeps the previous values
+    auto probe = lua::NewSandboxState();
+    if (!lua::RunFile(*probe, p)) { log::Error("config: reload failed, keeping previous values"); return false; }
+    if (!lua::RunFile(*L_, p)) return false;
+    ApplyConfig(*L_);
+    return true;
+}
+
+void Scripting::PollConfig() {
+    std::error_code ec;
+    auto t = std::filesystem::last_write_time(dir_ / "config.lua", ec);
+    if (ec || t == cfgTime_) return;
+    cfgTime_ = t;
+    log::Info("config.lua changed, reloading");
+    LoadConfig();
 }
 
 bool Scripting::OnLogin(Critter& c) {

@@ -2,7 +2,7 @@
 npc_types.hostile = {
     on_tick = function(npc, t)
         if npc.dead or npc.target ~= 0 then return end
-        if t % 10 ~= npc.id % 10 then return end
+        if not npc:think_due(config.CritterIdleTick) then return end
         local map = get_map(npc.map_id)
         if not map then return end
         local best, bestd = nil, 28

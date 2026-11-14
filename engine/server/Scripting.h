@@ -50,6 +50,10 @@ public:
 
     const std::filesystem::path& Dir() const { return dir_; }
 
+    // Real-time tunables: scripts/config.lua (global table `config`) -> GameConfig. Missing keys keep their defaults.
+    bool LoadConfig();   // (re)reads config.lua into the live state and the server GameConfig
+    void PollConfig();   // hot reload: reloads when config.lua changed on disk (cheap mtime check)
+
 private:
     std::unique_ptr<sol::state> BuildState();
     void BindApi(sol::state& L);
@@ -59,6 +63,8 @@ private:
     std::filesystem::path dir_;
     std::unique_ptr<sol::state> L_;
     int generation_ = 0;
+    std::filesystem::file_time_type cfgTime_{};
+    void ApplyConfig(sol::state_view L);
 };
 
 }  // namespace f3

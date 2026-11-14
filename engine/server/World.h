@@ -67,15 +67,32 @@ struct Critter {
     uint64_t deadSince = 0;
     std::vector<InvItem> inventory;
     CritterId target = 0;       // combat target (0 = none)
-    uint64_t nextAttackTick = 0;
     Pending pending;
-    uint64_t regionLockUntil = 0;
+    uint64_t regionLockUntilMs = 0;
     uint64_t nextRepathTick = 0;
     int inRegion = -1;          // index of the trigger region the player stands in
     std::string script, dialog; // original AMX script names (informational)
 
-    std::deque<TilePos> path;
-    int moveCooldown = 0;       // ticks until next step is allowed
+    // ---- continuous position + real-time state (Move.cpp, Timing.cpp). `pos` is always floor(fx), floor(fy).
+    float fx = 0.5f, fy = 0.5f;  // position in cell units, cell (cx,cy) has its centre at (cx+0.5, cy+0.5)
+    struct Pt { float x = 0, y = 0; };
+    struct Mover {
+        bool active = false;
+        std::vector<Pt> pts;     // polyline, pts[0] = start
+        size_t seg = 0;          // current segment pts[seg] -> pts[seg+1]
+        float segDone = 0;       // distance travelled on the current segment (cells)
+        uint64_t lastMs = 0;     // when fx/fy were last advanced
+        float speed = 0;         // cells / s
+        bool run = false;
+    } mv;
+    bool IsMoving() const { return mv.active; }
+    void SnapToCell() { fx = pos.x + 0.5f; fy = pos.y + 0.5f; }
+    uint64_t waitEndMs = 0;      // breaktime: actions rejected until this server time (ms)
+    uint64_t battleEndMs = 0;    // battle flag (TimeoutBattle)
+    int ap = -1;                 // 1/100 AP, -1 = full (initialised lazily by Server::SyncAp)
+    uint64_t apRegenMs = 0;      // last regeneration timestamp
+    uint64_t nextThinkMs = 0;    // cr:think_due
+    uint32_t caps = 0;           // players: gnet::kCap* bits sent by the client
     int msgBudget = 10;         // request rate limiter (players)
 
     // Visibility state, what this (player) critter's client currently knows about.

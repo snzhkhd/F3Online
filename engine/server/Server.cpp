@@ -258,14 +258,29 @@ void Server::OnMoveReq(Critter& c, const net::MoveToReq& req) {
     --c.msgBudget;
     Map* m = world_.GetMap(c.mapId);
     if (!m || c.dead) return;
+    if (CheckAction(c, static_cast<uint8_t>(Msg::C2S_MoveTo), 0) != gnet::ActionResult::Ok) {
+        if (!(c.caps & gnet::kCapContinuousMove)) { net::CritterMove mv{c.id, c.pos.x, c.pos.y, c.dir, 0}; SendMsg(c, mv); }
+        return;  // busy (breaktime) or dead: the request is rejected, WaitState tells the client when to retry
+    }
     c.pending = Pending{};
     c.target = 0;
     TilePos target{req.x, req.y};
     if (!MoveCritterTo(c, target)) {
         // Tell the client where it really is so it can drop any local assumption.
-        net::CritterMove mv{c.id, c.pos.x, c.pos.y, c.dir, 0};
-        SendMsg(c, mv);
+        if (c.caps & gnet::kCapContinuousMove) { if (c.mv.active) SendMovePath(c, &c); else SendCritterStop(c, 1, &c); }
+        else { net::CritterMove mv{c.id, c.pos.x, c.pos.y, c.dir, 0}; SendMsg(c, mv); }
     }
+}
+
+void Server::OnMoveReqF(Critter& c, const gnet::MoveToF& req) {
+    if (c.msgBudget <= 0) return;
+    --c.msgBudget;
+    if (CheckAction(c, static_cast<uint8_t>(GMsgRt::C2S_MoveToF), 0) != gnet::ActionResult::Ok) return;
+    c.pending = Pending{};
+    c.target = 0;
+    bool run = req.run ? true : false;
+    if (run && !rt_.RunOnCombat && NowMs() < c.battleEndMs) run = false;
+    if (!StartMove(c, req.x, req.y, run, true)) { if (c.mv.active) SendMovePath(c, &c); else SendCritterStop(c, 1, &c); }
 }
 
 void Server::OnChatReq(Critter& c, const std::string& raw) {
@@ -305,7 +320,8 @@ Map* Server::CreateMap(const std::string& name, int w, int h, std::vector<uint8_
 void Server::PlaceCritter(Critter& c, Map& m, TilePos pos) {
     c.mapId = m.id;
     c.pos = pos;
-    c.path.clear();
+    c.SnapToCell();
+    c.mv.active = false;
     c.visCritters.clear();
     c.visItems.clear();
     m.critters.push_back(&c);
@@ -320,7 +336,7 @@ void Server::UnplaceCritter(Critter& c) {
         if (p->IsPlayer() && p->visCritters.erase(c.id)) SendMsg(*p, net::CritterRemove{c.id});
     m->dirty = true;
     c.mapId = 0;
-    c.path.clear();
+    c.mv.active = false;
     c.visCritters.clear();
     c.visItems.clear();
 }
@@ -360,17 +376,6 @@ void Server::RemoveCritter(CritterId id) {
     world_.DestroyCritter(id);
 }
 
-bool Server::MoveCritterTo(Critter& c, TilePos target) {
-    Map* m = world_.GetMap(c.mapId);
-    if (!m || m->IsBlocked(target.x, target.y)) return false;
-    std::deque<TilePos> path;
-    if (!FindPath(*m, c.pos, target, path)) return false;
-    Critter* occupant = m->CritterAt(target);
-    if (occupant && occupant != &c && !path.empty()) path.pop_back();  // stop next to it
-    c.path = std::move(path);
-    return true;
-}
-
 bool Server::Teleport(Critter& c, MapId mapId, TilePos pos) {
     Map* dst = world_.GetMap(mapId);
     if (!dst || !dst->InBounds(pos.x, pos.y) || dst->IsBlocked(pos.x, pos.y)) return false;
@@ -380,11 +385,11 @@ bool Server::Teleport(Critter& c, MapId mapId, TilePos pos) {
 
     if (c.mapId == mapId) {
         c.pos = spot;
-        c.path.clear();
+        c.SnapToCell();
+        c.mv.active = false;
         dst->dirty = true;
-        net::CritterMove mv{c.id, spot.x, spot.y, c.dir, 1};
-        for (Critter* p : dst->critters)
-            if (p->IsPlayer() && (p == &c || p->visCritters.count(c.id))) SendMsg(*p, mv);
+        SendLegacyMove(c, 1);       // snap: cancels any path on every client
+        SendCritterStop(c, 2);
         return true;
     }
     UnplaceCritter(c);
@@ -430,36 +435,16 @@ void Server::Broadcast(const std::string& text) {
 // ----------------------------------------------------------------- tick
 
 void Server::StepCritter(Critter& c) {
-    if (c.moveCooldown > 0) { --c.moveCooldown; return; }
-    if (c.dead || c.isStatic) { c.path.clear(); return; }
-    if (c.path.empty()) {
-        if (c.pending.type != PendingType::None) RunPending(c);
+    if (c.dead || c.isStatic) { StopMove(c, 1); return; }
+    if (c.mv.active) {
+        CritterId id = c.id;
+        AdvanceMove(c, NowMs());
+        Critter* cc = world_.GetCritter(id);
+        if (!cc || cc->mv.active || cc->mapId == 0) return;
+        if (cc->pending.type != PendingType::None) RunPending(*cc);
         return;
     }
-    Map* m = world_.GetMap(c.mapId);
-    if (!m) return;
-    TilePos next = c.path.front();
-    int dx = next.x - c.pos.x, dy = next.y - c.pos.y;
-    bool valid = TileDist(c.pos, next) == 1 && !m->IsBlocked(next.x, next.y);
-    if (valid && dx != 0 && dy != 0 && (m->IsBlocked(c.pos.x + dx, c.pos.y) || m->IsBlocked(c.pos.x, c.pos.y + dy))) valid = false;
-    if (valid && m->CritterAt(next)) valid = false;
-    if (!valid) { c.path.clear(); return; }
-
-    TilePos from = c.pos;
-    c.path.pop_front();
-    c.pos = next;
-    c.dir = DirFromDelta(dx, dy, c.dir);
-    c.moveCooldown = std::max(0, cfg_.moveTicks - 1);
-    m->dirty = true;
-
-    net::CritterMove mv{c.id, c.pos.x, c.pos.y, c.dir, 0};
-    ByteBuffer buf = net::Pack(mv);
-    for (Critter* p : m->critters)
-        if (p->IsPlayer() && (p == &c || p->visCritters.count(c.id))) Send(*p, buf);
-
-    CritterId id = c.id;
-    CheckRegions(c);  // may move the player to another map
-    if (Critter* cc = world_.GetCritter(id)) scripting_->OnCritterMove(*cc, from);
+    if (c.pending.type != PendingType::None) RunPending(c);
 }
 
 void Server::UpdateVisibility(Map& m) {
@@ -470,10 +455,18 @@ void Server::UpdateVisibility(Map& m) {
         for (Critter* c : m.critters)
             if (c == p || TileDist(c->pos, p->pos) <= kViewCells) now.insert(c->id);
         // self first so the client always knows who it is before anyone else
-        if (!p->visCritters.count(p->id)) SendMsg(*p, MakeAdd(*p));
+        if (!p->visCritters.count(p->id)) {
+            SendMsg(*p, MakeAdd(*p));
+            if (p->protoPid >= 0) Send(*p, gnet::PackG(gnet::CritterProto{p->id, static_cast<uint16_t>(p->protoPid)}));
+        }
         for (Critter* c : m.critters)
             if (c != p && now.count(c->id) && !p->visCritters.count(c->id)) {
                 SendMsg(*p, MakeAdd(*c));
+                if (c->protoPid >= 0) Send(*p, gnet::PackG(gnet::CritterProto{c->id, static_cast<uint16_t>(c->protoPid)}));
+                if (p->caps & gnet::kCapContinuousMove) {
+                    SendCritterStop(*c, 3, p);  // exact float position (CritterAdd only has the cell)
+                    if (c->mv.active) SendMovePath(*c, p);
+                }
                 if (c->dead || c->hp != c->maxHp) {
                     gnet::CritterState st{c->id, static_cast<int16_t>(c->hp), static_cast<int16_t>(c->maxHp), static_cast<uint8_t>(c->dead)};
                     Send(*p, gnet::PackG(st));
@@ -531,6 +524,7 @@ void Server::DoTick() {
     }
     if (amx_) amx_->Tick(tick_, active);
     scripting_->OnTick(tick_);
+    if (tick_ % static_cast<uint64_t>(cfg_.tickRate) == 0) scripting_->PollConfig();  // hot reload of config.lua
 
     for (auto& m : world_.Maps())
         if (m->dirty) UpdateVisibility(*m);

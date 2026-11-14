@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -9,6 +10,7 @@
 #include <vector>
 #include "AmxHost.h"
 #include "DataStore.h"
+#include "GameConfig.h"
 #include "World.h"
 #include "common/buffer.h"
 #include "common/protocol.h"
@@ -78,8 +80,26 @@ public:
     double GetGlobal(const std::string& k) const { auto it = globals_.find(k); return it == globals_.end() ? 0.0 : it->second; }
     void SetGlobal(const std::string& k, double v) { globals_[k] = v; }
     void RemoveCritter(CritterId id);
-    bool MoveCritterTo(Critter& c, TilePos target);  // validated; pathfinds; false if no path
-    void StopCritter(Critter& c) { c.path.clear(); }
+    bool MoveCritterTo(Critter& c, TilePos target, int run = -1);  // cell target (centre); pathfinds + smooths; run: -1 default rule, 0 walk, 1 run
+    bool StartMove(Critter& c, float tx, float ty, bool run, bool exact);  // float target in cells; exact = stop at that point, else at the cell centre
+    void StopMove(Critter& c, uint8_t reason = 1);   // sends CritterStop to viewers
+    void StopCritter(Critter& c) { StopMove(c, 1); }
+    bool DefaultRun(const Critter& c) const;
+
+    // ---- real-time timing (Timing.cpp): FOnline-style breaktime, AP and battle flag
+    GameConfig& Rt() { return rt_; }
+    const GameConfig& Rt() const { return rt_; }
+    uint64_t NowMs() const;                          // server clock, ms (never 0)
+    static uint32_t Ms32(uint64_t ms) { return static_cast<uint32_t>(ms); }
+    int MaxAp(const Critter& c) const;               // 1/100 AP
+    void SyncAp(Critter& c);                         // regenerates AP up to now
+    bool IsFree(const Critter& c) const { return NowMs() >= c.waitEndMs; }
+    void Wait(Critter& c, int ms, bool notify = true);   // cr.Wait(ms): busy until now + ms
+    void SetBattle(Critter& c, bool notify = true);  // battle flag for TimeoutBattle ms
+    bool SpendAp(Critter& c, int cost);              // spends if available
+    gnet::ActionResult CheckAction(Critter& c, uint8_t action, int apCost, bool report = true);  // free? dead? enough AP? (no side effects)
+    void CommitAction(Critter& c, uint8_t action, int apCost, int waitMs);                       // spends AP, sets wait, notifies
+    void SendWaitState(Critter& c, uint8_t action = 0, gnet::ActionResult r = gnet::ActionResult::None);
     bool Teleport(Critter& c, MapId map, TilePos pos);
     void Say(Critter& speaker, const std::string& text);  // local chat, heard in view radius
     void Tell(Critter& player, const std::string& text);  // system message to one player
@@ -91,10 +111,18 @@ private:
     void OnLogin(struct _ENetPeer* peer, const net::LoginReq& req);
     void OnDisconnect(struct _ENetPeer* peer);
     void OnMoveReq(Critter& c, const net::MoveToReq& req);
+    void OnMoveReqF(Critter& c, const gnet::MoveToF& req);
     void OnChatReq(Critter& c, const std::string& text);
 
     void DoTick();
     void StepCritter(Critter& c);
+    void AdvanceMove(Critter& c, uint64_t now);
+    void SendMovePath(Critter& c, Critter* onlyTo = nullptr);
+    void SendCritterStop(const Critter& c, uint8_t reason, Critter* onlyTo = nullptr);
+    void SendLegacyMove(const Critter& c, uint8_t snap);
+    void SendCapsResync(Critter& player);
+    int AttackApCost(int weaponCost) const;
+    int ActionCost(uint8_t action) const;
     void UpdateVisibility(Map& m);
     void ProcessCommands();
     void ExecCommand(const std::string& cmd);
@@ -128,6 +156,8 @@ private:
     std::unique_ptr<AmxHost> amx_;  // original AMX scripts (prototype), only with game data
     std::atomic<bool> running_{false};
     uint64_t tick_ = 0;
+    GameConfig rt_;
+    std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
 
     std::mutex cmdMutex_;
     std::vector<std::string> commands_;

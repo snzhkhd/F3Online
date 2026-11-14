@@ -451,7 +451,7 @@ void Server::BeginInteract(Critter& c, PendingType type, ItemId id, ItemId sub) 
     auto it = m->items.find(id);
     if (it == m->items.end()) return;
     c.pending = Pending{type, id, sub};
-    if (TileDist(it->second.pos, c.pos) <= 2) { c.path.clear(); RunPending(c); return; }
+    if (TileDist(it->second.pos, c.pos) <= 2) { StopMove(c); RunPending(c); return; }
     // stand on a free cell within 3 cells of the object, nearest to us first (the object may sit inside a wall)
     std::vector<TilePos> spots;
     TilePos op = it->second.pos;
@@ -469,15 +469,30 @@ void Server::BeginInteract(Critter& c, PendingType type, ItemId id, ItemId sub) 
     }
 }
 
+// Runs the interaction once the critter has arrived AND is free (breaktime over, enough AP); until then it stays pending.
 void Server::RunPending(Critter& c) {
     Pending p = c.pending;
-    c.pending = Pending{};
+    uint8_t action = 0;
     switch (p.type) {
-        case PendingType::Pickup: PickUp(c, p.id); break;
-        case PendingType::Use: UseObject(c, p.id); break;
-        case PendingType::Take: TakeFrom(c, p.id, p.sub); break;
+        case PendingType::Pickup: action = static_cast<uint8_t>(GMsg::C2S_PickUp); break;
+        case PendingType::Use: action = static_cast<uint8_t>(GMsg::C2S_Use); break;
+        case PendingType::Take: action = static_cast<uint8_t>(GMsg::C2S_Take); break;
+        case PendingType::None: return;
+    }
+    int cost = ActionCost(action);
+    gnet::ActionResult gate = CheckAction(c, action, cost, false);
+    if (gate == gnet::ActionResult::Busy || gate == gnet::ActionResult::NoAp) return;  // try again next tick
+    c.pending = Pending{};
+    if (gate != gnet::ActionResult::Ok) return;
+    bool ok = false;
+    switch (p.type) {
+        case PendingType::Pickup: ok = PickUp(c, p.id); break;
+        case PendingType::Use: ok = UseObject(c, p.id); break;
+        case PendingType::Take: ok = TakeFrom(c, p.id, p.sub); break;
         case PendingType::None: break;
     }
+    if (ok) CommitAction(c, action, cost, rt_.Breaktime);
+    else if (c.IsPlayer()) SendWaitState(c, action, gnet::ActionResult::Invalid);
 }
 
 // ------------------------------------------------------------------ transitions & regions
@@ -502,7 +517,8 @@ bool Server::EnterMap(Critter& c, Map& dst, int entryId) {
     c.dir = dir;
     bool ok = Teleport(c, dst.id, spot);
     if (ok) {
-        c.regionLockUntil = tick_ + static_cast<uint64_t>(cfg_.tickRate) * 3;
+        c.regionLockUntilMs = NowMs() + static_cast<uint64_t>(std::max(0, rt_.TransferLock) + std::max(0, rt_.TimeoutTransfer));
+        c.waitEndMs = 0;  // a transfer resets the wait (FOnline: player.Wait(0) after transfers)
         c.inRegion = -1;
         if (c.IsPlayer()) { SendStats(c); SendInventory(c); }
     }
@@ -517,14 +533,15 @@ bool Server::EnterMapByName(Critter& c, const std::string& name, int entryId) {
 void Server::CheckRegions(Critter& c) {
     Map* m = world_.GetMap(c.mapId);
     if (!m || !c.IsPlayer() || c.dead) return;
-    float cx = c.pos.x + 0.5f, cy = c.pos.y + 0.5f;
+    float cx = c.fx, cy = c.fy;
     int inside = -1;
     for (size_t i = 0; i < m->regions.size(); ++i) {
         const Region& r = m->regions[i];
         if (r.kind != 0 && r.kind != 1) continue;
         if (!r.Contains(cx, cy)) continue;
         if (r.kind == 0) {
-            if (tick_ < c.regionLockUntil) return;
+            if (NowMs() < c.regionLockUntilMs) return;
+            if (NowMs() < c.battleEndMs) return;  // no map transfer while the battle flag is set
             Map* dst = world_.FindMapByName(r.targetMap);
             if (!dst) {
                 if (std::find(warnedMaps_.begin(), warnedMaps_.end(), r.targetMap) == warnedMaps_.end()) {
@@ -619,23 +636,28 @@ void Server::TickCombat(Critter& c) {
     int dist = TileDist(c.pos, t->pos);
     bool los = dist <= 1 || HasLos(*m, c.pos, t->pos);
     if (dist > plan.rangeCells || !los) {
-        if (c.isStatic) return;
-        if (c.path.empty() || tick_ >= c.nextRepathTick) {
+        if (c.isStatic || !IsFree(c)) return;
+        if (!c.IsMoving() || tick_ >= c.nextRepathTick) {
             c.nextRepathTick = tick_ + 10;
             MoveCritterTo(c, t->pos);
         }
         return;
     }
-    c.path.clear();
-    if (tick_ < c.nextAttackTick) return;
+    if (!IsFree(c)) return;  // breaktime of the previous action is still running
+    int apCost = AttackApCost(plan.cost);
+    SyncAp(c);
+    if (c.ap < apCost) return;  // wait for AP regeneration
+    StopMove(c, 1);
     if (plan.ranged && !plan.ammo && c.IsPlayer()) {
         Tell(c, "You are out of ammo.");
         c.target = 0;
         return;
     }
-    // one attack per cooldown; the raw weapon "cost" word is turned into seconds (guess: cost/10, 0.5..4 s)
-    double secs = std::clamp(plan.cost / 10.0, 0.5, 4.0);
-    c.nextAttackTick = tick_ + static_cast<uint64_t>(secs * cfg_.tickRate);
+    // one attack per action duration: the raw weapon cost word -> milliseconds (guess: cost * AttackMsPerCost, clamped)
+    int durMs = std::clamp(plan.cost * rt_.AttackMsPerCost, rt_.AttackMinMs, std::max(rt_.AttackMinMs, rt_.AttackMaxMs));
+    SetBattle(c, false);
+    SetBattle(*t, true);
+    CommitAction(c, static_cast<uint8_t>(GMsg::C2S_Attack), apCost, durMs);
     int dx = t->pos.x - c.pos.x, dy = t->pos.y - c.pos.y;
     c.dir = DirFromDelta(dx, dy, c.dir);
     if (plan.ranged && plan.ammo && c.IsPlayer()) {
@@ -720,7 +742,7 @@ void Server::KillCritter(Critter& c, Critter* killer) {
     c.dead = true;
     c.hp = 0;
     c.deadSince = tick_;
-    c.path.clear();
+    StopMove(c, 1);
     c.target = 0;
     c.pending = Pending{};
     CritterId cid = c.id, kid = killer ? killer->id : 0;
@@ -742,6 +764,9 @@ void Server::Respawn(Critter& c) {
     c.dead = false;
     c.hp = c.maxHp;
     c.target = 0;
+    c.ap = -1;
+    c.waitEndMs = 0;
+    c.battleEndMs = 0;
     EnterMap(c, *m, 0);
     SendCritterState(c);
     SendStats(c);
@@ -757,24 +782,34 @@ void Server::HandleGamePacket(ENetPeer*, Critter* c, GMsg id, ByteBuffer& b, boo
         return true;
     };
     switch (id) {
+        // Item actions are gated like FOnline: rejected while the critter is busy (breaktime) or short of AP; the answer is
+        // always a WaitState. Walk-then-act interactions are gated at request time and again on arrival (RunPending).
         case GMsg::C2S_PickUp: {
             gnet::PickUp m; ok = m.Read(b);
-            if (ok && budget() && !c->dead) BeginInteract(*c, PendingType::Pickup, m.id, 0);
+            if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok)
+                BeginInteract(*c, PendingType::Pickup, m.id, 0);
             break;
         }
         case GMsg::C2S_Drop: {
             gnet::Drop m; ok = m.Read(b);
-            if (ok && budget() && !c->dead) DropItem(*c, m.id);
+            if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok) {
+                if (DropItem(*c, m.id)) CommitAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id)), rt_.Breaktime);
+                else SendWaitState(*c, static_cast<uint8_t>(id), gnet::ActionResult::Invalid);
+            }
             break;
         }
         case GMsg::C2S_Equip: {
             gnet::Equip m; ok = m.Read(b);
-            if (ok && budget() && !c->dead) EquipItem(*c, m.id, m.on != 0);
+            if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok) {
+                if (EquipItem(*c, m.id, m.on != 0)) CommitAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id)), rt_.Breaktime);
+                else SendWaitState(*c, static_cast<uint8_t>(id), gnet::ActionResult::Invalid);
+            }
             break;
         }
         case GMsg::C2S_Use: {
             gnet::Use m; ok = m.Read(b);
-            if (ok && budget() && !c->dead) BeginInteract(*c, PendingType::Use, m.id, 0);
+            if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok)
+                BeginInteract(*c, PendingType::Use, m.id, 0);
             break;
         }
         case GMsg::C2S_Attack: {
@@ -784,7 +819,8 @@ void Server::HandleGamePacket(ENetPeer*, Critter* c, GMsg id, ByteBuffer& b, boo
         }
         case GMsg::C2S_Take: {
             gnet::Take m; ok = m.Read(b);
-            if (ok && budget() && !c->dead) BeginInteract(*c, PendingType::Take, m.container, m.entry);
+            if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok)
+                BeginInteract(*c, PendingType::Take, m.container, m.entry);
             break;
         }
         case GMsg::C2S_Examine: {
@@ -797,8 +833,22 @@ void Server::HandleGamePacket(ENetPeer*, Critter* c, GMsg id, ByteBuffer& b, boo
         }
         case GMsg::C2S_ReqState:
             ok = b.Ok();
-            if (ok && budget()) { SendStats(*c); SendInventory(*c); }
+            if (ok && budget()) { SendStats(*c); SendInventory(*c); SendWaitState(*c); }
             break;
+        case static_cast<GMsg>(GMsgRt::C2S_ClientCaps): {
+            gnet::ClientCaps m; ok = m.Read(b);
+            if (ok) {
+                bool first = !(c->caps & gnet::kCapContinuousMove);
+                c->caps = m.caps;
+                if (first && (c->caps & gnet::kCapContinuousMove)) { SendWaitState(*c); SendCapsResync(*c); }
+            }
+            break;
+        }
+        case static_cast<GMsg>(GMsgRt::C2S_MoveToF): {
+            gnet::MoveToF m; ok = m.Read(b);
+            if (ok) OnMoveReqF(*c, m);
+            break;
+        }
         default: ok = false; break;
     }
 }

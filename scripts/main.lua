@@ -66,7 +66,7 @@ end
 
 local commands = {}
 function commands.help(c)
-    c:tell("Commands: /help /who /pos /steps /stats /inv /maps /goto <map> [entry] /heal /reload-info")
+    c:tell("Commands: /help /who /pos /steps /ap /stats /inv /maps /goto <map> [entry] /heal /reload-info")
 end
 function commands.who(c)
     local names = {}
@@ -99,6 +99,11 @@ function commands.tp(c, arg)
     if not x or not c:teleport(c.map_id, tonumber(x), tonumber(y)) then c:tell("usage: /tp x y (walkable cell)") end
 end
 function commands.heal(c) c:heal(c.max_hp) end
+-- real-time state: AP (1/100), wait (breaktime) left in ms, battle flag, continuous position in cells
+function commands.ap(c)
+    c:tell(string.format("AP %.2f/%.2f  wait %d ms  battle %s  pos %.2f,%.2f  (Breaktime %d, ApRegeneration %d)", c:ap() / 100, c:max_ap() / 100,
+        c:wait_left(), tostring(c:in_battle()), c.fx, c.fy, config.Breaktime, config.ApRegeneration))
+end
 -- dev helper: /spawn <proto key>  puts a real item (e.g. Weapons44_Revolver.WEA) two cells next to you
 function commands.spawn(c, arg)
     if not arg or not data_loaded() then c:tell("usage: /spawn Weapons44_Revolver.WEA"); return end
