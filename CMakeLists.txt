@@ -15,6 +15,7 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/engine/cmake)
 include(Dependencies)
 
 add_subdirectory(engine)
+add_subdirectory(tools/dataimport)  # f3_dataimport: original data -> gamedata/server
 
 enable_testing()
 add_test(NAME smoke
