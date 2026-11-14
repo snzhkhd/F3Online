@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
             a.Send(gnet::PackG(mv));
             CHECK(WaitFor({&a, &b}, 8, [&] { return a.stops.size() > sc && a.stops.back().reason == 0; }) && std::fabs(a.fx - (t2.x + 0.75f)) < 0.02f && std::fabs(a.fy - (t2.y + 0.25f)) < 0.02f,
                   "MoveToF stops at the exact point (%.2f,%.2f), not snapped to a cell", a.fx, a.fy);
-            CHECK(!a.paths.empty() && a.paths.back().run == 0 && a.paths.back().speed < 4.0f, "walk flag respected (speed %.1f)", a.paths.back().speed);
+            CHECK(!a.paths.empty() && a.paths.back().run == 0 && a.paths.back().speed < 12.0f, "walk flag respected (speed %.1f)", a.paths.back().speed);
         } else {
             CHECK(false, "no sub-cell target found next to bot A");
         }
@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
             b.Send(net::Pack(mv));
             CHECK(WaitFor({&a, &b}, 8, [&] { return b.pos == tb; }), "legacy bot B reached %d,%d via per-cell CritterMove (at %d,%d)", tb.x, tb.y, b.pos.x, b.pos.y);
             bool seen = false;
-            for (size_t i = pc; i < a.paths.size(); ++i) if (a.paths[i].id == b.myId && a.paths[i].speed >= 5.5f && a.paths[i].run) seen = true;
+            for (size_t i = pc; i < a.paths.size(); ++i) if (a.paths[i].id == b.myId && a.paths[i].speed >= 14.0f && a.paths[i].run) seen = true;
             CHECK(seen, "bot A received B's MovePath (run speed from config RunSpeed)");
         } else {
             CHECK(false, "no walk target for B");
@@ -363,6 +363,72 @@ int main(int argc, char** argv) {
                   "AP regenerated server-side: %u -> %u of %u after %.0f ms (ApRegeneration 7000)", apAfter, nw.ap, nw.maxAp, dt);
         }
     }
+    // --- walking away from a fight: an attack's wait is short (cap), a walk request during it is answered Busy but is
+    // queued (the auto attack stops at once) and starts when the wait ends; the battle flag never blocks walking.
+    {
+        WaitFor({&a, &b}, 2.5, [] { return false; });   // previous action finished, AP regenerated
+        CritterId bid = b.myId;
+        // a walkable target away from B (B stands a few cells to the right of A)
+        TilePos away = a.pos;
+        bool fa = false;
+        for (int r = 6; r >= 3 && !fa; --r)
+            for (int dy = -r; dy <= r && !fa; ++dy)
+                for (int dx = -r; dx <= 0 && !fa; ++dx)
+                    if (std::max(std::abs(dx), std::abs(dy)) == r && Walkable(a, a.pos.x + dx, a.pos.y + dy) &&
+                        SegmentWalkable(a, a.fx > 0 ? a.fx : a.pos.x + 0.5f, a.fy > 0 ? a.fy : a.pos.y + 0.5f, a.pos.x + dx + 0.5f, a.pos.y + dy + 0.5f)) {
+                        away = {static_cast<int16_t>(a.pos.x + dx), static_cast<int16_t>(a.pos.y + dy)};
+                        fa = true;
+                    }
+        CHECK(fa, "found a walkable cell away from the fight (%d,%d)", away.x, away.y);
+        size_t combat0 = a.combat.size();
+        gnet::Attack at; at.id = bid;
+        a.Send(gnet::PackG(at));
+        bool shot = WaitFor({&a, &b}, 8, [&] { return a.combat.size() > combat0; });
+        CHECK(shot, "attack started (first shot)");
+        const double tShot = Bot::LocalMs();
+        const gnet::WaitState* aw = LastWait(a, (uint8_t)GMsg::C2S_Attack);
+        CHECK(aw && aw->waitEndMs - aw->nowMs <= 1000, "attack wait is capped: %u ms (config AttackMaxMs 1000)", aw ? aw->waitEndMs - aw->nowMs : 0);
+        const float startX = a.fx, startY = a.fy;
+        size_t paths0 = a.paths.size(), waits0 = a.waits.size();
+        gnet::MoveToF mv; mv.x = away.x + 0.5f; mv.y = away.y + 0.5f; mv.run = 0;
+        a.Send(gnet::PackG(mv));    // walk away right in the middle of the attack's wait window
+        bool busyAnswer = WaitFor({&a, &b}, 1.0, [&] {
+            for (size_t i = waits0; i < a.waits.size(); ++i)
+                if (a.waits[i].w.action == (uint8_t)GMsgRt::C2S_MoveToF && a.waits[i].w.result == gnet::ActionResult::Busy) return true;
+            return false;
+        });
+        CHECK(busyAnswer, "walk request inside the attack wait is answered Busy (feedback)");
+        bool started = WaitFor({&a, &b}, 3, [&] { return a.paths.size() > paths0 && a.paths.back().id == a.myId; });
+        const double tStart = Bot::LocalMs();
+        CHECK(started && tStart - tShot < 1500, "queued walk starts when the wait ends (%.0f ms after the shot)", tStart - tShot);
+        size_t shotsAfter = 0;
+        const size_t combat1 = a.combat.size();
+        CHECK(WaitFor({&a, &b}, 10, [&] { return a.pos == away && !a.stops.empty() && a.stops.back().reason == 0; }), "bot A walked away to %d,%d (at %d,%d)", away.x, away.y, a.pos.x, a.pos.y);
+        for (size_t i = combat1; i < a.combat.size(); ++i) if (a.combat[i].attacker == a.myId) ++shotsAfter;
+        CHECK(shotsAfter == 0, "the auto attack stopped when walking away (%zu shots after the walk started)", shotsAfter);
+        CHECK(std::hypot(a.fx - startX, a.fy - startY) >= 2.0f, "bot A really moved (%.1f cells)", std::hypot(a.fx - startX, a.fy - startY));
+
+        // battle flag set for 5 s: walking is not blocked by it (RunOnCombat only decides run vs walk)
+        WaitFor({&a, &b}, 1.2, [] { return false; });
+        net::ChatReq bc; bc.text = "/battle 5000";
+        size_t wb = a.waits.size();
+        a.Send(net::Pack(bc));
+        CHECK(WaitFor({&a, &b}, 3, [&] { return a.waits.size() > wb && a.waits.back().w.battleEndMs - a.waits.back().w.nowMs > 4000; }), "battle flag active for ~5 s (/battle)");
+        TilePos back = a.pos;
+        bool fb = false;
+        for (int r = 6; r >= 3 && !fb; --r)
+            for (int dy = -r; dy <= r && !fb; ++dy)
+                for (int dx = -r; dx <= r && !fb; ++dx)
+                    if (std::max(std::abs(dx), std::abs(dy)) == r && Walkable(a, a.pos.x + dx, a.pos.y + dy) &&
+                        SegmentWalkable(a, a.fx, a.fy, a.pos.x + dx + 0.5f, a.pos.y + dy + 0.5f)) { back = {static_cast<int16_t>(a.pos.x + dx), static_cast<int16_t>(a.pos.y + dy)}; fb = true; }
+        size_t p1 = a.paths.size();
+        gnet::MoveToF m2; m2.x = back.x + 0.5f; m2.y = back.y + 0.5f; m2.run = 1;
+        a.Send(gnet::PackG(m2));
+        CHECK(WaitFor({&a, &b}, 1.0, [&] { return a.paths.size() > p1; }), "move accepted immediately while the battle flag is set (MovePath)");
+        CHECK(!a.waits.empty() && a.waits.back().w.battleEndMs > a.waits.back().w.nowMs, "battle flag still set during the walk");
+        CHECK(WaitFor({&a, &b}, 10, [&] { return a.pos == back && !a.stops.empty() && a.stops.back().reason == 0; }), "bot A arrived at %d,%d during battle (at %d,%d)", back.x, back.y, a.pos.x, a.pos.y);
+        WaitFor({&a, &b}, 0.6, [] { return false; });
+    }
     // --- breaktime: Equip twice in a row, the second one is rejected as Busy; moving while busy is rejected too
     {
         ItemId gun = 0;
@@ -388,7 +454,7 @@ int main(int argc, char** argv) {
         gnet::MoveToF mv; mv.x = a.fx + 2; mv.y = a.fy; mv.run = 1;
         a.Send(gnet::PackG(mv));
         CHECK(WaitFor({&a, &b}, 2, [&] { return a.waits.size() > w1; }) && a.waits.back().w.result == gnet::ActionResult::Busy && a.paths.size() == pc,
-              "move request while busy is rejected (no MovePath)");
+              "move request while busy is answered Busy (no MovePath yet, the walk is queued)");
         WaitFor({&a, &b}, 0.7, [] { return false; });
         w1 = a.waits.size();
         a.Send(gnet::PackG(e2));

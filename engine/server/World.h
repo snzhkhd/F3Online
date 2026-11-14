@@ -68,6 +68,14 @@ struct Critter {
     std::vector<InvItem> inventory;
     CritterId target = 0;       // combat target (0 = none)
     Pending pending;
+    // A walk request that arrived while the critter was busy (breaktime of an attack / item action): the auto attack is
+    // cancelled at once and the walk starts the moment the critter is free (FOnline would drop it; clicking in the
+    // middle of an attack animation must not make walking impossible).
+    struct QueuedMove {
+        bool has = false, f = false, run = false;   // f: MoveToF (float target), else a cell
+        float x = 0, y = 0;
+        uint64_t atMs = 0;
+    } qmove;
     uint64_t regionLockUntilMs = 0;
     uint64_t nextRepathTick = 0;
     int inRegion = -1;          // index of the trigger region the player stands in

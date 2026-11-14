@@ -24,13 +24,14 @@ config = {
     -- ---- F3Online additions
     ApBase                    = 5,     -- max AP = ApBase + Agility / ApAgilityDiv
     ApAgilityDiv              = 2,
-    WalkSpeed                 = 3.0,   -- cells per second (1 cell = 0.5 world unit)
-    RunSpeed                  = 6.0,
+    WalkSpeed                 = 9.0,   -- cells per second (1 cell = 0.5 world unit): 4.5 units/s, the stride of the Walk clip
+    RunSpeed                  = 18.0,  -- 9 units/s, the stride of the Run clip
     MoveClearance             = 0.3,   -- cells kept from walls by smoothed (string pulled) path segments
-    AttackMinMs               = 500,   -- attack duration = clamp(weapon cost word * AttackMsPerCost, min, max)
-    AttackMaxMs               = 4000,
-    AttackMsPerCost           = 100,
-    RtApCostAttackPerCost     = 10,    -- attack AP (1/100) = weapon cost word * this, at least RtApCostAttackMin
+    AttackMinMs               = 400,   -- attack duration = clamp(weapon cost word * AttackMsPerCost, min, max): 9mm 800 ms,
+    AttackMaxMs               = 1000,  -- heavy weapons are capped (a long action must never lock walking for seconds)
+    AttackMsPerCost           = 40,
+    RtApCostAttackPerCost     = 5,     -- placeholder
+    -- attack AP (1/100) = weapon cost word * RtApCostAttackPerCost, at least RtApCostAttackMin (9mm: 1 AP)
     RtApCostAttackMin         = 50,
     TransferLock              = 3000,  -- ms during which a transition region cannot fire again after a map change
 }

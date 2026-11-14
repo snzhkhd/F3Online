@@ -99,6 +99,11 @@ function commands.tp(c, arg)
     if not x or not c:teleport(c.map_id, tonumber(x), tonumber(y)) then c:tell("usage: /tp x y (walkable cell)") end
 end
 function commands.heal(c) c:heal(c.max_hp) end
+-- dev helper: /battle [ms]  sets the battle flag for ms (default TimeoutBattle); walking must still work while it is set
+function commands.battle(c, arg)
+    local ms = tonumber(arg or "")
+    if ms then c:set_battle_ms(math.floor(ms)) else c:set_battle() end
+end
 -- real-time state: AP (1/100), wait (breaktime) left in ms, battle flag, continuous position in cells
 function commands.ap(c)
     c:tell(string.format("AP %.2f/%.2f  wait %d ms  battle %s  pos %.2f,%.2f  (Breaktime %d, ApRegeneration %d)", c:ap() / 100, c:max_ap() / 100,

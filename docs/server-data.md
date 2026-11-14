@@ -225,7 +225,7 @@ Code: `engine/server/Timing.cpp` (clock, AP, gating), `Move.cpp` (continuous mov
 ### Movement
 
 * Positions are float cell coordinates (cell (cx,cy) has its centre at (cx+0.5, cy+0.5); 1 cell = 0.5 world unit); `Critter::pos` is `floor()` of them. The 0.5-unit walk grid is used only for collision and A*.
-* A move request is pathfound with the existing A* (8-connected, no corner cutting), then **string pulled** (`Move.cpp: Smooth`): from each point the farthest later point is chosen whose straight segment is walkable with `MoveClearance` (0.3 cells) on both sides and without squeezing through a diagonal corner; consecutive grid cells are always accepted. The result (typically 2-6 points) is sent as one `MovePath` with `startMs` and `speed` (cells/s: `WalkSpeed` 3.0, `RunSpeed` 6.0; players run when `RtAlwaysRun`, NPCs run only while chasing a target).
+* A move request is pathfound with the existing A* (8-connected, no corner cutting), then **string pulled** (`Move.cpp: Smooth`): from each point the farthest later point is chosen whose straight segment is walkable with `MoveClearance` (0.3 cells) on both sides and without squeezing through a diagonal corner; consecutive grid cells are always accepted. The result (typically 2-6 points) is sent as one `MovePath` with `startMs` and `speed` (cells/s: `WalkSpeed` 9.0, `RunSpeed` 18.0 = 4.5 / 9 world units per second, the stride of the Walk / Run clips; players run when `RtAlwaysRun`, NPCs run only while chasing a target).
 * The server integrates the same polyline every tick in sub-steps of at most 0.5 cell and checks every cell it enters (blocked cells / closed doors, diagonal squeeze, other critters, AP per cell). On a failure the critter stops and viewers get `CritterStop(reason 1)`; at the end `CritterStop(reason 0)`. `MoveToF` allows a precise end point inside a walkable cell (validated: the last hop must stay on free cells, else the cell centre is used).
 * Old clients: a client that does not send `ClientCaps(bit0)` keeps receiving the legacy `CritterMove`, one per cell crossed (`snap=1` for teleports goes to everyone and cancels any path). `LoginOk.moveTicks` is legacy and unused by the continuous model.
 
@@ -244,7 +244,7 @@ A rejected walk request while the critter is moving re-sends the remaining `Move
 ### Config (`scripts/config.lua`, Lua table `config`, hot reloaded when the file changes (about 1 s poll) and on console `reload`)
 
 FOnline names/defaults from config.fos: `CritterIdleTick 1000, Breaktime 500, TimeoutTransfer 0, TimeoutBattle 500, ApRegeneration 7000, RtApCostCritterWalk 0, RtApCostCritterRun 0, RtApCostMoveItemContainer 0, RtApCostMoveItemInventory 0, RtApCostPickItem 0, RtApCostDropItem 0, RtApCostReloadWeapon 0, RtApCostPickCritter 0, RtApCostUseItem 0, RtApCostUseSkill 2, RtAlwaysRun true, RunOnCombat true`.
-F3Online additions: `ApBase 5, ApAgilityDiv 2, WalkSpeed 3.0, RunSpeed 6.0, MoveClearance 0.3, AttackMinMs 500, AttackMaxMs 4000, AttackMsPerCost 100, RtApCostAttackPerCost 10, RtApCostAttackMin 50, TransferLock 3000`. A broken edit keeps the previous values. The TbApCost* keys of config.fos are not used (no turn based mode).
+F3Online additions: `ApBase 5, ApAgilityDiv 2, WalkSpeed 9.0, RunSpeed 18.0, MoveClearance 0.3, AttackMinMs 400, AttackMaxMs 1000, AttackMsPerCost 40, RtApCostAttackPerCost 5, RtApCostAttackMin 50, TransferLock 3000`. A broken edit keeps the previous values. The TbApCost* keys of config.fos are not used (no turn based mode).
 
 ### Lua API
 
@@ -258,3 +258,10 @@ Critter: `wait(ms) is_free() is_busy() wait_left() ap() max_ap() set_ap(v) use_a
 ### Gaps
 
 No reload/skill/pick-critter actions (their `RtApCost*` keys are inert); no queueing of rejected actions; walk requests are rejected while busy (FOnline-like), so a click right after an attack is dropped; critters still occupy whole cells (collision between critters is cell based, visual overlap during interpolation is possible); a chasing NPC re-paths every 0.5 s (one `MovePath` each); no lag compensation; AP/attack numbers are placeholders like the rest of combat.
+
+### Movement during combat (fix)
+
+* An attack now blocks the attacker only for `clamp(AttackMsPerCost * cost, AttackMinMs, AttackMaxMs)` ms (400..1000) and costs `RtApCostAttackPerCost` (5) AP/100 per cost unit, so a 9mm shot is about 0.8 s and 1 AP.
+* A walk request during that busy window is no longer dropped: the auto attack and pending action are cancelled and the walk is queued (`Critter::QueuedMove`), started by `StepCritter` when the critter is free (dropped after 3 s). The client gets `Busy` and shows "busy - walking as soon as ready". `RunOnCombat` and the transfer lock do not affect walking.
+* Dev command `/battle [ms]` sets the battle flag (Lua `set_battle_ms`); f3_gametest covers attack then walk away and walking during the battle flag.
+* A player standing inside a transition region when the transfer lock or battle flag runs out is now transferred (`StepCritter` re-checks regions); at the new 9 cells/s walk speed the bot used to arrive before the 3 s lock expired.

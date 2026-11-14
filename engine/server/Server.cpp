@@ -258,13 +258,24 @@ void Server::OnMoveReq(Critter& c, const net::MoveToReq& req) {
     --c.msgBudget;
     Map* m = world_.GetMap(c.mapId);
     if (!m || c.dead) return;
-    if (CheckAction(c, static_cast<uint8_t>(Msg::C2S_MoveTo), 0) != gnet::ActionResult::Ok) {
-        if (!(c.caps & gnet::kCapContinuousMove)) { net::CritterMove mv{c.id, c.pos.x, c.pos.y, c.dir, 0}; SendMsg(c, mv); }
-        return;  // busy (breaktime) or dead: the request is rejected, WaitState tells the client when to retry
+    const gnet::ActionResult gate = CheckAction(c, static_cast<uint8_t>(Msg::C2S_MoveTo), 0);
+    if (gate == gnet::ActionResult::Busy) {   // WaitState (Busy) was sent; the walk starts when the wait is over
+        c.pending = Pending{};
+        c.target = 0;
+        c.qmove = Critter::QueuedMove{true, false, false, static_cast<float>(req.x), static_cast<float>(req.y), NowMs()};
+        return;
     }
+    if (gate != gnet::ActionResult::Ok) {
+        if (!(c.caps & gnet::kCapContinuousMove)) { net::CritterMove mv{c.id, c.pos.x, c.pos.y, c.dir, 0}; SendMsg(c, mv); }
+        return;  // dead / out of AP: rejected
+    }
+    DoMoveCell(c, TilePos{req.x, req.y});
+}
+
+void Server::DoMoveCell(Critter& c, TilePos target) {
+    c.qmove.has = false;
     c.pending = Pending{};
     c.target = 0;
-    TilePos target{req.x, req.y};
     if (!MoveCritterTo(c, target)) {
         // Tell the client where it really is so it can drop any local assumption.
         if (c.caps & gnet::kCapContinuousMove) { if (c.mv.active) SendMovePath(c, &c); else SendCritterStop(c, 1, &c); }
@@ -275,12 +286,34 @@ void Server::OnMoveReq(Critter& c, const net::MoveToReq& req) {
 void Server::OnMoveReqF(Critter& c, const gnet::MoveToF& req) {
     if (c.msgBudget <= 0) return;
     --c.msgBudget;
-    if (CheckAction(c, static_cast<uint8_t>(GMsgRt::C2S_MoveToF), 0) != gnet::ActionResult::Ok) return;
+    const gnet::ActionResult gate = CheckAction(c, static_cast<uint8_t>(GMsgRt::C2S_MoveToF), 0);
+    if (gate == gnet::ActionResult::Busy) {   // WaitState (Busy) was sent; the walk starts when the wait is over
+        c.pending = Pending{};
+        c.target = 0;
+        c.qmove = Critter::QueuedMove{true, true, req.run != 0, req.x, req.y, NowMs()};
+        return;
+    }
+    if (gate != gnet::ActionResult::Ok) return;
+    DoMoveF(c, req.x, req.y, req.run != 0);
+}
+
+void Server::DoMoveF(Critter& c, float x, float y, bool run) {
+    c.qmove.has = false;
     c.pending = Pending{};
     c.target = 0;
-    bool run = req.run ? true : false;
     if (run && !rt_.RunOnCombat && NowMs() < c.battleEndMs) run = false;
-    if (!StartMove(c, req.x, req.y, run, true)) { if (c.mv.active) SendMovePath(c, &c); else SendCritterStop(c, 1, &c); }
+    if (!StartMove(c, x, y, run, true)) { if (c.mv.active) SendMovePath(c, &c); else SendCritterStop(c, 1, &c); }
+}
+
+void Server::RunQueuedMove(Critter& c) {
+    if (!c.qmove.has || NowMs() < c.waitEndMs) return;
+    const Critter::QueuedMove q = c.qmove;
+    c.qmove.has = false;
+    if (NowMs() - q.atMs > 3000) return;   // stale
+    CritterId id = c.id;
+    if (q.f) DoMoveF(c, q.x, q.y, q.run);
+    else DoMoveCell(c, TilePos{static_cast<int16_t>(q.x), static_cast<int16_t>(q.y)});
+    (void)id;
 }
 
 void Server::OnChatReq(Critter& c, const std::string& raw) {
@@ -435,7 +468,14 @@ void Server::Broadcast(const std::string& text) {
 // ----------------------------------------------------------------- tick
 
 void Server::StepCritter(Critter& c) {
-    if (c.dead || c.isStatic) { StopMove(c, 1); return; }
+    if (c.dead || c.isStatic) { c.qmove.has = false; StopMove(c, 1); return; }
+    if (c.qmove.has) RunQueuedMove(c);
+    if (!c.mv.active && c.IsPlayer() && c.inRegion < 0 && NowMs() >= c.regionLockUntilMs && NowMs() >= c.battleEndMs) {   // standing in a transition after the lock/battle flag ran out
+        const CritterId rid = c.id; const MapId rm = c.mapId;
+        CheckRegions(c);
+        Critter* rc = world_.GetCritter(rid);
+        if (!rc || rc->mapId != rm) return;
+    }
     if (c.mv.active) {
         CritterId id = c.id;
         AdvanceMove(c, NowMs());

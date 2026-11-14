@@ -95,7 +95,7 @@ public:
     void SyncAp(Critter& c);                         // regenerates AP up to now
     bool IsFree(const Critter& c) const { return NowMs() >= c.waitEndMs; }
     void Wait(Critter& c, int ms, bool notify = true);   // cr.Wait(ms): busy until now + ms
-    void SetBattle(Critter& c, bool notify = true);  // battle flag for TimeoutBattle ms
+    void SetBattle(Critter& c, bool notify = true, int ms = -1);  // battle flag for TimeoutBattle ms
     bool SpendAp(Critter& c, int cost);              // spends if available
     gnet::ActionResult CheckAction(Critter& c, uint8_t action, int apCost, bool report = true);  // free? dead? enough AP? (no side effects)
     void CommitAction(Critter& c, uint8_t action, int apCost, int waitMs);                       // spends AP, sets wait, notifies
@@ -112,6 +112,9 @@ private:
     void OnDisconnect(struct _ENetPeer* peer);
     void OnMoveReq(Critter& c, const net::MoveToReq& req);
     void OnMoveReqF(Critter& c, const gnet::MoveToF& req);
+    void DoMoveCell(Critter& c, TilePos target);
+    void DoMoveF(Critter& c, float x, float y, bool run);
+    void RunQueuedMove(Critter& c);
     void OnChatReq(Critter& c, const std::string& text);
 
     void DoTick();

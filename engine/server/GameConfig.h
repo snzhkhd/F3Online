@@ -17,10 +17,10 @@ struct GameConfig {
     bool RunOnCombat = true;
     // F3Online additions
     int ApBase = 5, ApAgilityDiv = 2;
-    double WalkSpeed = 3.0, RunSpeed = 6.0;  // cells per second
+    double WalkSpeed = 9.0, RunSpeed = 18.0; // cells per second (4.5 / 9 world units/s = the stride of the Walk / Run clips)
     double MoveClearance = 0.3;              // cells
-    int AttackMinMs = 500, AttackMaxMs = 4000, AttackMsPerCost = 100;
-    int RtApCostAttackPerCost = 10, RtApCostAttackMin = 50;
+    int AttackMinMs = 400, AttackMaxMs = 1000, AttackMsPerCost = 40;
+    int RtApCostAttackPerCost = 5, RtApCostAttackMin = 50;
     int TransferLock = 3000;
 };
 

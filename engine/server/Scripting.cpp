@@ -50,6 +50,7 @@ void Scripting::BindApi(sol::state& L) {
         "use_ap", [&S](Critter& c, int cost) { bool ok = S.SpendAp(c, cost); if (ok) S.SendWaitState(c); return ok; },
         "in_battle", [&S](Critter& c) { return S.NowMs() < c.battleEndMs; },
         "set_battle", [&S](Critter& c) { S.SetBattle(c); },
+        "set_battle_ms", [&S](Critter& c, int ms) { S.SetBattle(c, true, ms); },
         "think_due", [&S](Critter& c, int ms) {  // true at most once per `ms` (staggered by id): npc think interval, config.CritterIdleTick
             uint64_t n = S.NowMs();
             if (n < c.nextThinkMs) return false;

@@ -36,8 +36,8 @@ void Server::Wait(Critter& c, int ms, bool notify) {
     if (notify && c.IsPlayer()) SendWaitState(c);
 }
 
-void Server::SetBattle(Critter& c, bool notify) {
-    c.battleEndMs = NowMs() + static_cast<uint64_t>(std::max(0, rt_.TimeoutBattle));
+void Server::SetBattle(Critter& c, bool notify, int ms) {
+    c.battleEndMs = NowMs() + static_cast<uint64_t>(std::max(0, ms >= 0 ? ms : rt_.TimeoutBattle));
     if (notify && c.IsPlayer()) SendWaitState(c);
 }
 
