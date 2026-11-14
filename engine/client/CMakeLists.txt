@@ -10,6 +10,6 @@ add_executable(f3_testclient TestClient.cpp)
 target_link_libraries(f3_testclient PRIVATE f3_client_core)
 
 if(F3_BUILD_CLIENT)
-  add_executable(f3_client main.cpp RaylibRenderer.cpp)
-  target_link_libraries(f3_client PRIVATE f3_client_core raylib)
+  add_executable(f3_client main.cpp RaylibRenderer.cpp GameAssets.cpp MapView.cpp)
+  target_link_libraries(f3_client PRIVATE f3_client_core f3_gamedata raylib)
 endif()

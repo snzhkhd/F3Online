@@ -31,6 +31,23 @@ struct SceneView {
     std::vector<SceneCritter> critters;
     std::vector<const ClientItem*> items;
     float cameraX = 0, cameraY = 0;  // tile units, centre of view (renderer may smooth further)
+    bool hasSelf = false;            // cameraX/Y is the controlled critter (renderer follows it)
+    bool viewer = false;             // map viewer mode: no network, the renderer draws its own loaded map
+    bool allowCameraKeys = true;     // false while the chat box has the keyboard
+};
+
+// Options for the asset renderer. With an empty gameDir (or a failed open) the placeholder renderer is used.
+struct RendererOptions {
+    std::string gameDir;            // original install (resource.rht + data\*.grp)
+    std::string screenshotPath;     // write a PNG of frame `screenshotFrame`
+    int screenshotFrame = 30;
+    bool exitAfterScreenshot = false;
+    // optional initial camera / view overrides (viewer and tests)
+    bool hasCam = false;  float camAzimuth = 45, camElevation = 45, camFov = 12;
+    bool hasTarget = false;  float targetX = 0, targetZ = 0;   // original world x/z
+    float clipY = 1e9f;             // roof cut-away height
+    bool noEntities = false;
+    float modelScale = -1;          // <0: default
 };
 
 struct UiView {
@@ -56,8 +73,14 @@ public:
     virtual bool ScreenToTile(int sx, int sy, TilePos& out) const = 0;
     // True if the point is over UI (so clicks should not become move orders).
     virtual bool IsOverUi(int sx, int sy) const = 0;
+
+    // --- original-asset rendering (optional; the placeholder renderer ignores these) ---
+    virtual bool HasAssets() const { return false; }
+    // Loads a map of the original game by name (tre/emap base name). Viewer mode and network mode both use this.
+    virtual bool LoadOriginalMap(const std::string& /*name*/, std::string* /*err*/ = nullptr) { return false; }
+    virtual std::string AssetInfo() const { return {}; }
 };
 
-std::unique_ptr<IRenderer> CreateRaylibRenderer();
+std::unique_ptr<IRenderer> CreateRaylibRenderer(const RendererOptions& opt = {});
 
 }  // namespace f3
