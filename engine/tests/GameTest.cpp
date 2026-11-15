@@ -337,7 +337,13 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
                 us.skill = 14; us.kind = 0;                                          // skill index out of range: ignored
                 a.Send(gnet::PackG(us));
                 WaitFor({&a}, 1, [] { return false; });
-                CHECK(a.chat.empty(), "UseSkill with an invalid skill index is ignored");
+                // nearby NPCs may speak (their scripts' floating speech reaches the chat), so only skill related replies count
+                CHECK(!said(a, "passive") && !said(a, "cannot use") && !said(a, "Invalid") && !said(a, "not hurt") && !said(a, "too far"),
+                      "UseSkill with an invalid skill index is ignored");
+                a.chat.clear();
+                us.skill = 0; us.kind = 0;                                           // Firearms is a passive skill: refused
+                a.Send(gnet::PackG(us));
+                CHECK(WaitFor({&a}, 3, [&] { return said(a, "passive"); }), "UseSkill with a passive skill (Firearms) is refused");
             }
         }
         enet_peer_disconnect(obs.peer, 0);

@@ -344,8 +344,7 @@ public:
         if (mode == CursorMode::Skill && curTarget_) { drawCentred(curTarget_); return; }
         DrawTexture(*curDefault_, static_cast<int>(mp.x), static_cast<int>(mp.y), WHITE);
         const Texture2D* icon = mode == CursorMode::Talk ? curTalk_ : (mode == CursorMode::Use || mode == CursorMode::Pickup) ? curUse_ : nullptr;
-        if (icon) DrawTexturePro(*icon, Rectangle{0, 0, static_cast<float>(icon->width), static_cast<float>(icon->height)},
-                                 Rectangle{mp.x + 18, mp.y + 14, 32, 32}, Vector2{0, 0}, 0, WHITE);
+        if (icon) DrawTexture(*icon, static_cast<int>(mp.x) + curDefault_->width / 2, static_cast<int>(mp.y) + curDefault_->height / 2, WHITE);   // native size
     }
 
     void DrawUiInner(const UiView& ui) {

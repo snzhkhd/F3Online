@@ -521,6 +521,11 @@ enum class GMsgChar : uint8_t { C2S_CharCreate = 34, C2S_SpendSkill = 35, C2S_Us
 inline constexpr int kSkillCount = 14;
 inline const char* const kSkillNames[kSkillCount] = {"Firearms", "Melee", "Unarmed", "Barter", "Persuasion", "Deception", "Mechanics",
                                                      "Medic", "Outdoorsman", "Science", "Security", "Sneak", "Steal", "Traps"};
+// Skills that can be used actively on a target (the Fallout 1/2 skilldex set): Repair (Mechanics), Doctor/First Aid (Medic), Science,
+// Lockpick (Security), Sneak, Steal, Traps. The others (weapon skills, Barter, Persuasion, Deception, Outdoorsman) are passive.
+inline constexpr int kUsableSkills[] = {7 /*Medic*/, 9 /*Science*/, 6 /*Mechanics*/, 10 /*Security*/, 11 /*Sneak*/, 12 /*Steal*/, 13 /*Traps*/};
+inline constexpr int kUsableSkillCount = static_cast<int>(sizeof(kUsableSkills) / sizeof(kUsableSkills[0]));
+inline bool IsUsableSkill(int s) { for (int u : kUsableSkills) if (u == s) return true; return false; }
 namespace gnet {
 struct CharCreate {
     static constexpr GMsg kId = static_cast<GMsg>(GMsgChar::C2S_CharCreate);

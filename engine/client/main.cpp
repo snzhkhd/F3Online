@@ -325,12 +325,17 @@ int main(int argc, char** argv) {
         // ---- hotkeys and mouse ----
         if (!typing && inGame && !creating) {
             if (in.keySkill) {   // S: skill cursor (the first press picks the last used skill, further presses cycle, Shift+S backwards)
-                if (uiState.mode == CursorMode::Skill) uiState.skill = (uiState.skill + (in.shift ? kSkillCount - 1 : 1)) % kSkillCount;
+                if (!IsUsableSkill(uiState.skill)) uiState.skill = kUsableSkills[0];
+                else if (uiState.mode == CursorMode::Skill) {
+                    int idx = 0;
+                    for (int k = 0; k < kUsableSkillCount; k++) if (kUsableSkills[k] == uiState.skill) idx = k;
+                    uiState.skill = kUsableSkills[(idx + (in.shift ? kUsableSkillCount - 1 : 1)) % kUsableSkillCount];
+                }
                 uiState.mode = CursorMode::Skill;
                 uiState.charSheet = false;
             }
-            if (in.keyNumber >= 0 && in.keyNumber < kSkillCount) {   // 1..9, 0: skill 1..10 of the character sheet; Alt = on yourself now
-                uiState.skill = in.keyNumber;
+            if (in.keyNumber >= 0 && in.keyNumber < kUsableSkillCount) {   // 1..7: the usable skills (Medic, Science, Mechanics, Security, Sneak, Steal, Traps); Alt = on yourself now
+                uiState.skill = kUsableSkills[in.keyNumber];
                 if (in.alt) core.UseSkill(uiState.skill, 0, 0);
                 else { uiState.mode = CursorMode::Skill; uiState.charSheet = false; }
             }
@@ -551,6 +556,7 @@ int main(int argc, char** argv) {
                 case UiCommand::SpendSkill: core.SpendSkill(static_cast<int>(c.a), static_cast<int>(c.b)); break;
                 case UiCommand::UseSkill: core.UseSkill(static_cast<int>(c.a)); break;
                 case UiCommand::SelectSkill:
+                    if (!IsUsableSkill(static_cast<int>(c.a))) break;   // passive skills cannot be used on a target
                     uiState.skill = static_cast<int>(std::min<uint32_t>(c.a, kSkillCount - 1));
                     uiState.mode = CursorMode::Skill;
                     uiState.charSheet = false;

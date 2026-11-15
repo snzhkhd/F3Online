@@ -140,6 +140,7 @@ bool Server::SpendSkillPoints(Critter& c, int skill, int points) {
 
 bool Server::UseSkill(Critter& c, int skill, int kind, uint32_t target) {
     if (!c.created || c.dead || skill < 0 || skill >= kSkillCount) return false;
+    if (!IsUsableSkill(skill)) { Tell(c, std::string(kSkillNames[skill]) + " is a passive skill."); return false; }
     // the target is checked before anything is spent: kind 0 = self, 1 = another critter, 2 = map object (door, container, item);
     // it must be on the same map and within SkillUseRange tiles
     if (kind < 0 || kind > 2) { Tell(c, "Invalid skill target."); return false; }
