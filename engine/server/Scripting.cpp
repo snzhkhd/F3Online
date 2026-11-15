@@ -211,6 +211,7 @@ void Scripting::BindApi(sol::state& L) {
     };
     // data-driven content (requires gamedata/server): prototype key like "Weapons44_Revolver.WEA"
     L["data_loaded"] = [&S]() { return S.Data().Loaded(); };
+    L["dev_kit"] = [&S]() { return S.GetConfig().devKit; };
     L["map_count"] = [&W]() { return (int)W.Maps().size(); };
     L["map_names"] = [&W](sol::this_state ts) {
         sol::state_view sv(ts);

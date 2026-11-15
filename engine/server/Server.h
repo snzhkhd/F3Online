@@ -31,6 +31,7 @@ public:
         int maxClients = 64;
         std::filesystem::path scriptsDir = "scripts";
         std::filesystem::path dataDir;  // gamedata/server (tools/dataimport output); empty = auto-detect, missing = test map only
+        bool devKit = false;            // --dev-kit: new players get a few test items (gun, ammo, armor, revolver); default: nothing
         bool noData = false;            // --no-data: never load gamedata even if present
         int maxRunSeconds = 0;  // 0 = run until stopped; used by smoke tests
     };

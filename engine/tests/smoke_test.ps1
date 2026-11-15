@@ -38,7 +38,7 @@ if ($code -ne 0) { $exit = $code }
 # ---- 2. real data
 if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest)) {
     $log2 = Join-Path $env:TEMP "f3_server_smoke_data.log"
-    $p = Run-Server "--data `"$DataDir`"" $log2 ($Port + 1)
+    $p = Run-Server "--data `"$DataDir`" --dev-kit" $log2 ($Port + 1)
     try {
         Start-Sleep -Milliseconds 2500
         & $gametest --port ($Port + 1)

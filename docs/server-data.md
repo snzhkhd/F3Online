@@ -99,7 +99,7 @@ work as melee items with a default damage of 2-6 plus the Strength bonus.
 All numbers below are placeholders unless noted; formulas of the original game are not known.
 
 * Stats: `maxHp = 15 + S + 2E`, carry weight `25 + 25 S`, `AC = A + armor AC`, sequence `2P`, melee bonus `max(0, S-5)`. Players use `Default_PC.CRT`
-  (all SPECIAL 6, 33 HP), team 1. Starter kit (Lua `on_login`): 9mm autoloader (equipped), 30 x 9mm, leather outfit (worn), .44 revolver.
+  (all SPECIAL 6, 33 HP), team 1. A new character owns and wears NOTHING (base body). The dev starter kit (Lua `on_login`: 9mm autoloader in hand 1, 30 x 9mm, leather outfit worn, .44 revolver) is only given when the server runs with `--dev-kit` (`f3_gametest` expects it; `f3_gametest --expect-empty` checks the default).
 * Inventory: stackable ammo/misc, one equipped weapon and one armor, carry weight limit for players, drop to ground, pick up (the server walks
   the player next to the item first, then picks up; pending actions are cancelled by a new move), take from containers.
 * Doors: `Use` toggles; unlocked doors also open by proximity (a critter within 5 cells) and auto-close after 3 s with nobody near (`TickDoors`, every 5 ticks).
@@ -266,3 +266,9 @@ No reload/skill/pick-critter actions (their `RtApCost*` keys are inert); no queu
 * A walk request during that busy window is no longer dropped: the auto attack and pending action are cancelled and the walk is queued (`Critter::QueuedMove`), started by `StepCritter` when the critter is free (dropped after 3 s). The client gets `Busy` and shows "busy - walking as soon as ready". `RunOnCombat` and the transfer lock do not affect walking.
 * Dev command `/battle [ms]` sets the battle flag (Lua `set_battle_ms`); f3_gametest covers attack then walk away and walking during the battle flag.
 * A player standing inside a transition region when the transfer lock or battle flag runs out is now transferred (`StepCritter` re-checks regions); at the new 9 cells/s walk speed the bot used to arrive before the 3 s lock expired.
+
+
+## Equipment slots and weight (inventory UI)
+
+* `InvEntry.equipped` carries the slot: 0 carried, 1 body, 2 head, 3 hand 1 (active weapon, used for attacks), 4 hand 2 (spare weapon). `C2S_Equip` has an optional trailing `slot` byte (0 = automatic). Rules (server authoritative, `Server::EquipItem`): weapons only in the hands, armor in the body slot, helmets (`*Helmet*` keys) in the head slot; automatic weapon equip takes hand 1 and pushes the previous hand-1 weapon to hand 2 when that is free; equipping onto an occupied hand from the other hand swaps.
+* Weight: `Stats.carryWeight` = `CarryBase + CarryPerStrength * ST` (config.lua, 25 + 25*ST), `Stats.carried` = sum of unit weight * count, `InvEntry.weight` = unit weight. The demo data has no weights, so unit weights come from a class table (`WeightWeapon 4, WeightArmor 8, WeightAmmo 1, WeightItem 1`) with per-prototype overrides `config.ItemWeights["Key.WEA"] = n`. Pick up / take from containers is refused over the limit.

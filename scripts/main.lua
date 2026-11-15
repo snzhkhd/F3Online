@@ -46,8 +46,10 @@ function on_reload()
 end
 
 function on_login(c)
-    if data_loaded() and #c:inventory() == 0 then
-        -- starter kit (real prototypes from the original data)
+    -- A new character has NOTHING equipped and an empty inventory (it looks like the base body). The test kit below is
+    -- only given when the server runs with --dev-kit.
+    if data_loaded() and dev_kit() and #c:inventory() == 0 then
+        -- dev starter kit (real prototypes from the original data)
         local gun = c:give("Weapons9mm_Autoloader.WEA")
         c:give("Ammo9mm.AMO", 30)
         local arm = c:give("ArmorLeather_Outfit.ARM")

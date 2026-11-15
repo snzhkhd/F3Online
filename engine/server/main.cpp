@@ -1,5 +1,5 @@
 // f3_server: headless authoritative server.
-//   f3_server [--port N] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N]
+//   f3_server [--port N] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit]
 // --data defaults to the nearest gamedata/server (output of f3_dataimport) next to the binary or in a parent of the cwd.
 // Console commands on stdin: reload | status | say <text> | quit
 #include <algorithm>
@@ -60,8 +60,9 @@ int main(int argc, char** argv) {
         else if (a == "--data") { cfg.dataDir = next("--data"); dataGiven = true; }
         else if (a == "--no-data") cfg.noData = true;
         else if (a == "--tickrate") cfg.tickRate = std::max(1, std::atoi(next("--tickrate")));
+        else if (a == "--dev-kit") cfg.devKit = true;
         else if (a == "--run-seconds") cfg.maxRunSeconds = std::atoi(next("--run-seconds"));
-        else { std::cerr << "usage: f3_server [--port N] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N]\n"; return 2; }
+        else { std::cerr << "usage: f3_server [--port N] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit]\n"; return 2; }
     }
     if (!scriptsGiven) cfg.scriptsDir = FindScripts(argv[0]);
     if (!dataGiven && !cfg.noData) cfg.dataDir = FindData(argv[0]);

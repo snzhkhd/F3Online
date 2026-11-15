@@ -188,12 +188,19 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--port")) port = static_cast<uint16_t>(std::atoi(argv[i + 1]));
         if (!std::strcmp(argv[i], "--expect-map")) expectMap = argv[i + 1];
     }
+    bool expectEmpty = false;   // server without --dev-kit: a new character owns and wears nothing
+    for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--expect-empty")) expectEmpty = true;
     if (enet_initialize() != 0) return 2;
 
     Bot a, b;
     if (!a.Connect(port) || !b.Connect(port)) { std::printf("FAIL: cannot connect to 127.0.0.1:%u\n", port); return 1; }
     a.Login("GameBotA");
     CHECK(WaitFor({&a}, 8, [&] { return a.loggedIn && a.mapInfoCount > 0 && a.havePos && a.haveStats && a.invUpdates > 0; }), "bot A logged in with map, stats, inventory");
+    if (expectEmpty) {
+        CHECK(a.inv.empty(), "new character has an empty inventory (%zu entries) and nothing equipped", a.inv.size());
+        std::printf(g_failed ? "GAMETEST FAILED\n" : "GAMETEST PASSED (empty character)\n");
+        return g_failed ? 1 : 0;
+    }
     {
         gnet::ClientCaps cp; cp.caps = gnet::kCapContinuousMove;
         a.Send(gnet::PackG(cp));  // bot A is a continuous-movement client, bot B stays legacy
