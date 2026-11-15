@@ -24,6 +24,15 @@ struct ProtoInfo {
     std::vector<WornPart> worn;  // critters: appearance sockets (hair, beard, ...) plus the parts of equipped armor
     bool hasDialog = false;  // critters: the prototype names a dialogue
     bool isStatic = false;  // critter-class props (barrels, windows): drawn by the map, never animated
+    // --- inventory UI block: item data for the original-art inventory / action bar ---
+    std::string icon, iconAct;   // "BodVaultsuit_INV.dds", "WP_..._ACT.dds" (names of Interface TGAs, extension free), may be empty
+    std::string desc;            // English description, may be empty
+    bool headArmor = false;      // armor: helmet (head slot) instead of body
+    int range = 0, weaponClass = 0;
+    float dmgMin = 0, dmgMax = 0;
+    struct Mode { int type = 0, ap = 0; };
+    std::vector<Mode> modes;     // weapon attack modes (type 1 burst, 2 single, 6 thrust, 8 swing, 9 throw/other: guess)
+    int armor[7] = {0, 0, 0, 0, 0, 0, 0};
     bool isCritter() const { return cls == "critter"; }
 };
 

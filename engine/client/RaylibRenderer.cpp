@@ -14,6 +14,7 @@
 #include "GameAssets.h"
 #include "IRenderer.h"
 #include "MapView.h"
+#include "OrigUi.h"
 #include "common/log.h"
 
 namespace f3 {
@@ -74,6 +75,10 @@ public:
                 dopt_.clipY = opt_.clipY;
                 dopt_.entities = !opt_.noEntities;
                 rigs_ = std::make_unique<RigLibrary>(*assets_);
+                if (!opt_.noOrigUi) {
+                    std::string uerr;
+                    if (!orig_.Load(assets_->data(), opt_.gameDir, &uerr)) log::Warn("original UI disabled (%s), using the raylib HUD", uerr.c_str());
+                }
             }
         }
         showGrid_ = opt_.showGrid;
@@ -82,6 +87,7 @@ public:
     }
     void Shutdown() override {
         visuals_.clear();   // GL meshes before the context goes away
+        orig_.Unload();
         rigs_.reset();
         map_.Unload();
         if (assets_) assets_->Unload();
@@ -780,6 +786,15 @@ private:
         const ClientCore& core = *ui.core;
         UiState& st = *ui.state;
         const int sw = GetScreenWidth(), sh = GetScreenHeight();
+        if (orig_.ok()) {   // original art: action bar + inventory window; the other windows stay raylib for now
+            orig_.DrawActionBar(ui, uiRects_);
+            if (st.inventory) orig_.DrawInventory(ui, uiRects_);
+            orig_.DrawOverlay();
+            if (core.hasContainer()) DrawContainer(ui);
+            if (core.dialog().open) DrawDialog(ui);
+            if (st.charSheet) DrawCharSheet(ui);
+            return;
+        }
         Rectangle hud{sw - 566.0f, sh - 124.0f, 558, 116};
         DrawRectangleRec(hud, Color{10, 12, 16, 210});
         DrawRectangleLinesEx(hud, 1, Color{80, 84, 100, 255});
@@ -1018,7 +1033,7 @@ private:
     float TileSize() const { return 32.0f * zoom_; }
     Rectangle ChatPanel() const {
         float h = 150;
-        return Rectangle{8, GetScreenHeight() - h - 36.0f, 520, h};
+        return Rectangle{8, GetScreenHeight() - h - 36.0f - (orig_.ok() ? orig_.BarHeight() : 0.0f), 520, h};
     }
     // Top-left corner of a tile in screen space. Tile coords denote tile centres.
     Vector2 TileToScreen(float tx, float ty) const {
@@ -1032,6 +1047,7 @@ private:
     RendererOptions opt_;
     std::unique_ptr<GameAssets> assets_;
     std::unique_ptr<RigLibrary> rigs_;
+    OrigUi orig_;   // original-art action bar / inventory (falls back to the raylib HUD when assets are missing)
     MapView map_;
     DrawOptions dopt_;
     OrbitCam cam_;

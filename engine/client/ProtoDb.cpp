@@ -85,6 +85,25 @@ bool ProtoDb::Load(const std::string& hint, std::string* err) {
             p.name = v.value("name", "");
             p.skin = v.value("skin", "");
             p.isStatic = v.value("static", false);
+            p.icon = v.value("icon", "");
+            p.iconAct = v.value("icon_ground", "");
+            p.desc = v.value("desc", "");
+            if (p.cls == "armor") {
+                std::string lk = p.key;
+                std::transform(lk.begin(), lk.end(), lk.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                p.headArmor = lk.find("helmet") != std::string::npos;
+                if (v.contains("armor") && v["armor"].contains("values"))
+                    for (size_t i = 0; i < 7 && i < v["armor"]["values"].size(); ++i) p.armor[i] = v["armor"]["values"][i].get<int>();
+            }
+            if (p.cls == "weapon" && v.contains("weapon")) {
+                const nlohmann::json& w = v["weapon"];
+                p.range = w.value("range", 0);
+                p.weaponClass = w.value("weapon_class", 0);
+                p.dmgMin = w.value("dmg_min", 0.0f);
+                p.dmgMax = w.value("dmg_max", 0.0f);
+                if (w.contains("attack_modes"))
+                    for (const auto& m : w["attack_modes"]) p.modes.push_back({m.value("type", 0), m.value("ap", 0)});
+            }
             p.hasDialog = v.contains("dialog") && v["dialog"].is_string() && !v["dialog"].get<std::string>().empty();
             uint32_t pid = static_cast<uint32_t>(protos_.size());
             byKey_[Lower(p.key)] = pid;

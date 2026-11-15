@@ -103,7 +103,7 @@ public:
     void SendPing();
     void PickUp(ItemId id);
     void Drop(uint32_t invId);
-    void Equip(uint32_t invId, bool on);
+    void Equip(uint32_t invId, bool on, uint32_t slot = 0);
     void Use(uint32_t objectId);
     void Attack(CritterId id);   // 0 = stop
     void Take(uint32_t container, uint32_t entry);   // entry 0 = everything

@@ -87,6 +87,7 @@ int main(int argc, char** argv) {
     std::string name = cfg.count("name") ? cfg["name"] : "Player";
     std::string viewMap, protosHint, gameDirArg;
     uint16_t port = cfg.count("port") ? static_cast<uint16_t>(std::atoi(cfg["port"].c_str())) : kDefaultPort;
+    bool openInv = false;
     bool noAssets = false, autowalk = false, hostGiven = false, legacy = false, autoattack = false, autopickup = false;
     std::vector<std::string> sayList;
     std::string traceFile;
@@ -106,6 +107,8 @@ int main(int argc, char** argv) {
         else if (a == "--shot") ropt.screenshotPath = next();
         else if (a == "--shot-frame") ropt.screenshotFrame = std::atoi(next());
         else if (a == "--shot-exit") ropt.exitAfterScreenshot = true;
+        else if (a == "--no-origui") ropt.noOrigUi = true;
+        else if (a == "--open-inv") openInv = true;
         else if (a == "--shots") ropt.shotPrefix = next();
         else if (a == "--shot-times") {
             std::stringstream ss(next());
@@ -191,6 +194,7 @@ int main(int argc, char** argv) {
     bool typing = false;
     std::string input;
     UiState uiState;
+    uiState.inventory = openInv;
     std::vector<UiCommand> commands;
     Trace trace;
     if (!traceFile.empty()) { trace.csv.open(traceFile); trace.csv << "t,x,y,moving,speed\n"; }
@@ -396,7 +400,7 @@ int main(int argc, char** argv) {
                 case UiCommand::SetMode: uiState.mode = c.a == 1 ? CursorMode::Examine : c.a == 2 ? CursorMode::Attack : CursorMode::Move; break;
                 case UiCommand::ToggleInventory: uiState.inventory = !uiState.inventory; break;
                 case UiCommand::ToggleChar: uiState.charSheet = !uiState.charSheet; break;
-                case UiCommand::Equip: core.Equip(c.a, c.b != 0); break;
+                case UiCommand::Equip: core.Equip(c.a, c.b != 0, c.c); break;
                 case UiCommand::Drop: core.Drop(c.a); break;
                 case UiCommand::Take: core.Take(c.a, c.b); break;
                 case UiCommand::CloseContainer: core.CloseContainer(); break;

@@ -78,6 +78,7 @@ struct RendererOptions {
     bool hasTarget = false;  float targetX = 0, targetZ = 0;   // original world x/z
     float clipY = 1e9f;             // roof cut-away height
     bool noEntities = false;
+    bool noOrigUi = false;          // keep the plain raylib HUD even when the original interface art is available
     bool showGrid = false;          // start with the walk grid overlay on (the G key toggles it)
     float modelScale = -1;          // <0: default
     bool network = false;           // network mode: dynamic entities come from the server, not from the emap
@@ -86,7 +87,7 @@ struct RendererOptions {
 
 struct UiCommand {
     enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, CloseContainer, DialogChoose, DialogClose } type = SetMode;
-    uint32_t a = 0, b = 0;
+    uint32_t a = 0, b = 0, c = 0;   // Equip: a = inventory id, b = on, c = EquipSlot (0 = automatic)
 };
 
 struct UiState {

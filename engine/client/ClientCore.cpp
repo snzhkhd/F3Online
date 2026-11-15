@@ -508,7 +508,7 @@ void ClientCore::SendPing() {
 
 void ClientCore::PickUp(ItemId id) { gnet::PickUp m; m.id = id; SendG(m); }
 void ClientCore::Drop(uint32_t invId) { gnet::Drop m; m.id = invId; SendG(m); }
-void ClientCore::Equip(uint32_t invId, bool on) { gnet::Equip m; m.id = invId; m.on = on ? 1 : 0; SendG(m); }
+void ClientCore::Equip(uint32_t invId, bool on, uint32_t slot) { gnet::Equip m; m.id = invId; m.on = on ? 1 : 0; m.slot = static_cast<uint8_t>(slot); SendG(m); }
 void ClientCore::Use(uint32_t objectId) { gnet::Use m; m.id = objectId; SendG(m); }
 void ClientCore::Attack(CritterId id) { gnet::Attack m; m.id = id; SendG(m); }
 void ClientCore::Take(uint32_t container, uint32_t entry) { gnet::Take m; m.container = container; m.entry = entry; SendG(m); }

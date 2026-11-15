@@ -134,3 +134,28 @@ Vault: 47 k triangles. All geometry is static GPU meshes; no per-frame allocatio
 * Rigged doors (`MapView::SetRigs`, `Update`): CPU-skinned with the Granny skeleton from `<model>.mesh.gr2`, `doorT` moves 0..clip length
   towards the server open state.
 * Known gaps: the Overseer door and other doors without skeleton just vanish when open; some Vault rooms are dark (lightmaps, pre-existing).
+
+## Original-art action bar and inventory (`OrigUi`)
+
+`engine/client/OrigUi.{h,cpp}` draws the action bar and the inventory window from the game install (`Interface\Actionbar.gui`,
+`Inventory.gui`, `f3_*.tga`, item icons `*_INV.tga` / `*_ACT.tga`, fonts `Fonts\r_fallouty.ttf` + `TT0807M_.TTF`); layout format in
+`docs/formats/gui.md`. Nothing is copied into the repo. If any of it is missing, `Load()` fails, a warning is logged and the old
+raylib HUD is used; `--no-origui` forces the raylib HUD, `--open-inv` starts with the inventory open (screenshots).
+Everything else (chat, dialogue, container, character sheet, labels) is still raylib.
+
+* The layout is 1024 wide (bar 1024x164 anchored bottom centre, inventory 1024x604 centred above it); both scale down uniformly
+  on small windows. Background textures are stretched (800 -> 1024), buttons are 1:1.
+* **Action bar**: weapon slot 1 = hand 1 (active weapon, "down" texture), slot 2 = hand 2 (spare; clicking it swaps the hands via
+  `Equip(id, 1, SlotHand1)`). Weapon image = `iconAct`, mode text = first attack mode of the prototype (SINGLE/BURST/THRUST/SWING/THROW,
+  mode type numbers are a guess), `NAP` = mode AP word / 10 (guess), ammo icon on when the player carries any ammo and the weapon is
+  ranged. Digit boxes: health, current AP, armor class. Player frame (name, yellow health fill, blue AP fill), AP cells (green full,
+  blue regenerating, grey empty) and AP counter, Inventory / Character buttons. The dark message area on the left holds the cursor
+  mode buttons (Move / Examine / Attack), the break-time bar (red while actions are locked) and the busy / no-AP message.
+* **Inventory**: backpack = 3x6 cells of unequipped items (scroll with the wheel or the arrows, sort by type / weight / name by clicking the
+  field below the list), paperdoll slots Head / Body / Hand 1 / Hand 2, per-slot readouts (weapon damage, range, ammo; armor threshold /
+  AC), SPECIAL, HP, AC, level, weight `carried / limit` (red when over), description box.
+  Interaction: drag an item onto a slot of the right class (valid slots get a green frame) to equip, drag an equipped item onto the backpack
+  list to unequip, drag onto the trash can or out of the window to drop, double click equips / unequips, right click examines (name +
+  description, weight, weapon / armor data are shown in the description box), hovering shows a tooltip. Item names and descriptions
+  come from English.stf through `protos.json`.
+* Not done: skills, the 3D paperdoll model (`winModel`), "use item from inventory", attack-mode switching, reload.
