@@ -189,6 +189,34 @@ OrigUi::Roll OrigUi::RollOf(const std::string& key, int v) {
     return Roll{r.from, r.shown, r.dir, p};
 }
 
+void OrigUi::DrawSkillPanel(const UiView& ui, std::vector<Rectangle>& rects) {
+    if (!ok_ || !haveFonts_ || !ui.state || !ui.state->skillPanel || !ui.core || !ui.commands) return;
+    const float sw = static_cast<float>(GetScreenWidth()), sh_ = static_cast<float>(GetScreenHeight());
+    const float s = std::min(sw / 1024.0f, sh_ / 768.0f);
+    const bool have = ui.core->hasSheet();
+    const float rowH = 26 * s, w = 250 * s, hdr = 34 * s;
+    const float h = hdr + rowH * kUsableSkillCount + 24 * s;
+    const Rectangle r{std::floor(sw / 2 - w / 2), std::floor(sh_ - BarHeight() - h - 8 * s), w, h};
+    rects.push_back(r);
+    DrawRectangleRec(r, Color{8, 8, 6, 235});
+    DrawRectangleLinesEx(r, 2, Color{120, 100, 44, 255});
+    DrawRectangleLinesEx(Rectangle{r.x + 4, r.y + 4, r.width - 8, r.height - 8}, 1, Color{60, 50, 24, 255});
+    Text(fallouty_, "USE SKILL", r.x, r.y + 8 * s, 20 * s, kAmber, 1, r.width);
+    const Vector2 mp = GetMousePosition();
+    for (int i = 0; i < kUsableSkillCount; ++i) {
+        const int sk = kUsableSkills[i];
+        const Rectangle row{r.x + 10 * s, r.y + hdr + i * rowH, r.width - 20 * s, rowH};
+        const bool hot = CheckCollisionPointRec(mp, row);
+        const bool cur = ui.state->mode == CursorMode::Skill && ui.state->skill == sk;
+        if (hot || cur) DrawRectangleRec(row, Color{70, 58, 22, hot ? 200u : 120u});
+        const Color c = hot ? Color{255, 235, 140, 255} : kAmber;
+        Text(gothic_, std::to_string(i + 1) + "  " + kSkillNames[sk], row.x + 6 * s, row.y + 3 * s, 17 * s, c);
+        if (have) Text(fallouty_, std::to_string(ui.core->sheet().skill[sk]), row.x, row.y + 4 * s, 15 * s, Color{120, 235, 90, 255}, 2, row.width - 6 * s);
+        if (hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) ui.commands->push_back(UiCommand{UiCommand::SelectSkill, static_cast<uint32_t>(sk), 0, 0});
+    }
+    Text(gothic_, "U / Esc: close", r.x, r.y + r.height - 20 * s, 12 * s, kAmberDim, 1, r.width);
+}
+
 float OrigUi::DrawSpeech(const std::string& text, float cx, float bottomY, Color c, float alpha, float maxW) {
     const Font& f = haveFonts_ ? gothic_ : GetFontDefault();
     const float fs = 16;

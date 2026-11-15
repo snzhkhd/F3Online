@@ -31,6 +31,9 @@ public:
     // over the inventory window, which shows the player's side. Drag items between the two, double-click a slot to take it.
     bool HasLoot() const { return ok_ && haveLoot_; }
     void DrawLoot(const UiView& ui, std::vector<Rectangle>& rects);
+    // Skill panel (key U): the usable skills with their values; a click selects the skill cursor (UiCommand::SelectSkill). No original
+    // layout exists for it (no Skilldex .gui in the demo), so it is drawn in the style of the action bar (dark plate, amber gothic text).
+    void DrawSkillPanel(const UiView& ui, std::vector<Rectangle>& rects);
     void DrawOverlay();   // tooltip, after all windows
     // Floating speech: word-wrapped outlined text (gothic font), centred on cx, the block's bottom edge at bottomY. Returns the block height.
     float DrawSpeech(const std::string& text, float cx, float bottomY, Color c, float alpha, float maxW = 230);

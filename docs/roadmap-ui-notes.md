@@ -1,6 +1,6 @@
 # UI roadmap notes (future requests, not implemented)
 
-Requests from the project owner, recorded in spirit; nothing here is built yet.
+Requests from the project owner, recorded in spirit; items 1-4 and the U panel of 5 are now built (see client-rendering.md).
 
 1. **Digit roller in character creation.** When a SPECIAL or skill number changes on the creation screen, the digits should
    animate like a roller / odometer (the original's digit windows) instead of switching instantly.

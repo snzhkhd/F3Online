@@ -45,6 +45,7 @@ struct FrameInput {
     bool keyExamine = false;          // X
     bool keyHand = false;             // B: switch the active hand
     bool keyStop = false;             // Tab: stop attacking
+    bool keySkillPanel = false;       // U: the usable-skill panel (original hotkey UseSkill)
     bool keySkill = false;            // S: next skill cursor (Shift+S: previous)
     int keyNumber = -1;               // top-row 1..9 -> 0..8, 0 -> 9: skill hotkey (Alt = use on yourself)
     bool alt = false;
@@ -131,6 +132,7 @@ struct UiState {
     int skill = 0;                        // the skill of the Skill cursor (index into kSkillNames)
     bool inventory = false;
     bool charSheet = false;
+    bool skillPanel = false;              // U: list of the usable skills
 };
 
 struct UiView {

@@ -148,6 +148,7 @@ public:
         in.keyStop = IsKeyPressed(KEY_TAB);
         in.keyHand = IsKeyPressed(KEY_B);
         in.keySkill = IsKeyPressed(KEY_S);
+        in.keySkillPanel = IsKeyPressed(KEY_U);
         in.alt = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
         for (int k = 0; k < 10; ++k)
             if (IsKeyPressed(k == 9 ? KEY_ZERO : KEY_ONE + k)) in.keyNumber = k;
@@ -1076,6 +1077,7 @@ private:
             orig_.DrawActionBar(ui, uiRects_);
             if (st.inventory && !(core.hasContainer() && orig_.HasLoot())) orig_.DrawInventory(ui, uiRects_);
             if (core.hasContainer() && orig_.HasLoot()) orig_.DrawLoot(ui, uiRects_);
+            orig_.DrawSkillPanel(ui, uiRects_);
             orig_.DrawOverlay();
             if (core.hasContainer() && !orig_.HasLoot()) DrawContainer(ui);
             if (core.dialog().open) DrawDialog(ui);
