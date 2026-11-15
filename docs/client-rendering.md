@@ -159,3 +159,8 @@ Everything else (chat, dialogue, container, character sheet, labels) is still ra
   description, weight, weapon / armor data are shown in the description box), hovering shows a tooltip. Item names and descriptions
   come from English.stf through `protos.json`.
 * Not done: skills, the 3D paperdoll model (`winModel`), "use item from inventory", attack-mode switching, reload.
+
+### Chat in the original action bar (and inventory tooltip)
+
+* With the original-art bar the chat log and input line live in the bar's left dark message screen (`OrigUi::DrawActionBar`): lines are word-wrapped to the screen width (gothic font), newest at the bottom just above the input row; the input row shows the typed text while Enter-chat is active and a faint "Enter: chat" hint otherwise. The floating chat panel above the bar is not drawn in this mode (the raylib fallback HUD keeps it). The Move / Examine / Attack buttons are gone: RMB toggles Move / Examine, key A selects Attack; the mode is shown next to the cursor and as a small label in the top-right corner of the message screen. The break-time bar stays at the bottom of the screen; the "busy" message appears on the input row.
+* The inventory window no longer shows a floating item tooltip (hovering fills the description box). Tooltips remain on the weapon slots of the bar.

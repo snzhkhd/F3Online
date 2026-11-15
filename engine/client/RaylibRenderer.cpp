@@ -296,10 +296,11 @@ public:
             DrawLabels(ui);
         }
 
-        // chat
+        // chat (with the original-art action bar the chat lives inside the bar's message area instead)
         Rectangle panel = ChatPanel();
-        DrawRectangleRec(panel, Color{0, 0, 0, 140});
-        if (ui.chat) {
+        const bool chatInBar = orig_.ok() && ui.core && ui.state && ui.commands && ui.core->state() == ClientCore::State::InGame;
+        if (!chatInBar) DrawRectangleRec(panel, Color{0, 0, 0, 140});
+        if (ui.chat && !chatInBar) {
             // word-wrap every message to the panel width, show the newest lines that fit
             const int lineH = 16, maxLines = static_cast<int>(panel.height / lineH);
             const int maxW = static_cast<int>(panel.width) - 12;
@@ -336,9 +337,9 @@ public:
                 DrawText(wrapped[i].first.c_str(), static_cast<int>(panel.x) + 6, y, 14, wrapped[i].second);
         }
         Rectangle in{panel.x, panel.y + panel.height + 4, panel.width, 24};
-        DrawRectangleRec(in, ui.chatInputActive ? Color{30, 30, 60, 220} : Color{0, 0, 0, 90});
+        if (!chatInBar) DrawRectangleRec(in, ui.chatInputActive ? Color{30, 30, 60, 220} : Color{0, 0, 0, 90});
         std::string text = ui.chatInputActive ? ui.chatInput + ((static_cast<int>(ui.now * 2) & 1) ? "_" : "") : "Press Enter to chat";
-        DrawText(text.c_str(), static_cast<int>(in.x) + 6, static_cast<int>(in.y) + 4, 16,
+        if (!chatInBar) DrawText(text.c_str(), static_cast<int>(in.x) + 6, static_cast<int>(in.y) + 4, 16,
                  ui.chatInputActive ? WHITE : Color{150, 150, 150, 255});
 
         if (ui.core && ui.state && ui.commands && ui.core->state() == ClientCore::State::InGame) {
@@ -429,7 +430,7 @@ public:
         Rectangle p = ChatPanel();
         p.height += 30;
         const Vector2 v{static_cast<float>(sx), static_cast<float>(sy)};
-        if (CheckCollisionPointRec(v, p)) return true;
+        if (!orig_.ok() && CheckCollisionPointRec(v, p)) return true;
         for (const Rectangle& r : uiRects_) if (CheckCollisionPointRec(v, r)) return true;
         return false;
     }

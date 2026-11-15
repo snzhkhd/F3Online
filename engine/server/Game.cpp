@@ -848,7 +848,8 @@ void Server::TickCombat(Critter& c) {
     ev.attacker = c.id;
     ev.target = t->id;
     ev.durMs = static_cast<uint16_t>(std::clamp(durMs, 0, 65535));
-    bool hit = RandRange(1, 100) <= chance;
+    bool hit = !rt_.ForceMiss && RandRange(1, 100) <= chance;
+    OnAttacked(*t, c);   // hit or miss: the target now knows its attacker
     int dmg = 0;
     if (hit) {
         dmg = RandRange(plan.dmgLo, plan.dmgHi);
@@ -870,6 +871,28 @@ void Server::TickCombat(Critter& c) {
     for (Critter* p : m->critters)
         if (p->IsPlayer() && TileDist(p->pos, c.pos) <= kViewCells) Send(*p, b);
     (void)attackerId;
+}
+
+// Every attack attempt (hit or miss) against a critter: the NPC target turns on the attacker, same-team NPCs close by join
+// (AggroAlertRadius), and the Lua hook on_attacked(target, attacker) runs. Static NPCs never move but keep the rule (no target).
+void Server::OnAttacked(Critter& t, Critter& attacker) {
+    Map* m = world_.GetMap(t.mapId);
+    if (t.dead || !m || t.id == attacker.id) return;
+    CritterId aid = attacker.id;
+    if (t.IsNpc() && !t.isStatic && t.target == 0 && attacker.mapId == t.mapId) { t.target = aid; t.nextRepathTick = 0; }
+    if (t.IsNpc() && rt_.AggroAlertRadius > 0) {
+        for (Critter* o : m->critters)
+            if (o != &t && o != &attacker && o->IsNpc() && !o->isStatic && !o->dead && o->target == 0 && o->team == t.team &&
+                attacker.team != o->team && TileDist(o->pos, t.pos) <= rt_.AggroAlertRadius) {
+                o->target = aid;
+                o->nextRepathTick = 0;
+            }
+    }
+    if (scripting_) {
+        Critter* tp = world_.GetCritter(t.id);
+        Critter* ap = world_.GetCritter(aid);
+        if (tp && ap) scripting_->Call("on_attacked", tp, ap);
+    }
 }
 
 void Server::Damage(Critter& t, int amount, Critter* attacker) {

@@ -347,6 +347,46 @@ int main(int argc, char** argv) {
         b.combat.clear();
     }
 
+    // --- NPC aggro on a MISS: a third bot C (disconnects afterwards so the NPC does not keep hunting) attacks a neutral
+    // (idle) NPC with forced misses; the NPC must still turn on C.
+    {
+        Bot c;
+        if (!c.Connect(port)) { CHECK(false, "bot C connects"); } else {
+        c.Login("GameBotC");
+        CHECK(WaitFor({&a, &b, &c}, 8, [&] { return c.loggedIn && c.havePos && c.haveStats; }), "bot C logged in");
+        net::ChatReq fm; fm.text = "/forcemiss on";
+        c.Send(net::Pack(fm));
+        net::ChatReq nr; nr.text = "/near GMC Soldier";
+        c.Send(net::Pack(nr));
+        WaitFor({&a, &b, &c}, 3, [&] { return false; });
+        CritterId npc = 0;
+        int bd = 1 << 30;
+        for (auto& [id, cr] : c.critters) {
+            if (id == a.myId || id == b.myId || id == c.myId || cr.name.find("GMC Soldier") == std::string::npos) continue;
+            int d = TileDist(TilePos{cr.x, cr.y}, c.pos);
+            if (d < bd) { bd = d; npc = id; }
+        }
+        CHECK(npc != 0, "found neutral NPC 'GMC Soldier' near bot C");
+        if (npc) {
+            c.combat.clear();
+            gnet::Attack at; at.id = npc;
+            c.Send(gnet::PackG(at));
+            bool shot = WaitFor({&a, &b, &c}, 10, [&] { for (auto& e : c.combat) if (e.attacker == c.myId) return true; return false; });
+            bool allMiss = shot;
+            for (auto& e : c.combat) if (e.attacker == c.myId && e.result != gnet::HitResult::Miss) allMiss = false;
+            CHECK(allMiss, "forced miss: C's shots at the NPC all missed (%zu events)", c.combat.size());
+            bool reacted = WaitFor({&a, &b, &c}, 15, [&] { for (auto& e : c.combat) if (e.attacker == npc && e.target == c.myId) return true; return false; });
+            CHECK(reacted, "NPC turned on C after a MISS (retaliating combat event)");
+        }
+        fm.text = "/forcemiss off";
+        c.Send(net::Pack(fm));
+        WaitFor({&a, &b, &c}, 0.5, [] { return false; });
+        enet_peer_disconnect_now(c.peer, 0);
+        enet_host_flush(c.host);
+        WaitFor({&a, &b}, 1, [] { return false; });
+        }
+    }
+
     // --- combat: A attacks B (both players, team 1; the server does not forbid PvP)
     {
         CritterId bid = b.myId;

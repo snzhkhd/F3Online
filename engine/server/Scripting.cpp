@@ -167,6 +167,7 @@ void Scripting::BindApi(sol::state& L) {
     L["tick"] = [&S]() { return S.Tick(); };
     L["now_ms"] = [&S]() { return (double)S.NowMs(); };  // server clock in ms (the clock of Wait/WaitState)
 
+    L["set_force_miss"] = [&S](bool on) { S.Rt().ForceMiss = on; };   // dev/test only
     L["get_critter"] = [&W](int id) -> Critter* { return W.GetCritter((CritterId)id); };
     L["find_player"] = [&W](const std::string& n) -> Critter* { return W.FindPlayerByName(n); };
     L["get_map"] = [&W](int id) -> Map* { return W.GetMap((MapId)id); };
@@ -325,7 +326,7 @@ void Scripting::ApplyConfig(sol::state_view L) {
     F3_CFG_INT(RtAlwaysRun); F3_CFG_INT(RunOnCombat);
     F3_CFG_INT(ApBase); F3_CFG_INT(ApAgilityDiv); F3_CFG_NUM(WalkSpeed); F3_CFG_NUM(RunSpeed); F3_CFG_NUM(MoveClearance);
     F3_CFG_INT(AttackMinMs); F3_CFG_INT(AttackMaxMs); F3_CFG_INT(AttackMsPerCost);
-    F3_CFG_INT(RtApCostAttackPerCost); F3_CFG_INT(RtApCostAttackMin); F3_CFG_INT(TransferLock);
+    F3_CFG_INT(RtApCostAttackPerCost); F3_CFG_INT(RtApCostAttackMin); F3_CFG_INT(TransferLock); F3_CFG_INT(AggroAlertRadius); F3_CFG_INT(ForceMiss);
     F3_CFG_INT(CarryBase); F3_CFG_INT(CarryPerStrength);
     F3_CFG_INT(WeightWeapon); F3_CFG_INT(WeightArmor); F3_CFG_INT(WeightAmmo); F3_CFG_INT(WeightItem);
 #undef F3_CFG_INT

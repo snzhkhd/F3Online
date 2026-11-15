@@ -101,6 +101,8 @@ end
 function commands.maps(c)
     c:tell(table.concat(map_names(), ", "))
 end
+-- dev: /forcemiss [on|off]: every attack misses (tests NPC aggro on a miss)
+function commands.forcemiss(c, arg) set_force_miss(arg ~= "off"); c:tell("force miss " .. ((arg ~= "off") and "on" or "off")) end
 -- dev helper: /tp x y  (cell coordinates on the current map)
 function commands.tp(c, arg)
     local x, y = (arg or ""):match("^(%d+)%s+(%d+)")

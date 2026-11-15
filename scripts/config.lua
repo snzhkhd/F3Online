@@ -33,6 +33,8 @@ config = {
     RtApCostAttackPerCost     = 5,     -- placeholder
     -- attack AP (1/100) = weapon cost word * RtApCostAttackPerCost, at least RtApCostAttackMin (9mm: 1 AP)
     RtApCostAttackMin         = 50,
+    AggroAlertRadius          = 8,     -- cells: same-team NPCs near a shot-at NPC join the fight (0 = off)
+    ForceMiss                 = false, -- dev/test: every attack misses (the /forcemiss command toggles it at run time)
     CarryBase                 = 25,    -- carry limit = CarryBase + CarryPerStrength * Strength
     CarryPerStrength          = 25,
     WeightWeapon              = 4,     -- default unit weight by item class (the demo data carries no weights)

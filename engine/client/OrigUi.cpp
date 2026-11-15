@@ -273,20 +273,59 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
         if (hot && click && bt.cmd != UiCommand::SetMode) ui.commands->push_back(UiCommand{bt.cmd, 0, 0});
     }
 
-    // ---- message area (left): cursor mode buttons, wait state
+    // ---- message area (left dark screen): chat log (newest at the bottom) + input line; break bar and busy text below
     {
-        const char* names[] = {"Move", "Examine", "Attack"};
-        for (int i = 0; i < 3; ++i) {
-            Rectangle r = P(16 + i * 90.0f, 20, 84, 24);
-            const bool sel = st.mode == static_cast<CursorMode>(i), hot = In(r, mp);
-            DrawRectangleRec(r, sel ? Color{90, 74, 20, 200} : Color{0, 0, 0, static_cast<unsigned char>(hot ? 150 : 90)});
-            DrawRectangleLinesEx(r, 1, sel ? kAmber : kAmberDim);
-            Text(gothic_, names[i], r.x, r.y + 3 * s, 17 * s, sel ? Color{255, 230, 130, 255} : kAmber, 1, r.width);
-            if (hot && click) ui.commands->push_back(UiCommand{UiCommand::SetMode, static_cast<uint32_t>(i), 0});
+        const float fs = 14 * s;
+        Rectangle area = P(16, 18, 262, 106);
+        const float lineH = fs + 2 * s;
+        const Rectangle inR = P(16, 108, 262, 16);   // input / hint line (bottom of the area)
+        const int maxLines = std::max(1, static_cast<int>((inR.y - area.y - 2) / lineH));
+        const float maxW = area.width - 4 * s;
+        std::vector<std::pair<std::string, Color>> wrapped;
+        if (ui.chat) {
+            const int count = static_cast<int>(ui.chat->size());
+            for (int i = std::max(0, count - 30); i < count; ++i) {
+                const ChatLine& l = (*ui.chat)[i];
+                std::string line = l.name.empty() ? l.text : l.name + ": " + l.text;
+                const Color c = l.channel == ChatChannel::System ? Color{140, 220, 255, 255} : Color{225, 205, 150, 255};
+                std::string cur;
+                size_t pos = 0;
+                while (pos < line.size()) {
+                    size_t sp = line.find(' ', pos);
+                    std::string word = line.substr(pos, sp == std::string::npos ? std::string::npos : sp - pos + 1);
+                    pos = sp == std::string::npos ? line.size() : sp + 1;
+                    while (TextW(gothic_, word, fs) > maxW && word.size() > 1) {
+                        size_t n = word.size();
+                        while (n > 1 && TextW(gothic_, word.substr(0, n), fs) > maxW) --n;
+                        if (!cur.empty()) { wrapped.emplace_back(cur, c); cur.clear(); }
+                        wrapped.emplace_back(word.substr(0, n), c);
+                        word = word.substr(n);
+                    }
+                    if (!cur.empty() && TextW(gothic_, cur + word, fs) > maxW) { wrapped.emplace_back(cur, c); cur.clear(); }
+                    cur += word;
+                }
+                if (!cur.empty()) wrapped.emplace_back(cur, c);
+            }
         }
-        Text(gothic_, "auto: pickup / use / talk", P(16, 52, 0, 0).x, P(16, 52, 0, 0).y, 14 * s, kAmberDim);
+        const int first = std::max(0, static_cast<int>(wrapped.size()) - maxLines);
+        const int shown = static_cast<int>(wrapped.size()) - first;
+        float y = inR.y - 2 * s - shown * lineH;   // newest line sits right above the input line
+        for (size_t i = first; i < wrapped.size(); ++i, y += lineH) Text(gothic_, wrapped[i].first, area.x + 2 * s, y, fs, wrapped[i].second);
+        if (ui.chatInputActive) {
+            DrawRectangleRec(inR, Color{30, 26, 8, 200});
+            const std::string t = ui.chatInput + ((static_cast<int>(ui.now * 2) & 1) ? "_" : "");
+            const float tw = TextW(gothic_, t, fs);
+            Text(gothic_, t, inR.x + 2 * s - std::max(0.0f, tw - (inR.width - 8 * s)), inR.y, fs, WHITE);
+        } else {
+            Text(gothic_, "Enter: chat", inR.x + 2 * s, inR.y, fs, Color{110, 95, 55, 255});
+        }
+        // cursor mode (RMB toggles Move/Examine, A = Attack): small unobtrusive label
+        {
+            const char* mn = st.mode == CursorMode::Attack ? "Attack" : st.mode == CursorMode::Examine ? "Examine" : "Move";
+            Text(gothic_, mn, P(16, 18, 0, 0).x, P(16, 18, 0, 0).y, 12 * s, kAmberDim, 2, 262 * s);
+        }
         // break time: red bar while actions are locked
-        Rectangle bt = P(16, 112, 262, 14);
+        Rectangle bt = P(16, 127, 262, 14);
         const bool locked = core.IsBreak();
         DrawRectangleRec(bt, Color{20, 6, 6, 200});
         char b[64];
@@ -303,7 +342,7 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
             const bool mv = core.lastAction() == static_cast<uint8_t>(GMsgRt::C2S_MoveToF) || core.lastAction() == static_cast<uint8_t>(Msg::C2S_MoveTo);
             const char* why = core.lastResult() == gnet::ActionResult::Busy ? (mv ? "busy - walking as soon as ready" : "busy") : core.lastResult() == gnet::ActionResult::NoAp ? "not enough AP" :
                               core.lastResult() == gnet::ActionResult::Dead ? "dead" : "invalid";
-            Text(gothic_, why, P(16, 80, 0, 0).x, P(16, 80, 0, 0).y, 17 * s, Color{255, 120, 100, 255});
+            Text(gothic_, why, P(16, 108, 0, 0).x + 150 * s, P(16, 108, 0, 0).y, 14 * s, Color{255, 120, 100, 255});
         }
     }
 }
@@ -490,7 +529,7 @@ void OrigUi::DrawInventory(const UiView& ui, std::vector<Rectangle>& rects) {
     if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !drag_.pressed) drag_.active = false;
     if (hover && hover->item) {
         const ProtoInfo* p = ProtoOf(core, *hover->item);
-        if (!drag_.active) Tooltip(hover->item->name + (hover->item->count > 1 ? " x" + std::to_string(hover->item->count) : ""), ItemText(*hover->item, p));
+        // no floating tooltip here: hovering fills the description box below
         if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {   // examine
             examineId_ = hover->item->id;
             examineName_ = hover->item->name;
