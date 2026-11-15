@@ -15,7 +15,7 @@ $gametest = Join-Path $BinDir "f3_gametest.exe"
 $empty = New-Item -Force "$env:TEMP\f3_empty_stdin.txt"
 
 function Run-Server([string]$extra, [string]$log, [int]$port) {
-    Start-Process -FilePath $server -ArgumentList "--port $port --scripts `"$ScriptsDir`" $extra --run-seconds 90" `
+    Start-Process -FilePath $server -ArgumentList "--local --port $port --scripts `"$ScriptsDir`" $extra --run-seconds 90" `
         -RedirectStandardOutput $log -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
 }
 
