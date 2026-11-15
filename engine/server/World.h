@@ -122,6 +122,7 @@ struct Critter {
     uint16_t tagMask = 0;       // tag skills (bit per kSkillNames index)
     int perkPoints = 0;         // perk placeholder: earned every PerkRate levels, nothing to spend them on yet
     int unspentSpecial = 0;     // SPECIAL points still to allocate (character creation)
+    uint16_t traitMask = 0;     // optional traits chosen at creation (bit per trait index 0..15); stored only, no gameplay effect yet
     bool created = true;        // false while the character still has to go through character creation
     std::map<std::string, int> skillRanks;  // points invested per skill (on top of the SPECIAL based base value)
 

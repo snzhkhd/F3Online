@@ -32,6 +32,7 @@ json Server::CharacterToJson(const Critter& c) const {
     j["skill_ranks"] = c.skillRanks;
     j["unspent_special"] = c.unspentSpecial;
     j["tags"] = c.tagMask;
+    j["traits"] = c.traitMask;
     j["perk_points"] = c.perkPoints;
     j["created"] = c.created;
     if (const Proto* p = c.protoPid >= 0 ? data_.GetProto(static_cast<uint16_t>(c.protoPid)) : nullptr) j["proto"] = p->key;
@@ -57,6 +58,7 @@ void Server::ApplyCharacter(Critter& c, const json& j) {
     c.skillPoints = std::max(0, j.value("skill_points", 0));
     c.unspentSpecial = std::max(0, j.value("unspent_special", 0));
     c.tagMask = static_cast<uint16_t>(j.value("tags", 0));
+    c.traitMask = static_cast<uint16_t>(j.value("traits", 0));
     c.perkPoints = std::max(0, j.value("perk_points", 0));
     if (j.contains("skill_ranks") && j["skill_ranks"].is_object())
         for (auto& [k, v] : j["skill_ranks"].items()) if (v.is_number()) c.skillRanks[k] = v.get<int>();
@@ -80,6 +82,7 @@ void Server::ApplyCharacter(Critter& c, const json& j) {
 
 bool Server::SavePlayer(Critter& c) {
     if (c.account.empty() || !c.IsPlayer() || !accounts_.Ready()) return false;
+    if (IsCreating(c)) return false;   // still in character creation: not in the world, nothing worth saving
     bool ok = accounts_.SaveCharacter(c.account, 0, CharacterToJson(c));
     if (!ok) log::Error("save of '%s' FAILED", c.account.c_str());
     return ok;

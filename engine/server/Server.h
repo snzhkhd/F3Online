@@ -152,6 +152,11 @@ private:
     // creates + places the player critter; saved = character json of an account (nullptr = guest / fresh)
     bool StartSession(struct _ENetPeer* peer, const std::string& name, const nlohmann::json* saved, const std::string& account);
     void OnMoveReq(Critter& c, const net::MoveToReq& req);
+    // Places a player on its map (saved position or the start entry), sends MapInfo / Stats / CharSheet / Inventory, runs on_login, saves.
+    // Called at the end of StartSession for created characters and from CreateCharacter for a session that was in the "creating" state.
+    void EnterWorld(Critter& c, const nlohmann::json* saved);
+    bool IsCreating(const Critter& c) const { return c.IsPlayer() && !c.created && c.mapId == 0; }   // authenticated, not in the world yet
+    std::unordered_map<CritterId, nlohmann::json> creatingSaved_;   // legacy save json of a session waiting in character creation (position to restore afterwards)
     void OnMoveReqF(Critter& c, const gnet::MoveToF& req);
     void DoMoveCell(Critter& c, TilePos target);
     void DoMoveF(Critter& c, float x, float y, bool run);

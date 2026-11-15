@@ -162,10 +162,10 @@ void Server::HandlePacket(ENetPeer* peer, const uint8_t* data, size_t len) {
     Msg id = static_cast<Msg>(b.ReadU8());
     Critter* c = PeerCritter(world_, peer);
     bool ok = true;
-    if (c && !c->created) {   // character creation pending: only chat, ping, state requests and the creation itself
+    if (c && !c->created) {   // character creation pending (the session is not in the world): only ping, state requests, caps and the creation itself
         const uint8_t raw = static_cast<uint8_t>(id);
-        if (raw != static_cast<uint8_t>(Msg::C2S_Chat) && raw != static_cast<uint8_t>(Msg::C2S_Ping) && raw != static_cast<uint8_t>(GMsg::C2S_ReqState) &&
-            raw != static_cast<uint8_t>(GMsgRt::C2S_ClientCaps) && raw != static_cast<uint8_t>(GMsgChar::C2S_CharCreate))
+        if (raw == static_cast<uint8_t>(GMsg::C2S_ReqState)) { SendStats(*c); SendCharSheet(*c); return; }   // no inventory / wait state / map yet
+        if (raw != static_cast<uint8_t>(Msg::C2S_Ping) && raw != static_cast<uint8_t>(GMsgRt::C2S_ClientCaps) && raw != static_cast<uint8_t>(GMsgChar::C2S_CharCreate))
             return;
     }
 
@@ -234,11 +234,7 @@ bool Server::StartSession(ENetPeer* peer, const std::string& name, const nlohman
     };
     if (world_.FindPlayerByName(name)) return fail("name already in use");
     const bool restore = saved && saved->is_object() && saved->contains("map");
-    Map* m = nullptr;
-    if (restore) m = world_.FindMapByName(saved->value("map", std::string()));
-    if (!m) m = data_.Loaded() ? world_.FindMapByName(data_.StartMap()) : nullptr;
-    if (!m) m = world_.FirstMap();
-    if (!m) return fail("server has no map");
+    if (!world_.FirstMap()) return fail("server has no map");
 
     Critter* c = world_.CreateCritter(name, CritterKind::Player);
     c->peer = peer;
@@ -259,6 +255,42 @@ bool Server::StartSession(ENetPeer* peer, const std::string& name, const nlohman
         RecalcDerived(*c);
         c->hp = c->maxHp;
     }
+
+    if (!c->created) {
+        // Character creation BEFORE the world: the critter exists (so the session can be addressed) but is not placed on any map,
+        // therefore invisible, never ticked and never damaged. The client gets LoginOk + Stats + CharSheet (created = 0) and shows
+        // the creation screen; EnterWorld runs from CreateCharacter once a valid CharCreate arrived.
+        if (restore) creatingSaved_[c->id] = *saved;   // legacy save made in the old flow: keep its map / position for afterwards
+        net::LoginOk ok;
+        ok.critterId = c->id;
+        ok.tickRate = static_cast<uint16_t>(cfg_.tickRate);
+        ok.moveTicks = static_cast<uint16_t>(cfg_.moveTicks);
+        SendMsg(*c, ok);
+        SendStats(*c);
+        SendCharSheet(*c);
+        log::Info("player '%s' (id %u) logged in, waiting in character creation (not in the world)", c->name.c_str(), c->id);
+        return true;
+    }
+    net::LoginOk ok;
+    ok.critterId = c->id;
+    ok.tickRate = static_cast<uint16_t>(cfg_.tickRate);
+    ok.moveTicks = static_cast<uint16_t>(cfg_.moveTicks);
+    SendMsg(*c, ok);
+    EnterWorld(*c, restore ? saved : nullptr);
+    return true;
+}
+
+void Server::EnterWorld(Critter& crit, const nlohmann::json* saved) {
+    Critter* c = &crit;
+    ENetPeer* peer = c->peer;
+    const std::string name = c->name;
+    const std::string account = c->account;
+    const bool restore = saved && saved->is_object() && saved->contains("map");
+    Map* m = nullptr;
+    if (restore) m = world_.FindMapByName(saved->value("map", std::string()));
+    if (!m) m = data_.Loaded() ? world_.FindMapByName(data_.StartMap()) : nullptr;
+    if (!m) m = world_.FirstMap();
+    if (!m) { Tell(*c, "The server has no map."); return; }
     TilePos spot = m->spawn;
     Dir dir = c->dir;
     bool placed = false;
@@ -277,11 +309,6 @@ bool Server::StartSession(ENetPeer* peer, const std::string& name, const nlohman
     c->dir = dir;
     PlaceCritter(*c, *m, spot);
 
-    net::LoginOk ok;
-    ok.critterId = c->id;
-    ok.tickRate = static_cast<uint16_t>(cfg_.tickRate);
-    ok.moveTicks = static_cast<uint16_t>(cfg_.moveTicks);
-    SendMsg(*c, ok);
     SendMapInfo(*c, *m);
     SendStats(*c);
     SendCharSheet(*c);
@@ -295,22 +322,28 @@ bool Server::StartSession(ENetPeer* peer, const std::string& name, const nlohman
         c->account.clear();   // never overwrite a saved character with a vetoed session
         OnDisconnect(peer);
         enet_peer_disconnect_later(peer, 0);
-        return true;
+        return;
     }
     if (Critter* cc = world_.GetCritter(cid)) {
         log::Info("player '%s' (id %u%s) entered map %u at %d,%d", cc->name.c_str(), cc->id, account.empty() ? ", guest" : restore ? ", restored" : ", new", cc->mapId, cc->pos.x, cc->pos.y);
         if (Map* mm = world_.GetMap(cc->mapId)) UpdateVisibility(*mm);
         SavePlayer(*cc);
     }
-    return true;
 }
 
 void Server::OnDisconnect(ENetPeer* peer) {
     Critter* c = PeerCritter(world_, peer);
     peer->data = nullptr;
     if (!c) return;
-    log::Info("player '%s' left", c->name.c_str());
     CritterId id = c->id;
+    if (IsCreating(*c)) {   // left during character creation: never was in the world, nothing to save (the account stays "new")
+        log::Info("player '%s' left during character creation", c->name.c_str());
+        creatingSaved_.erase(id);
+        c->peer = nullptr;
+        RemoveCritter(id);
+        return;
+    }
+    log::Info("player '%s' left", c->name.c_str());
     c->peer = nullptr;
     scripting_->OnLogout(*c);
     SavePlayer(*c);
@@ -619,8 +652,8 @@ void Server::DoTick() {
 
     for (CritterId id : ids) {
         Critter* c = world_.GetCritter(id);
+        if (c && c->IsPlayer() && tick_ % 5 == 0 && c->msgBudget < 10) ++c->msgBudget;   // also while waiting in character creation
         if (!c || c->mapId == 0) continue;
-        if (c->IsPlayer() && tick_ % 5 == 0 && c->msgBudget < 10) ++c->msgBudget;
         if (!active.count(c->mapId)) continue;
         if (c->dead) {
             if (c->IsPlayer() && tick_ - c->deadSince >= static_cast<uint64_t>(cfg_.tickRate) * 5) Respawn(*c);

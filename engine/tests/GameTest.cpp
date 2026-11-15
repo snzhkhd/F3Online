@@ -235,32 +235,68 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
     Bot a;
     if (!a.Connect(port)) { std::printf("FAIL: cannot connect\n"); return 1; }
     if (phase == 1) {
+        // an observer that is already in the world (created through the normal flow) proves that a session in character creation is not placed
+        Bot obs;
+        if (!obs.Connect(port)) { std::printf("FAIL: cannot connect\n"); return 1; }
+        auth(obs, gnet::AuthMode::Register, "ObsBot", kPass);
+        CHECK(WaitFor({&obs}, 10, [&] { return obs.loggedIn && obs.sheetCount > 0; }) && !obs.sheet.created && obs.mapInfoCount == 0 && !obs.havePos && obs.invUpdates == 0 && obs.critters.empty(),
+              "new account: LoginOk + CharSheet only, no MapInfo / critters / inventory before character creation");
+        { gnet::CharCreate oc; oc.special[0] = 8; oc.special[4] = 8; oc.special[6] = 4; oc.tagMask = 7; obs.Send(gnet::PackG(oc)); }
+        CHECK(WaitFor({&obs}, 6, [&] { return obs.sheet.created && obs.mapInfoCount > 0 && obs.havePos && obs.invUpdates > 0; }), "observer created its character and entered the world");
+
         auth(a, gnet::AuthMode::Register, kName, kPass);
-        CHECK(WaitFor({&a}, 10, [&] { return a.loggedIn && a.mapInfoCount > 0 && a.havePos && a.haveStats && a.invUpdates > 0; }) && a.authCode == 0 && a.authNew == 1,
+        CHECK(WaitFor({&a}, 10, [&] { return a.loggedIn && a.sheetCount > 0 && a.haveStats; }) && a.authCode == 0 && a.authNew == 1,
               "register + login (code %d, new %d)", a.authCode, a.authNew);
         if (!a.loggedIn) return 1;
-        CHECK(a.inv.empty(), "new account character owns nothing");
-        CHECK(WaitFor({&a}, 3, [&] { return a.sheetCount > 0; }) && !a.sheet.created && a.sheet.unspentSpecial == 5 && a.sheet.creationTotal == 40 && a.stats.special[0] == 5,
-              "new character: creation pending, SPECIAL 5 each, 5 points to allocate");
-        {   // gated until created
-            TilePos before = a.pos;
-            net::MoveToReq mv0; mv0.x = before.x + 3; mv0.y = before.y;
+        CHECK(!a.sheet.created && a.sheet.unspentSpecial == 5 && a.sheet.creationTotal == 40 && a.stats.special[0] == 5 && a.sheet.traitMax == 2,
+              "new character: creation pending, SPECIAL 5 each, 5 points to allocate, up to %d traits", a.sheet.traitMax);
+        CHECK(a.mapInfoCount == 0 && !a.havePos && a.invUpdates == 0 && a.critters.empty(), "session in character creation has no map, no position, no critters, no inventory");
+        {   // not in the world: gated requests are ignored, chat is not delivered, nobody sees the session
+            net::MoveToReq mv0; mv0.x = 10; mv0.y = 10;
             a.Send(net::Pack(mv0));
-            WaitFor({&a}, 1, [] { return false; });
-            CHECK(a.pos == before, "movement is ignored while the character is not created");
+            net::ChatReq say; say.text = "hello from creation";
+            a.Send(net::Pack(say));
+            net::ChatReq heal; heal.text = "/heal";
+            a.Send(net::Pack(heal));
+            WaitFor({&a, &obs}, 1.2, [] { return false; });
+            CHECK(!a.havePos && a.mapInfoCount == 0 && a.chat.empty(), "movement / chat / commands are ignored while in character creation");
+            bool seen = obs.critters.count(a.myId) != 0;
+            for (auto& s2 : obs.chat) if (s2.find("hello from creation") != std::string::npos) seen = true;
+            CHECK(!seen, "the observer in the world neither sees the creating session nor hears it");
+            int sc = a.sheetCount;   // ReqState works (client refresh) and only resends stats + sheet
+            a.Send(gnet::PackG(gnet::ReqState{}));
+            CHECK(WaitFor({&a}, 3, [&] { return a.sheetCount > sc; }) && a.mapInfoCount == 0, "ReqState during creation answers with the sheet, still no map");
         }
-        {   // invalid allocations: sum 42, Luck 0, only two tags
+        {   // disconnecting during creation leaves a new account: logging in again shows the creation screen again
+            Bot q;
+            q.Connect(port);
+            auth(q, gnet::AuthMode::Register, "QuitBot", kPass);
+            CHECK(WaitFor({&q}, 8, [&] { return q.loggedIn && q.sheetCount > 0; }) && !q.sheet.created, "second new account waits in creation");
+            enet_peer_disconnect(q.peer, 0);
+            WaitFor({&q}, 1, [] { return false; });
+            Bot q2;
+            q2.Connect(port);
+            auth(q2, gnet::AuthMode::Login, "QuitBot", kPass);
+            CHECK(WaitFor({&q2}, 8, [&] { return q2.loggedIn && q2.sheetCount > 0; }) && !q2.sheet.created && q2.mapInfoCount == 0, "after quitting during creation the account is still new (creation again, no map)");
+            enet_peer_disconnect(q2.peer, 0);
+            WaitFor({&q2}, 1, [] { return false; });
+        }
+        {   // invalid allocations: sum 42, Luck 0, only two tags, three traits
             gnet::CharCreate bad; for (int i = 0; i < 7; i++) bad.special[i] = 6; bad.tagMask = 7;
             a.Send(gnet::PackG(bad));
             gnet::CharCreate bad2; bad2.special[0] = 10; bad2.special[1] = 10; bad2.special[2] = 10; bad2.special[3] = 5; bad2.special[4] = 5; bad2.special[5] = 5; bad2.special[6] = 0; bad2.tagMask = 7;
             a.Send(gnet::PackG(bad2));
             gnet::CharCreate bad3; bad3.special[0] = 8; bad3.special[4] = 8; bad3.special[6] = 4; bad3.tagMask = 3;
             a.Send(gnet::PackG(bad3));
+            gnet::CharCreate bad4; bad4.special[0] = 8; bad4.special[4] = 8; bad4.special[6] = 4; bad4.tagMask = 7; bad4.traitMask = 0x0B;
+            a.Send(gnet::PackG(bad4));
             WaitFor({&a}, 1, [] { return false; });
-            CHECK(!a.sheet.created, "invalid creation requests (sum, range, tag count) rejected");
-            gnet::CharCreate ok; ok.special[0] = 8; ok.special[4] = 8; ok.special[6] = 4; ok.tagMask = (1u << 0) | (1u << 7) | (1u << 9);
+            CHECK(!a.sheet.created && a.mapInfoCount == 0, "invalid creation requests (sum, range, tag count, three traits) rejected, still not in the world");
+            gnet::CharCreate ok; ok.special[0] = 8; ok.special[4] = 8; ok.special[6] = 4; ok.tagMask = (1u << 0) | (1u << 7) | (1u << 9); ok.traitMask = (1u << 0) | (1u << 3);
             a.Send(gnet::PackG(ok));
-            CHECK(WaitFor({&a}, 4, [&] { return a.sheet.created; }), "valid creation accepted (S8 P5 E5 C5 I8 A5 L4, tags Firearms/Medic/Science)");
+            CHECK(WaitFor({&a}, 6, [&] { return a.sheet.created && a.mapInfoCount > 0 && a.havePos && a.invUpdates > 0; }), "valid creation accepted (S8 P5 E5 C5 I8 A5 L4, tags Firearms/Medic/Science, traits 0 + 3): the character enters the world only now");
+            CHECK(a.inv.empty() && a.sheet.traitMask == 9, "new account character owns nothing, traits stored (mask %u)", a.sheet.traitMask);
+            CHECK(WaitFor({&obs}, 4, [&] { return obs.critters.count(a.myId) != 0; }), "the observer now sees the new character");
             WaitFor({&a}, 1, [] { return false; });
             CHECK(a.stats.special[0] == 8 && a.stats.maxHp == 33 && a.sheet.skill[0] == 45 && a.sheet.skill[7] == 46 && a.sheet.skillPoints == 10 && a.sheet.maxAp == 7,
                   "derived values: maxHp %d (33), Firearms %u (45), Medic %u (46), skill points %u (10), AP %u (7)", a.stats.maxHp, a.sheet.skill[0], a.sheet.skill[7], a.sheet.skillPoints, a.sheet.maxAp);
@@ -277,6 +313,7 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
             WaitFor({&a}, 1, [] { return false; });
             CHECK(a.sheet.skillPoints == 21 && a.sheet.xpNext == 3000 && a.stats.maxHp == 37, "level up: +21 skill points (%u), next level at %u xp (3000), maxHp %d (37)", a.sheet.skillPoints, a.sheet.xpNext, a.stats.maxHp);
         }
+        enet_peer_disconnect(obs.peer, 0);
         {   // name taken (case insensitive)
             Bot x;
             x.Connect(port);
@@ -348,8 +385,8 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
     CHECK(a.pos.x == ex && a.pos.y == ey, "position restored %d,%d (expected %d,%d)", a.pos.x, a.pos.y, ex, ey);
     CHECK((int)a.inv.size() == eInv && !a.inv.empty() && a.inv[0].equipped == eEq && a.inv[0].name.find("44") != std::string::npos,
           "inventory restored: %zu entries, equipped slot %d (expected %d)", a.inv.size(), a.inv.empty() ? -1 : a.inv[0].equipped, eEq);
-    CHECK(WaitFor({&a}, 3, [&] { return a.sheetCount > 0; }) && a.sheet.created && a.sheet.level == eLevel && (int)a.sheet.skillPoints == eSp && (int)a.sheet.skill[0] == eFire && a.stats.special[0] == eS && a.sheet.tagMask == ((1u << 0) | (1u << 7) | (1u << 9)),
-          "character sheet restored: level %d, skill points %d, Firearms %d, S %d, tags %u", a.sheet.level, a.sheet.skillPoints, a.sheet.skill[0], a.stats.special[0], a.sheet.tagMask);
+    CHECK(WaitFor({&a}, 3, [&] { return a.sheetCount > 0; }) && a.sheet.created && a.sheet.level == eLevel && (int)a.sheet.skillPoints == eSp && (int)a.sheet.skill[0] == eFire && a.stats.special[0] == eS && a.sheet.tagMask == ((1u << 0) | (1u << 7) | (1u << 9)) && a.sheet.traitMask == 9,
+          "character sheet restored: level %d, skill points %d, Firearms %d, S %d, tags %u, traits %u", a.sheet.level, a.sheet.skillPoints, a.sheet.skill[0], a.stats.special[0], a.sheet.tagMask, a.sheet.traitMask);
     {   // skill use hook: Medic on yourself at full health
         size_t n = a.chat.size();
         net::ChatReq hl; hl.text = "/heal";

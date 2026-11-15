@@ -35,6 +35,8 @@ struct GameConfig {
     bool RequireCharacterCreation = true;   // new account characters must allocate SPECIAL + tag skills before playing
     int SpecialBase = 5, CharPoints = 5, SpecialMin = 1, SpecialMax = 10;   // creation: 7 * SpecialBase + CharPoints = 40 points in total
     int TagCount = 3, TagBonus = 20;
+    int TraitMax = 2;          // optional traits at creation (the original allows two of sixteen); stored, effects not implemented
+    int SkillUseRange = 5;     // cells: UseSkill on a critter / object farther away is refused without spending AP
     int SkillMax = 100, StartSkillPoints = 10;
     int SkillRateBase = 5, SkillRatePerInt = 2;   // skill points per level = base + per * Intelligence
     int XpBase = 1000, MaxLevel = 12, PerkRate = 3;   // xp for level L = XpBase * L * (L - 1) / 2

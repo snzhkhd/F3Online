@@ -478,8 +478,11 @@ struct AuthResult {
 
 // ===================================================================================================
 // CHARACTER BLOCK (SPECIAL allocation, skills, XP / levels, skill use). Ids: client->server 34, 35, 37; server->client 141.
-// A new account character starts with SPECIAL 5 in everything, `unspentSpecial` free points and created = 0: until the client
-// answers with CharCreate{special, tagMask} the server ignores every request except chat / ping / ReqState / ClientCaps.
+// A new account character starts with SPECIAL 5 in everything, `unspentSpecial` free points and created = 0 and is NOT in the world:
+// after the login the server sends only LoginOk, Stats and CharSheet (no MapInfo, no critters) and keeps the session in a "creating"
+// state (no map, invisible, no ticks) until the client answers with a valid CharCreate{special, tagMask, traitMask}; only then the
+// character is placed on its map (MapInfo, critters, inventory follow). Until then the server ignores everything except
+// ping / ReqState / ClientCaps / CharCreate.
 // CharSheet carries everything the character window shows and is sent after login, ReqState and every change (level up,
 // skill spend, creation). Skill ids are the order of kSkillNames (the Van Buren skill list of English.stf, ids 83..96).
 // ===================================================================================================
@@ -493,8 +496,9 @@ struct CharCreate {
     static constexpr GMsg kId = static_cast<GMsg>(GMsgChar::C2S_CharCreate);
     uint8_t special[7] = {5, 5, 5, 5, 5, 5, 5};
     uint16_t tagMask = 0;   // bit i = kSkillNames[i] is a tag skill (exactly 3)
-    void Write(ByteBuffer& b) const { for (int i = 0; i < 7; i++) b.WriteU8(special[i]); b.WriteU16(tagMask); }
-    bool Read(ByteBuffer& b) { for (int i = 0; i < 7; i++) special[i] = b.ReadU8(); tagMask = b.ReadU16(); return b.Ok(); }
+    uint16_t traitMask = 0; // bit i = optional trait i (original trait list, English.stf 159..174), at most `traitMax` (2) bits
+    void Write(ByteBuffer& b) const { for (int i = 0; i < 7; i++) b.WriteU8(special[i]); b.WriteU16(tagMask); b.WriteU16(traitMask); }
+    bool Read(ByteBuffer& b) { for (int i = 0; i < 7; i++) special[i] = b.ReadU8(); tagMask = b.ReadU16(); traitMask = b.ReadU16(); return b.Ok(); }
 };
 struct SpendSkill {
     static constexpr GMsg kId = static_cast<GMsg>(GMsgChar::C2S_SpendSkill);
@@ -519,12 +523,15 @@ struct CharSheet {
     uint16_t skill[kSkillCount] = {};   // total value (base from SPECIAL + tag bonus + spent ranks)
     uint8_t rank[kSkillCount] = {};     // points spent
     uint8_t maxAp = 0, healRate = 0, critChance = 0, skillRate = 0, tagCount = 3;
+    uint16_t traitMask = 0;
+    uint8_t traitMax = 2;
     void Write(ByteBuffer& b) const {
         b.WriteU8(created); b.WriteU8(level); b.WriteU8(perkPoints); b.WriteU8(unspentSpecial); b.WriteU8(creationTotal);
         b.WriteU32(xp); b.WriteU32(xpNext); b.WriteU16(skillPoints); b.WriteU16(tagMask);
         for (int i = 0; i < 7; i++) b.WriteU8(special[i]);
         for (int i = 0; i < kSkillCount; i++) { b.WriteU16(skill[i]); b.WriteU8(rank[i]); }
         b.WriteU8(maxAp); b.WriteU8(healRate); b.WriteU8(critChance); b.WriteU8(skillRate); b.WriteU8(tagCount);
+        b.WriteU16(traitMask); b.WriteU8(traitMax);
     }
     bool Read(ByteBuffer& b) {
         created = b.ReadU8(); level = b.ReadU8(); perkPoints = b.ReadU8(); unspentSpecial = b.ReadU8(); creationTotal = b.ReadU8();
@@ -532,6 +539,7 @@ struct CharSheet {
         for (int i = 0; i < 7; i++) special[i] = b.ReadU8();
         for (int i = 0; i < kSkillCount; i++) { skill[i] = b.ReadU16(); rank[i] = b.ReadU8(); }
         maxAp = b.ReadU8(); healRate = b.ReadU8(); critChance = b.ReadU8(); skillRate = b.ReadU8(); tagCount = b.ReadU8();
+        traitMask = b.ReadU16(); traitMax = b.ReadU8();
         return b.Ok();
     }
 };

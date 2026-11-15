@@ -77,6 +77,8 @@ void Server::SendCharSheet(Critter& c) {
     m.critChance = static_cast<uint8_t>(std::min(100, c.special[6]));
     m.skillRate = static_cast<uint8_t>(std::min(255, SkillRate(c)));
     m.tagCount = static_cast<uint8_t>(rt_.TagCount);
+    m.traitMask = c.traitMask;
+    m.traitMax = static_cast<uint8_t>(rt_.TraitMax);
     Send(c, gnet::PackG(m));
 }
 
@@ -93,8 +95,10 @@ bool Server::CreateCharacter(Critter& c, const gnet::CharCreate& m) {
     if (sum != total) { Tell(c, "Character creation: distribute exactly " + std::to_string(total) + " SPECIAL points (you used " + std::to_string(sum) + ")."); return false; }
     if (m.tagMask >> kSkillCount) { Tell(c, "Character creation: invalid tag skills."); return false; }
     if (static_cast<int>(std::bitset<16>(m.tagMask).count()) != rt_.TagCount) { Tell(c, "Character creation: choose exactly " + std::to_string(rt_.TagCount) + " tag skills."); return false; }
+    if (static_cast<int>(std::bitset<16>(m.traitMask).count()) > rt_.TraitMax) { Tell(c, "Character creation: choose at most " + std::to_string(rt_.TraitMax) + " traits."); return false; }
     for (int i = 0; i < 7; i++) c.special[i] = m.special[i];
     c.tagMask = m.tagMask;
+    c.traitMask = m.traitMask;
     c.created = true;
     c.unspentSpecial = 0;
     c.level = 1;
@@ -104,12 +108,19 @@ bool Server::CreateCharacter(Critter& c, const gnet::CharCreate& m) {
     RecalcDerived(c);
     c.hp = c.maxHp;
     c.ap = -1;
-    SendStats(c);
-    SendCharSheet(c);
-    SendCritterState(c);
-    SendWaitState(c);
-    Tell(c, "Character created. Welcome to the wasteland!");
-    SavePlayer(c);
+    // the session now enters the world: placement (saved position of a pre-existing legacy character or the start entry), MapInfo,
+    // Stats, CharSheet, Inventory, on_login, first save
+    nlohmann::json legacy;
+    auto it = creatingSaved_.find(c.id);
+    if (it != creatingSaved_.end()) { legacy = std::move(it->second); creatingSaved_.erase(it); }
+    const CritterId id = c.id;
+    EnterWorld(c, legacy.is_object() ? &legacy : nullptr);
+    Critter* cc = world_.GetCritter(id);
+    if (!cc || cc->mapId == 0) return true;   // vetoed / failed: the session is gone
+    SendCritterState(*cc);
+    SendWaitState(*cc);
+    Tell(*cc, "Character created. Welcome to the wasteland!");
+    SavePlayer(*cc);
     return true;
 }
 
