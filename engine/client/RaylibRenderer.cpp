@@ -304,6 +304,48 @@ public:
 
     // ------------------------------------------------------------------------------------------------ HUD
     void DrawUi(const UiView& ui) override {
+        DrawUiInner(ui);
+        DrawCursorOverlay(ui);
+    }
+
+    // The original cursors: default "Cursor", AttackCursor / TargetCursor drawn as the cursor itself, Talk / Use as an icon beside it.
+    void DrawCursorOverlay(const UiView& ui) {
+        if (!orig_.ok()) return;
+        if (!cursorsLoaded_) {
+            cursorsLoaded_ = true;
+            std::string used;
+            curDefault_ = orig_.CursorTexture("Cursor", &used);
+            if (!curDefault_) curDefault_ = orig_.CursorTexture("TalkCursor");   // fallback: the original talk cursor
+            curTalk_ = orig_.CursorTexture("TalkCursor");
+            curUse_ = orig_.CursorTexture("UseCursor");
+            curAttack_ = orig_.CursorTexture("AttackCursor");
+            curTarget_ = orig_.CursorTexture("TargetCursor");
+            curWait_ = orig_.CursorTexture("WaitCursor");   // reserved for later, unused
+            log::Info("cursor: default image from %s", used.empty() ? "TalkCursor (fallback)" : used.c_str());
+        }
+        if (!curDefault_) return;
+        HideCursor();
+        const Vector2 mp = GetMousePosition();
+        if (mp.x < 0 || mp.y < 0 || mp.x >= GetScreenWidth() || mp.y >= GetScreenHeight()) return;
+        const bool game = ui.core && ui.state && ui.core->state() == ClientCore::State::InGame;
+        const bool over = IsOverUi(static_cast<int>(mp.x), static_cast<int>(mp.y));
+        CursorMode mode = game ? ui.state->mode : CursorMode::Move;
+        if (game && !over) {
+            PickResult pr;
+            if (Pick(static_cast<int>(mp.x), static_cast<int>(mp.y), pr)) mode = ResolveCursor(*ui.core, mode, pr);
+        } else if (over) mode = CursorMode::Move;
+        auto drawCentred = [&](const Texture2D* t) {
+            DrawTexture(*t, static_cast<int>(mp.x) - t->width / 2, static_cast<int>(mp.y) - t->height / 2, WHITE);
+        };
+        if (mode == CursorMode::Attack && curAttack_) { drawCentred(curAttack_); return; }
+        if (mode == CursorMode::Skill && curTarget_) { drawCentred(curTarget_); return; }
+        DrawTexture(*curDefault_, static_cast<int>(mp.x), static_cast<int>(mp.y), WHITE);
+        const Texture2D* icon = mode == CursorMode::Talk ? curTalk_ : (mode == CursorMode::Use || mode == CursorMode::Pickup) ? curUse_ : nullptr;
+        if (icon) DrawTexturePro(*icon, Rectangle{0, 0, static_cast<float>(icon->width), static_cast<float>(icon->height)},
+                                 Rectangle{mp.x + 18, mp.y + 14, 32, 32}, Vector2{0, 0}, 0, WHITE);
+    }
+
+    void DrawUiInner(const UiView& ui) {
         const int sw = GetScreenWidth(), sh = GetScreenHeight();
         uiRects_.clear();
         // character creation happens before the world: the creation screen replaces everything (no map, no HUD)
@@ -431,13 +473,10 @@ public:
         out = PickResult{};
         const Vector2 mp{static_cast<float>(sx), static_cast<float>(sy)};
         if (active3d_) {
-            float best = 1e30f;
-            for (const PickRect& r : pickRects_) {
-                if (!CheckCollisionPointRec(mp, r.rect) || r.depth >= best) continue;
-                best = r.depth;
-                out.kind = r.isCritter ? PickResult::Critter : PickResult::Item;
-                out.critter = r.isCritter ? r.id : 0;
-                out.item = r.isCritter ? 0 : r.id;
+            if (const PickRect* r = BestPick(pickRects_, mp)) {
+                out.kind = r->isCritter ? PickResult::Critter : PickResult::Item;
+                out.critter = r->isCritter ? r->id : 0;
+                out.item = r->isCritter ? 0 : r->id;
             }
             Vector3 hit;
             if (PickAt(sx, sy, hit)) {
@@ -476,7 +515,18 @@ public:
 
 private:
     struct Label { Vector3 pos; std::string text; Color color; CritterId id; int hp, maxHp; bool dead; };
-    struct PickRect { Rectangle rect; bool isCritter; uint32_t id; float depth; };
+    // prio: 0 living critter, 1 corpse, 2 item / object (hover priority); centre: screen point the "nearest to the cursor" rule measures from
+    struct PickRect { Rectangle rect; bool isCritter; uint32_t id; float depth; int prio = 0; Vector2 centre{0, 0}; };
+    static const PickRect* BestPick(const std::vector<PickRect>& rects, Vector2 mp) {
+        const PickRect* best = nullptr;
+        float bestD = 1e30f;
+        for (const PickRect& r : rects) {
+            if (!CheckCollisionPointRec(mp, r.rect)) continue;
+            const float d = std::hypot(mp.x - r.centre.x, mp.y - r.centre.y) + r.depth * 0.001f;
+            if (!best || r.prio < best->prio || (r.prio == best->prio && d < bestD)) { best = &r; bestD = d; }
+        }
+        return best;
+    }
 
     struct AnimState {
         ClipKind cur = ClipKind::Idle, prev = ClipKind::Idle;
@@ -652,12 +702,10 @@ private:
         hoverCrit_ = 0; hoverItem_ = 0;
         {
             const Vector2 mp = GetMousePosition();
-            float best = 1e30f;
-            for (const PickRect& r : prevRects)
-                if (CheckCollisionPointRec(mp, r.rect) && r.depth < best && !IsOverUi((int)mp.x, (int)mp.y)) {
-                    best = r.depth;
-                    hoverCrit_ = r.isCritter ? r.id : 0;
-                    hoverItem_ = r.isCritter ? 0 : r.id;
+            if (!IsOverUi((int)mp.x, (int)mp.y))
+                if (const PickRect* r = BestPick(prevRects, mp)) {
+                    hoverCrit_ = r->isCritter ? r->id : 0;
+                    hoverItem_ = r->isCritter ? 0 : r->id;
                 }
         }
 
@@ -781,8 +829,26 @@ private:
             Color rc = sc.isSelf ? Color{80, 220, 120, 200} : (c.kind == CritterKind::Npc ? Color{255, 90, 70, 220} : Color{255, 220, 80, 220});
             if (!sc.isSelf || hovered) DrawCircle3D(Vector3{w.x, w.y + 0.05f, w.z}, hovered ? 1.7f : 1.4f, Vector3{1, 0, 0}, 90.0f, rc);
         }
-        pickRects_.push_back(PickRect{ProjectRect(w, height, 0.45f), true, c.id, Vector3Distance(w, lastCam_.position)});
-        labels_.push_back({Vector3{w.x, w.y + height + 0.7f, w.z}, c.name,
+        {   // pick bounds: feet-to-head capsule unioned with the projected bones of the posed skeleton (lying corpses are wide), plus a margin
+            Rectangle pr = ProjectRect(w, height, 0.6f);
+            if (v.inst) {
+                std::vector<Vector3> bones;
+                v.inst->BonePositions(bones);
+                if (!bones.empty()) {
+                    float x0 = pr.x, y0 = pr.y, x1 = pr.x + pr.width, y1 = pr.y + pr.height;
+                    for (const Vector3& b : bones) {
+                        const Vector2 sp = GetWorldToScreen(Vector3Transform(b, m), lastCam_);
+                        x0 = std::min(x0, sp.x); x1 = std::max(x1, sp.x); y0 = std::min(y0, sp.y); y1 = std::max(y1, sp.y);
+                    }
+                    pr = Rectangle{x0, y0, x1 - x0, y1 - y0};
+                }
+            }
+            const float mg = std::max(10.0f, 0.12f * std::max(pr.width, pr.height));
+            pr = Rectangle{pr.x - mg, pr.y - mg, pr.width + 2 * mg, pr.height + 2 * mg};
+            pickRects_.push_back(PickRect{pr, true, c.id, Vector3Distance(w, lastCam_.position), c.dead ? 1 : 0,
+                                          Vector2{pr.x + pr.width / 2, pr.y + pr.height / 2}});
+        }
+        labels_.push_back({Vector3{w.x, w.y + height + 0.7f, w.z}, s.protos ? CritterLabel(*s.protos, c) : c.name,
                            c.kind == CritterKind::Npc ? Color{255, 220, 140, 255} : RAYWHITE, c.id, c.hp, c.maxHp, c.dead});
         critterWorld_[c.id] = Vector3{w.x, w.y + height * 0.8f, w.z};
     }
@@ -847,7 +913,7 @@ private:
         Rectangle r = ProjectRect(Vector3{w.x, w.y, w.z}, height, 1.0f);
         r.width = std::max(r.width, 26.0f);
         r.height = std::max(r.height, 26.0f);
-        pickRects_.push_back(PickRect{r, false, it.id, Vector3Distance(w, lastCam_.position) + 0.5f});
+        pickRects_.push_back(PickRect{r, false, it.id, Vector3Distance(w, lastCam_.position) + 0.5f, 2, Vector2{r.x + r.width / 2, r.y + r.height / 2}});
         if (hovered || (it.kind == gnet::ObjectKind::Ground)) {
             labels_.push_back({Vector3{w.x, w.y + 1.6f, w.z}, hovered ? it.name : std::string(), Color{255, 230, 140, 255}, 0, -1, -1, false});
         }
@@ -1247,7 +1313,7 @@ private:
         if (picked) {
             if (pr.kind == PickResult::Critter) {
                 if (const ClientCritter* c = ui.core->Find(pr.critter)) {
-                    t += " " + c->name;
+                    t += " " + CritterLabel(ui.core->protos(), *c, false);
                     if (c->hp >= 0 && c->maxHp > 0) t += "  " + std::to_string(c->hp) + "/" + std::to_string(c->maxHp) + " HP";
                     if (c->dead) t += " (dead)";
                 }
@@ -1258,7 +1324,7 @@ private:
         }
         const int fs = 14;
         const int tw = MeasureText(t.c_str(), fs);
-        Rectangle r{mp.x + 16, mp.y + 14, static_cast<float>(tw + 10), 20};
+        Rectangle r{mp.x + 16, mp.y + (curDefault_ ? 50.0f : 14.0f), static_cast<float>(tw + 10), 20};
         DrawRectangleRec(r, Color{0, 0, 0, 170});
         DrawText(t.c_str(), static_cast<int>(r.x) + 5, static_cast<int>(r.y) + 3, fs, ModeColor(mode));
     }
@@ -1287,6 +1353,8 @@ private:
     Camera3D lastCam_{};
     Vector3 panOffset_{0, 0, 0};
     Vector3 hover_{0, 0, 0};
+    bool cursorsLoaded_ = false;
+    const Texture2D *curDefault_ = nullptr, *curTalk_ = nullptr, *curUse_ = nullptr, *curAttack_ = nullptr, *curTarget_ = nullptr, *curWait_ = nullptr;
     bool hoverValid_ = false, active3d_ = false, follow_ = false, showGrid_ = false, shotDone_ = false;
     bool rmbDown_ = false;
     float rmbTravel_ = 0;

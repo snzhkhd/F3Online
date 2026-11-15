@@ -164,6 +164,13 @@ bool SkinnedInstance::BoneWorld(const char* name, float* out16) const {
     return false;
 }
 
+void SkinnedInstance::BonePositions(std::vector<Vector3>& out) const {
+    out.clear();
+    const float ss = model_->skelScale;
+    for (size_t i = 0; (i + 1) * 16 <= world_.size(); ++i)
+        out.push_back(Vector3{world_[i * 16 + 12] * ss, world_[i * 16 + 13] * ss, -world_[i * 16 + 14] * ss});
+}
+
 std::string Appearance::Key() const {
     std::string k = Lower(model) + "|" + Lower(skin);
     for (const auto& w : worn) k += "|" + Lower(w.first) + ":" + Lower(w.second);

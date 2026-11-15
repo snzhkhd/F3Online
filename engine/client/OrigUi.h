@@ -31,6 +31,9 @@ public:
     bool HasLoot() const { return ok_ && haveLoot_; }
     void DrawLoot(const UiView& ui, std::vector<Rectangle>& rects);
     void DrawOverlay();   // tooltip, after all windows
+    // Cursor art (TGA): loose file in extracted/Interface (searched upwards from the cwd and the exe; the custom "Cursor" lives
+    // there), else the game resource of that name. nullptr if neither exists. usedPath gets the source for the log.
+    const Texture2D* CursorTexture(const std::string& name, std::string* usedPath = nullptr);
     // CharacterGeneration.gui (1024x768 layout, drawn full screen): `creating` = the creation screen shown before the world
     // (UiState::draft), otherwise the character window opened with C (sheet values, skill points, skill cursor selection).
     bool HasCharScreen() const { return ok_ && haveChar_; }

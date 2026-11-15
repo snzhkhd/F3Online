@@ -80,6 +80,8 @@ public:
     // World matrix (16 floats, Granny layout, skeleton units, left-handed) of the named bone after the last Pose();
     // false if the skeleton has no such bone or Pose() has not run.
     bool BoneWorld(const char* name, float* out16) const;
+    // Positions of all bones after the last Pose(), in the renderer's model space (before scale / yaw / translation of the body matrix).
+    void BonePositions(std::vector<Vector3>& out) const;
 
 private:
     const SkinModel* model_;

@@ -238,4 +238,24 @@ private:
     ProtoDb protos_;
 };
 
+// Readable name of a critter for labels: the prototype's English name, else the internal file name made readable
+// ("Critters00_TMCommunist_Insurgent_Shiv.CRT" -> "TMCommunist Insurgent Shiv"); dead ones get " (dead)".
+inline std::string CritterLabel(const ProtoDb& db, const ClientCritter& c, bool withDead = true) {
+    std::string s = c.name;
+    if (c.kind == CritterKind::Npc) {
+        const ProtoInfo* p = c.pid >= 0 ? db.ByPid(static_cast<uint32_t>(c.pid)) : nullptr;
+        if (!p) p = db.CritterByName(c.name);
+        if (p && !p->name.empty()) s = p->name;
+        else {
+            const size_t d = s.rfind('.');
+            if (d != std::string::npos && s.size() - d <= 5) s.resize(d);
+            const size_t u = s.find('_');
+            if (u != std::string::npos && u > 0 && u < 14 && s.compare(0, 8, "Critters") == 0) s.erase(0, u + 1);
+            for (char& ch : s) if (ch == '_') ch = ' ';
+        }
+    }
+    if (withDead && c.dead) s += " (dead)";
+    return s;
+}
+
 }  // namespace f3

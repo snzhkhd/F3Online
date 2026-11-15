@@ -374,6 +374,7 @@ int main(int argc, char** argv) {
                     case CursorMode::Use:
                         if (item) core.Use(item->id);
                         else if (pr.kind == PickResult::Critter) core.Loot(pr.critter);   // corpse
+                        if (uiState.mode == CursorMode::Attack) uiState.mode = CursorMode::Move;   // Attack was only auto-switched to loot
                         break;
                     case CursorMode::Talk:
                         if (pr.critter != core.selfId()) core.Talk(pr.critter);

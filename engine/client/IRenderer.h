@@ -155,6 +155,11 @@ struct PickResult {
 // Attack and Examine are sticky and apply to everything; the Move cursor adapts to the target:
 // loose item -> Pickup, door / container / usable -> Use, NPC with a dialogue -> Talk, other critters -> Examine.
 inline CursorMode ResolveCursor(const ClientCore& core, CursorMode manual, const PickResult& pr) {
+    if (manual == CursorMode::Attack && pr.kind == PickResult::Critter && pr.critter != core.selfId()) {
+        // a corpse is never attacked: it is lootable (NPC) or only examinable (player), whatever the previous mode was
+        const ClientCritter* c = core.Find(pr.critter);
+        if (c && c->dead) return c->kind == CritterKind::Npc ? CursorMode::Use : CursorMode::Examine;
+    }
     if (manual == CursorMode::Attack || manual == CursorMode::Examine || manual == CursorMode::Skill) return manual;
     if (pr.kind == PickResult::Item) {
         auto it = core.items().find(pr.item);

@@ -109,6 +109,40 @@ bool OrigUi::Load(gd::GameData& data, const std::string& gameDir, std::string* e
     return true;
 }
 
+const Texture2D* OrigUi::CursorTexture(const std::string& name, std::string* usedPath) {
+    const std::string key = "cursor:" + name;
+    auto it = tex_.find(key);
+    if (it != tex_.end()) return it->second.ok ? &it->second.t : nullptr;
+    Tex t;
+    std::string used;
+    std::vector<uint8_t> buf;
+    gd::Image img;
+    auto upload = [&]() {
+        Image ri{img.rgba.data(), img.w, img.h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        t.t = LoadTextureFromImage(ri);
+        t.ok = t.t.id != 0;
+        if (t.ok) SetTextureFilter(t.t, TEXTURE_FILTER_BILINEAR);
+    };
+    std::vector<std::string> bases = {"extracted/Interface/"};
+    for (int up = 1; up <= 4; ++up) { std::string b; for (int i = 0; i < up; ++i) b += "../"; bases.push_back(b + "extracted/Interface/"); }
+    const std::string exe = GetApplicationDirectory();
+    for (int up = 0; up <= 4; ++up) { std::string b = exe; for (int i = 0; i < up; ++i) b += "../"; bases.push_back(b + "extracted/Interface/"); }
+    for (const std::string& b : bases) {
+        const std::string path = b + name + ".tga";
+        if (!FileExists(path.c_str())) continue;
+        int n = 0;
+        unsigned char* d = LoadFileData(path.c_str(), &n);
+        if (!d) continue;
+        const bool good = gd::DecodeTga(d, static_cast<size_t>(n), img);
+        UnloadFileData(d);
+        if (good) { upload(); if (t.ok) { used = path; break; } }
+    }
+    if (!t.ok && data_ && data_->Read(name, gd::kResTga, buf) && gd::DecodeTga(buf.data(), buf.size(), img)) { upload(); if (t.ok) used = "game data " + name; }
+    if (usedPath) *usedPath = used;
+    log::Info("cursor art '%s': %s", name.c_str(), t.ok ? used.c_str() : "not found");
+    return tex_.emplace(key, t).first->second.ok ? &tex_[key].t : nullptr;
+}
+
 void OrigUi::Unload() {
     for (auto& [k, t] : tex_) if (t.ok) UnloadTexture(t.t);
     tex_.clear();
