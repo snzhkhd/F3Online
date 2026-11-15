@@ -913,8 +913,9 @@ private:
         if (orig_.ok()) {   // original art: action bar + inventory window; the other windows stay raylib for now
             orig_.DrawActionBar(ui, uiRects_);
             if (st.inventory) orig_.DrawInventory(ui, uiRects_);
+            if (core.hasContainer() && orig_.HasLoot()) orig_.DrawLoot(ui, uiRects_);
             orig_.DrawOverlay();
-            if (core.hasContainer()) DrawContainer(ui);
+            if (core.hasContainer() && !orig_.HasLoot()) DrawContainer(ui);
             if (core.dialog().open) DrawDialog(ui);
             if (st.charSheet) {
                 if (orig_.HasCharScreen()) orig_.DrawCharScreen(ui, false, uiRects_);

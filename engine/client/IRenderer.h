@@ -111,7 +111,7 @@ struct LoginLayout {
 };
 
 struct UiCommand {
-    enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, CloseContainer, DialogChoose, DialogClose,
+    enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, Put, CloseContainer, DialogChoose, DialogClose,
                 CharCreate, SpendSkill, UseSkill, SwapHands, Quit, SelectSkill } type = SetMode;   // SpendSkill/UseSkill: a = skill index, b = points; CharCreate sends UiState::draft; SelectSkill: a = skill (enters the skill cursor, closes the sheet); Quit: leave the game (Cancel on the creation screen)
     uint32_t a = 0, b = 0, c = 0;   // Equip: a = inventory id, b = on, c = EquipSlot (0 = automatic)
 };
@@ -164,7 +164,8 @@ inline CursorMode ResolveCursor(const ClientCore& core, CursorMode manual, const
     if (pr.kind == PickResult::Critter) {
         if (pr.critter == core.selfId()) return CursorMode::Move;
         const ClientCritter* c = core.Find(pr.critter);
-        if (!c || c->dead) return CursorMode::Examine;
+        if (!c) return CursorMode::Examine;
+        if (c->dead) return c->kind == CritterKind::Npc ? CursorMode::Use : CursorMode::Examine;   // an NPC corpse is a container: click = loot
         if (c->kind == CritterKind::Npc && c->pid >= 0) {
             const ProtoInfo* p = core.protos().ByPid(static_cast<uint32_t>(c->pid));
             if (p && p->hasDialog) return CursorMode::Talk;

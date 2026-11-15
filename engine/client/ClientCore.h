@@ -115,7 +115,9 @@ public:
     void SwapHands();
     void Use(uint32_t objectId);
     void Attack(CritterId id);   // 0 = stop
-    void Take(uint32_t container, uint32_t entry);   // entry 0 = everything
+    void Take(uint32_t container, uint32_t entry);   // entry 0 = everything; targets the open container / corpse
+    void Put(uint32_t invEntry);                      // move an own item into the open container / corpse
+    void Loot(uint32_t critterId);                    // walk next to a corpse and open its loot window
     void Examine(uint32_t id, bool isCritter);
     // ---- dialogue (protocol_game.h dialogue block)
     struct DialogState { bool open = false; uint32_t npc = 0; std::string npcName, text; std::vector<std::string> replies; };
@@ -155,7 +157,9 @@ public:
     bool hasContainer() const { return containerOwner_ != 0; }
     uint32_t containerOwner() const { return containerOwner_; }
     const std::vector<gnet::InvEntry>& container() const { return container_; }
-    void CloseContainer() { containerOwner_ = 0; container_.clear(); }
+    bool containerIsCorpse() const { return containerCritter_; }
+    const std::string& containerName() const { return containerName_; }
+    void CloseContainer() { containerOwner_ = 0; containerCritter_ = false; containerName_.clear(); container_.clear(); }
 
     // ---- real-time timing (FOnline-like wait / AP) --------------------------------------------------------
     bool serverTiming() const { return serverTiming_; }       // the server sent MovePath/WaitState/CritterStop at least once
@@ -214,6 +218,8 @@ private:
     gnet::Stats stats_;
     std::vector<gnet::InvEntry> inventory_;
     uint32_t containerOwner_ = 0;
+    bool containerCritter_ = false;
+    std::string containerName_;
     DialogState dialog_;
     std::vector<gnet::InvEntry> container_;
 

@@ -318,6 +318,8 @@ int main(int argc, char** argv) {
             typing = true;
         }
 
+        // opening a container / corpse also shows the inventory: it is the player's side of the loot window
+        { static bool hadContainer = false; if (core.hasContainer() && !hadContainer) uiState.inventory = true; hadContainer = core.hasContainer(); }
         // ---- hotkeys and mouse ----
         if (!typing && inGame && !creating) {
             if (in.keySkill) {   // S: skill cursor (the first press picks the last used skill, further presses cycle, Shift+S backwards)
@@ -370,6 +372,7 @@ int main(int argc, char** argv) {
                         break;
                     case CursorMode::Use:
                         if (item) core.Use(item->id);
+                        else if (pr.kind == PickResult::Critter) core.Loot(pr.critter);   // corpse
                         break;
                     case CursorMode::Talk:
                         if (pr.critter != core.selfId()) core.Talk(pr.critter);
@@ -523,6 +526,7 @@ int main(int argc, char** argv) {
                 case UiCommand::SwapHands: core.SwapHands(); break;
                 case UiCommand::Drop: core.Drop(c.a); break;
                 case UiCommand::Take: core.Take(c.a, c.b); break;
+                case UiCommand::Put: core.Put(c.a); break;
                 case UiCommand::CloseContainer: core.CloseContainer(); break;
                 case UiCommand::DialogChoose: core.DialogChoose(static_cast<int>(c.a)); break;
                 case UiCommand::DialogClose: core.DialogClose(); break;

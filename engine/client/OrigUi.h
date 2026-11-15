@@ -26,13 +26,17 @@ public:
     // Draw (and handle the clicks of) the windows; occupied screen rects are appended to `rects`.
     void DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects);
     void DrawInventory(const UiView& ui, std::vector<Rectangle>& rects);
+    // Container.gui (256x176: Slot0..9, TakeAll, Done, Name) as the loot window of a container / corpse (core.hasContainer()); drawn
+    // over the inventory window, which shows the player's side. Drag items between the two, double-click a slot to take it.
+    bool HasLoot() const { return ok_ && haveLoot_; }
+    void DrawLoot(const UiView& ui, std::vector<Rectangle>& rects);
     void DrawOverlay();   // tooltip, after all windows
     // CharacterGeneration.gui (1024x768 layout, drawn full screen): `creating` = the creation screen shown before the world
     // (UiState::draft), otherwise the character window opened with C (sheet values, skill points, skill cursor selection).
     bool HasCharScreen() const { return ok_ && haveChar_; }
     void DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectangle>& rects);
     // True while an item is being dragged (the world must not react to the mouse).
-    bool Dragging() const { return drag_.active; }
+    bool Dragging() const { return drag_.active || lootDrag_.active; }
     // True while the action bar is on screen: PageUp / PageDown scroll its chat (the viewer's roof-cut keys must stand back).
     bool ChatOwnsPaging() const { return ok_ && GetTime() - lastBarTime_ < 0.25; }
 
@@ -49,7 +53,13 @@ private:
 
     gd::GameData* data_ = nullptr;
     std::unordered_map<std::string, Tex> tex_;
-    gd::GuiFile bar_, inv_;
+    gd::GuiFile bar_, inv_, loot_;
+    bool haveLoot_ = false;
+    Rectangle lootRect_{0, 0, 0, 0};                              // screen rect of the loot window while it is drawn
+    int lootScroll_ = 0;
+    struct LootDrag { bool active = false, pressed = false; uint32_t id = 0; Vector2 start{}; } lootDrag_;
+    double lootClickTime_ = 0;
+    uint32_t lootClickId_ = 0;
     gd::GuiTree char_;                                            // CharacterGeneration.gui, exact tree
     std::unordered_map<std::string, const gd::GuiNode*> charIdx_;   // widget name -> node (first one)
     std::vector<const gd::GuiNode*> charFlat_;                     // all nodes, file order

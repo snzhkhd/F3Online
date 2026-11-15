@@ -116,6 +116,15 @@ void ClientCore::Poll() {
         }
     }
     floaters_.erase(std::remove_if(floaters_.begin(), floaters_.end(), [&](const Floater& f) { return now - f.time > 1.6; }), floaters_.end());
+    // the loot window closes when the player walks away from the container / corpse
+    if (containerOwner_ != 0 && state_ == State::InGame) {
+        const ClientCritter* me = self();
+        TilePos tp{};
+        bool have = false;
+        if (containerCritter_) { auto it = critters_.find(containerOwner_); if (it != critters_.end()) { tp = it->second.pos; have = true; } }
+        else { auto it = items_.find(containerOwner_); if (it != items_.end()) { tp = it->second.pos; have = true; } }
+        if (me && have && std::max(std::abs(me->pos.x - tp.x), std::abs(me->pos.y - tp.y)) > 6) CloseContainer();
+    }
 }
 
 void ClientCore::AddChat(ChatLine l) {
@@ -207,7 +216,10 @@ void ClientCore::Handle(const uint8_t* data, size_t len) {
         }
         case Msg::S2C_CritterRemove: {
             net::CritterRemove m;
-            if (m.Read(b)) critters_.erase(m.id);
+            if (m.Read(b)) {
+                critters_.erase(m.id);
+                if (containerCritter_ && containerOwner_ == m.id) CloseContainer();   // the corpse left the view
+            }
             break;
         }
         case Msg::S2C_CritterMove: {
@@ -263,7 +275,10 @@ void ClientCore::Handle(const uint8_t* data, size_t len) {
         }
         case Msg::S2C_ItemRemove: {
             net::ItemRemove m;
-            if (m.Read(b)) { items_.erase(m.id); pendingInfo_.erase(m.id); }
+            if (m.Read(b)) {
+                items_.erase(m.id); pendingInfo_.erase(m.id);
+                if (!containerCritter_ && containerOwner_ == m.id) CloseContainer();
+            }
             break;
         }
         case Msg::S2C_Pong: {
@@ -323,6 +338,8 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
             gnet::Container m;
             if (!m.Read(b)) return;
             containerOwner_ = m.owner;
+            containerCritter_ = m.isCritter != 0;
+            containerName_ = m.name;
             container_ = std::move(m.items);
             break;
         }
@@ -341,7 +358,8 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
             if (it == critters_.end()) return;
             ClientCritter& c = it->second;
             c.hp = m.hp; c.maxHp = m.maxHp;
-            if (m.dead && !c.dead) { c.dead = true; c.deathT = now; }
+            // appear: the critter just entered the view already dead -> final pose (deathT < 0), no death animation
+            if (m.dead && !c.dead) { c.dead = true; c.deathT = m.appear ? -1 : now; }
             else if (!m.dead && c.dead) { c.dead = false; c.deathT = -1; }
             break;
         }
@@ -551,7 +569,12 @@ void ClientCore::SwapHands() {
 void ClientCore::Equip(uint32_t invId, bool on, uint32_t slot) { gnet::Equip m; m.id = invId; m.on = on ? 1 : 0; m.slot = static_cast<uint8_t>(slot); SendG(m); }
 void ClientCore::Use(uint32_t objectId) { gnet::Use m; m.id = objectId; SendG(m); }
 void ClientCore::Attack(CritterId id) { gnet::Attack m; m.id = id; SendG(m); }
-void ClientCore::Take(uint32_t container, uint32_t entry) { gnet::Take m; m.container = container; m.entry = entry; SendG(m); }
+void ClientCore::Take(uint32_t container, uint32_t entry) { gnet::Take m; m.container = container; m.entry = entry; m.isCritter = (container == containerOwner_ && containerCritter_) ? 1 : 0; SendG(m); }
+void ClientCore::Put(uint32_t invEntry) {
+    if (!hasContainer()) return;
+    gnet::Put m; m.container = containerOwner_; m.entry = invEntry; m.isCritter = containerCritter_ ? 1 : 0; SendG(m);
+}
+void ClientCore::Loot(uint32_t critterId) { gnet::Loot m; m.id = critterId; SendG(m); }
 void ClientCore::Talk(uint32_t critter) { gnet::Talk m; m.critter = critter; SendG(m); }
 void ClientCore::DialogChoose(int index) { gnet::DialogChoose m; m.index = static_cast<uint8_t>(index); SendG(m); }
 void ClientCore::DialogClose() { if (!dialog_.open) return; gnet::DialogCloseReq m; SendG(m); dialog_ = DialogState{}; }
