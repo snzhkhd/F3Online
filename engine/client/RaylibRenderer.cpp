@@ -912,7 +912,7 @@ private:
         const int sw = GetScreenWidth(), sh = GetScreenHeight();
         if (orig_.ok()) {   // original art: action bar + inventory window; the other windows stay raylib for now
             orig_.DrawActionBar(ui, uiRects_);
-            if (st.inventory) orig_.DrawInventory(ui, uiRects_);
+            if (st.inventory && !(core.hasContainer() && orig_.HasLoot())) orig_.DrawInventory(ui, uiRects_);
             if (core.hasContainer() && orig_.HasLoot()) orig_.DrawLoot(ui, uiRects_);
             orig_.DrawOverlay();
             if (core.hasContainer() && !orig_.HasLoot()) DrawContainer(ui);

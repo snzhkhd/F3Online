@@ -57,7 +57,7 @@ private:
     bool haveLoot_ = false;
     Rectangle lootRect_{0, 0, 0, 0};                              // screen rect of the loot window while it is drawn
     int lootScroll_ = 0;
-    struct LootDrag { bool active = false, pressed = false; uint32_t id = 0; Vector2 start{}; } lootDrag_;
+    struct LootDrag { bool active = false, pressed = false; uint32_t id = 0; int side = 0; Vector2 start{}; } lootDrag_;
     double lootClickTime_ = 0;
     uint32_t lootClickId_ = 0;
     gd::GuiTree char_;                                            // CharacterGeneration.gui, exact tree

@@ -408,10 +408,7 @@ void OrigUi::DrawInventory(const UiView& ui, std::vector<Rectangle>& rects) {
     auto P = [&](float lx, float ly, float lw, float lh) { return Rectangle{ox + lx * s, oy + ly * s, lw * s, lh * s}; };
     const Rectangle win = P(0, 0, 1024, 604);
     const Vector2 mpReal = GetMousePosition();
-    if (!core.hasContainer()) lootRect_ = Rectangle{0, 0, 0, 0};
-    const bool lootOpen = core.hasContainer() && lootRect_.width > 0;
-    // the loot window lies over this one: the mouse is invisible to the widgets underneath it
-    const Vector2 mp = (lootOpen && In(lootRect_, mpReal)) ? Vector2{-1e5f, -1e5f} : mpReal;
+    const Vector2 mp = mpReal;
     rects.push_back(win);
     Blit(Texture("f3_inventory.tga"), win);
 
@@ -563,15 +560,12 @@ void OrigUi::DrawInventory(const UiView& ui, std::vector<Rectangle>& rects) {
             if (!drag_.active) {   // plain click: double click equips / unequips
                 const double now = ui.now;
                 if (lastClickId_ == di->id && now - lastClickTime_ < 0.45) {
-                    if (core.hasContainer() && !di->equipped && !Equippable(dp)) ui.commands->push_back(UiCommand{UiCommand::Put, di->id, 0, 0});   // loot window open: double click moves it over
-                    else if (di->equipped) ui.commands->push_back(UiCommand{UiCommand::Equip, di->id, 0, 0});
+                    if (di->equipped) ui.commands->push_back(UiCommand{UiCommand::Equip, di->id, 0, 0});
                     else if (Equippable(dp)) ui.commands->push_back(UiCommand{UiCommand::Equip, di->id, 1, 0});
                     lastClickId_ = 0;
                 } else {
                     lastClickId_ = di->id; lastClickTime_ = now;
                 }
-            } else if (lootOpen && In(lootRect_, mpReal)) {   // dropped onto the loot window: give it to the container / corpse
-                ui.commands->push_back(UiCommand{UiCommand::Put, di->id, 0, 0});
             } else if (hover && hover->slot != 0 && FitsSlot(dp, hover->slot)) {
                 if (di->equipped != hover->slot) ui.commands->push_back(UiCommand{UiCommand::Equip, di->id, 1, static_cast<uint32_t>(hover->slot)});
             } else if (In(dropR, mp) || (!overWin && !In(Rectangle{0, sh - bar, sw, bar}, mp))) {
@@ -640,125 +634,179 @@ void OrigUi::DrawInventory(const UiView& ui, std::vector<Rectangle>& rects) {
 
 // ------------------------------------------------------------------------------------------------------------- loot window
 
+// Two panels side by side, each cut from the inventory art (f3_inventory.tga: the backpack part, 236x472 of the 800x472 texture,
+// plus the texture's right frame strip so that every panel has a closed frame): LEFT = the player's backpack (the same list,
+// weight readout, sort field, trash and scroll arrows as the inventory window, no equipment), RIGHT = the target's items with
+// its name, weight, scroll arrows and the Done / Take All buttons (Container.gui) in the bottom field.
 void OrigUi::DrawLoot(const UiView& ui, std::vector<Rectangle>& rects) {
     if (!ok_ || !haveLoot_ || !ui.core || !ui.commands) return;
     const ClientCore& core = *ui.core;
-    if (!core.hasContainer()) { lootRect_ = Rectangle{0, 0, 0, 0}; return; }
+    if (!core.hasContainer()) { lootRect_ = Rectangle{0, 0, 0, 0}; lootDrag_ = LootDrag{}; return; }
     const float sw = static_cast<float>(GetScreenWidth()), sh = static_cast<float>(GetScreenHeight());
     const float bar = BarHeight();
-    // same geometry as the inventory window; the loot window sits on its lower right (over the description box)
-    const float si = std::clamp(std::min(sw / 1024.0f, (sh - bar - 4) / 604.0f), 0.3f, 1.0f);
-    const float ox = std::floor((sw - 1024 * si) / 2), oy = std::max(0.0f, std::floor((sh - bar - 604 * si) / 2));
-    const float s = si * 1.25f;
-    const float lx = ox + (1024 - 20) * si - 256 * s, ly = oy + (604 - 12) * si - 176 * s;
-    auto P = [&](float x, float y, float w, float h) { return Rectangle{lx + x * s, ly + y * s, w * s, h * s}; };
-    auto L = [&](const char* n) { Rectangle r = LRect(loot_, n); return P(r.x, r.y, r.width, r.height); };
-    const Vector2 mp = GetMousePosition();
-    const bool pressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
-    const Rectangle win = P(0, 0, 256, 176);
+    const float kK = 800.0f / 1024.0f;                       // texture px per layout unit
+    const float kPanelW = (236 + 26) / kK;                   // one panel in layout units (335.4)
+    const float kPanelH = 604;
+    const float s = std::clamp(std::min(sw / 1024.0f, (sh - bar - 4) / 604.0f), 0.3f, 1.0f);
+    const float wx = std::floor((sw - 2 * kPanelW * s) / 2), wy = std::max(0.0f, std::floor((sh - bar - kPanelH * s) / 2));
+    auto PP = [&](int panel, float lx, float ly, float lw, float lh) { return Rectangle{wx + (panel * kPanelW + lx) * s, wy + ly * s, lw * s, lh * s}; };
+    const Rectangle win{wx, wy, 2 * kPanelW * s, kPanelH * s};
+    const Rectangle panelR[2] = {PP(0, 0, 0, kPanelW, kPanelH), PP(1, 0, 0, kPanelW, kPanelH)};
     lootRect_ = win;
     rects.push_back(win);
-    DrawRectangleRec(win, Color{12, 12, 9, 240});
-    DrawRectangleLinesEx(win, 2, kAmberDim);
-    DrawRectangleLinesEx(Rectangle{win.x + 4, win.y + 4, win.width - 8, win.height - 8}, 1, Color{90, 76, 36, 255});
+    const Vector2 mp = GetMousePosition();
+    const bool pressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    const bool corpse = core.containerIsCorpse();
+    const Color green{120, 235, 90, 255};
+    const Color white{255, 255, 255, 255};
 
-    const auto& items = core.container();
-    const int cols = 5, rows = 2, perPage = cols * rows;
-    const int totalRows = (static_cast<int>(items.size()) + cols - 1) / cols;
-    lootScroll_ = std::clamp(lootScroll_, 0, std::max(0, totalRows - rows));
-    if (In(win, mp)) {
-        const float w = GetMouseWheelMove();
-        if (w != 0) lootScroll_ = std::clamp(lootScroll_ - static_cast<int>(w), 0, std::max(0, totalRows - rows));
-    }
-    // title (the target's name) and weights
-    Text(gothic_, core.containerName().empty() ? std::string(core.containerIsCorpse() ? "Corpse" : "Container") : core.containerName(),
-         win.x, win.y + 6 * s, 20 * s, kAmber, 1, win.width);
-    int contW = 0;
-    for (auto& e : items) contW += e.weight * e.count;
-    {
-        char b[96];
-        std::snprintf(b, sizeof b, "Weight: %d lb", contW);
-        Text(fallouty_, b, win.x + 8 * s, win.y + 24 * s, 12 * s, Color{120, 235, 90, 255});
-        if (core.hasStats()) {
-            std::snprintf(b, sizeof b, "You: %u / %u lb", core.stats().carried, core.stats().carryWeight);
-            const bool over = core.stats().carried > core.stats().carryWeight;
-            Text(fallouty_, b, win.x, win.y + 24 * s, 12 * s, over ? Color{255, 90, 70, 255} : Color{120, 235, 90, 255}, 2, win.width - 8 * s);
+    // ---- panel art
+    if (const Texture2D* t = Texture("f3_inventory.tga")) {
+        for (int p = 0; p < 2; ++p) {
+            DrawTexturePro(*t, Rectangle{0, 0, 236, 472}, PP(p, 0, 0, 236 / kK, kPanelH), Vector2{0, 0}, 0, WHITE);
+            DrawTexturePro(*t, Rectangle{774, 0, 26, 472}, PP(p, 236 / kK, 0, 26 / kK, kPanelH), Vector2{0, 0}, 0, WHITE);
         }
     }
 
-    struct Cell { Rectangle r; const gnet::InvEntry* item; };
-    std::vector<Cell> cells;
-    for (int i = 0; i < perPage; ++i) {
-        const int idx = lootScroll_ * cols + i;
-        char nm[16];
-        std::snprintf(nm, sizeof nm, "Slot%d", i);
-        Rectangle r = L(nm);
-        cells.push_back({r, idx < static_cast<int>(items.size()) ? &items[idx] : nullptr});
+    // ---- the two item lists
+    std::vector<const gnet::InvEntry*> mine, theirs;
+    for (auto& e : core.inventory()) if (!e.equipped) mine.push_back(&e);
+    auto rank = [&](const gnet::InvEntry* e) {
+        const ProtoInfo* p = ProtoOf(core, *e);
+        const std::string c = p ? p->cls : "";
+        return c == "weapon" ? 0 : c == "armor" ? 1 : c == "ammo" ? 2 : 3;
+    };
+    std::stable_sort(mine.begin(), mine.end(), [&](const gnet::InvEntry* a, const gnet::InvEntry* b) {
+        if (sortMode_ == 1) return a->weight * a->count > b->weight * b->count;
+        if (sortMode_ == 2) return a->name < b->name;
+        return rank(a) < rank(b);
+    });
+    for (auto& e : core.container()) theirs.push_back(&e);
+    const int cols = 3, rows = 6;
+    auto rowsOf = [&](const std::vector<const gnet::InvEntry*>& l) { return (static_cast<int>(l.size()) + cols - 1) / cols; };
+    scrollRows_ = std::clamp(scrollRows_, 0, std::max(0, rowsOf(mine) - rows));
+    lootScroll_ = std::clamp(lootScroll_, 0, std::max(0, rowsOf(theirs) - rows));
+    int* scr[2] = {&scrollRows_, &lootScroll_};
+    const std::vector<const gnet::InvEntry*>* lists[2] = {&mine, &theirs};
+    for (int p = 0; p < 2; ++p) {
+        const int maxScroll = std::max(0, rowsOf(*lists[p]) - rows);
+        if (In(PP(p, 68, 96, 192, 384), mp)) {
+            const float w = GetMouseWheelMove();
+            if (w != 0) *scr[p] = std::clamp(*scr[p] - static_cast<int>(w), 0, maxScroll);
+        }
+        if (pressed) {
+            if (In(PP(p, 260, 56, 24, 24), mp)) *scr[p] = std::max(0, *scr[p] - 1);
+            if (In(PP(p, 260, 84, 24, 24), mp)) *scr[p] = std::min(maxScroll, *scr[p] + 1);
+        }
     }
+
+    struct Cell { Rectangle r; const gnet::InvEntry* item; int panel; };
+    std::vector<Cell> cells;
+    for (int p = 0; p < 2; ++p)
+        for (int rr = 0; rr < rows; ++rr)
+            for (int cc = 0; cc < cols; ++cc) {
+                const int idx = (*scr[p] + rr) * cols + cc;
+                cells.push_back({PP(p, 68 + cc * 64, 96 + rr * 64, 60, 60), idx < static_cast<int>(lists[p]->size()) ? (*lists[p])[idx] : nullptr, p});
+            }
     const Cell* hover = nullptr;
     for (auto& c : cells) if (In(c.r, mp)) hover = &c;
     for (auto& c : cells) {
-        DrawRectangleRec(c.r, Color{26, 24, 16, 255});
-        DrawRectangleLinesEx(c.r, 1, hover == &c ? kAmber : Color{90, 76, 36, 255});
+        if (hover == &c) DrawRectangleRec(c.r, Color{255, 255, 255, 28});
         if (!c.item || (lootDrag_.active && lootDrag_.id == c.item->id)) continue;
         const ProtoInfo* p = ProtoOf(core, *c.item);
         const Texture2D* ic = p ? Texture(p->icon) : nullptr;
-        Rectangle ir{c.r.x + 3 * s, c.r.y + 3 * s, c.r.width - 6 * s, c.r.height - 6 * s};
-        if (ic) {
-            const float k = std::min(ir.width / ic->width, ir.height / ic->height);
-            Blit(ic, Rectangle{ir.x + (ir.width - ic->width * k) / 2, ir.y + (ir.height - ic->height * k) / 2, ic->width * k, ic->height * k});
-        } else {
-            Text(gothic_, c.item->name.substr(0, 8), ir.x, ir.y + ir.height / 2 - 8 * s, 13 * s, kAmber, 1, ir.width);
-        }
-        if (c.item->count > 1) Text(fallouty_, std::to_string(c.item->count), ir.x, ir.y + ir.height - 13 * s, 13 * s, Color{255, 255, 255, 255}, 2, ir.width);
-    }
-    if (items.empty()) Text(gothic_, "(empty)", win.x, win.y + 80 * s, 16 * s, kAmberDim, 1, win.width);
-    if (totalRows > rows) {   // there are more rows than fit: small arrows on the right edge, the wheel scrolls
-        Text(gothic_, lootScroll_ > 0 ? "^" : " ", win.x + win.width - 14 * s, win.y + 44 * s, 14 * s, kAmber);
-        Text(gothic_, lootScroll_ < totalRows - rows ? "v" : " ", win.x + win.width - 14 * s, win.y + 118 * s, 14 * s, kAmber);
+        const Rectangle ir{c.r.x + 4 * s, c.r.y + 4 * s, 52 * s, 52 * s};
+        if (ic) Blit(ic, ir);
+        else Text(gothic_, c.item->name.substr(0, 8), ir.x, ir.y + ir.height / 2 - 8 * s, 14 * s, kAmber, 1, ir.width);
+        if (c.item->count > 1) Text(fallouty_, std::to_string(c.item->count), ir.x, ir.y + ir.height - 14 * s, 14 * s, white, 2, ir.width);
     }
 
-    // buttons: Take All / Done (labels from English.stf 1713 / 75)
-    auto button = [&](const char* n, const std::string& label, bool enabled) {
-        Rectangle r = L(n);
-        const bool hot = In(r, mp) && enabled;
-        DrawRectangleRec(r, hot ? Color{58, 48, 20, 255} : Color{30, 26, 14, 255});
-        DrawRectangleLinesEx(r, 1, enabled ? kAmber : kAmberDim);
+    // ---- headers: left = "WEIGHT x / limit lb" (as in the inventory), right = the target's name and weight
+    Text(gothic_, "WEIGHT", PP(0, 68, 60, 0, 0).x, PP(0, 68, 60, 0, 0).y - 2 * s, 15 * s, kAmber);
+    if (core.hasStats()) {
+        char b[48];
+        std::snprintf(b, sizeof b, "%u / %u lb", core.stats().carried, core.stats().carryWeight);
+        const bool over = core.stats().carried > core.stats().carryWeight;
+        Text(fallouty_, b, PP(0, 152, 60, 0, 0).x, PP(0, 152, 60, 0, 0).y, 14 * s, over ? Color{255, 90, 70, 255} : green);
+    }
+    {
+        std::string nm = core.containerName();
+        if (nm.empty()) nm = corpse ? "Corpse" : "Container";
+        float fs = 20 * s;
+        const Rectangle nr = PP(1, 40, 20, 232, 26);
+        while (fs > 10 * s && TextW(gothic_, nm, fs) > nr.width) fs -= 1;
+        Text(gothic_, nm, nr.x, nr.y, fs, kAmber, 1, nr.width);
+        int contW = 0;
+        for (auto& e : core.container()) contW += e.weight * e.count;
+        char b[48];
+        std::snprintf(b, sizeof b, "%d lb", contW);
+        Text(gothic_, "WEIGHT", PP(1, 68, 60, 0, 0).x, PP(1, 68, 60, 0, 0).y - 2 * s, 15 * s, kAmber);
+        Text(fallouty_, b, PP(1, 152, 60, 0, 0).x, PP(1, 152, 60, 0, 0).y, 14 * s, green);
+        if (core.container().empty()) Text(gothic_, "(empty)", PP(1, 68, 270, 192, 20).x, PP(1, 68, 270, 192, 20).y, 18 * s, kAmberDim, 1, 192 * s);
+    }
+
+    // ---- left bottom field: sort selector; trash = drop to the world
+    {
+        const char* names[] = {"Sort: type", "Sort: weight", "Sort: name"};
+        const Rectangle sr = PP(0, 48, 540, 172, 24);
+        Text(gothic_, names[sortMode_], sr.x, sr.y + 2 * s, 16 * s, kAmber, 1, sr.width);
+        if (pressed && In(sr, mp)) sortMode_ = (sortMode_ + 1) % 3;
+    }
+    const Rectangle trashR = PP(0, 244, 528, 48, 48);
+
+    // ---- right bottom: Done / Take All (the buttons of Container.gui, art f3_button_*.tga stretched as nine patches)
+    auto button = [&](const Rectangle& r, const std::string& label, bool enabled) {
+        const bool hot = enabled && In(r, mp);
+        const bool down = hot && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+        if (const Texture2D* t = Texture(down ? "f3_button_down.tga" : "f3_button_up.tga")) {
+            NPatchInfo np{Rectangle{0, 0, static_cast<float>(t->width), static_cast<float>(t->height)}, 8, 8, 8, 8, NPATCH_NINE_PATCH};
+            DrawTextureNPatch(*t, np, r, Vector2{0, 0}, 0, enabled ? WHITE : Color{150, 150, 150, 255});
+        }
+        if (hot) DrawRectangleRec(r, Color{255, 255, 255, 24});
         Text(gothic_, label, r.x, r.y + (r.height - 18 * s) / 2, 18 * s, enabled ? kAmber : kAmberDim, 1, r.width);
         return hot && pressed;
     };
     const std::string lblAll = stf_.ok() && !stf_.Get(1713).empty() ? stf_.Get(1713) : "Take All";
     const std::string lblDone = stf_.ok() && !stf_.Get(75).empty() ? stf_.Get(75) : "Done";
-    if (button("TakeAll", lblAll, !items.empty())) ui.commands->push_back(UiCommand{UiCommand::Take, core.containerOwner(), 0, 0});
-    if (button("Done", lblDone, true)) ui.commands->push_back(UiCommand{UiCommand::CloseContainer, 0, 0, 0});
+    DrawRectangleRec(PP(1, 38, 526, 258, 54), Color{34, 32, 24, 255});   // hides the sort field / trash art of the panel under the buttons
+    const Rectangle doneR = PP(1, 44, 536, 116, 34), allR = PP(1, 166, 536, 124, 34);
+    if (button(allR, lblAll, !core.container().empty())) ui.commands->push_back(UiCommand{UiCommand::Take, core.containerOwner(), 0, 0});
+    if (button(doneR, lblDone, true)) ui.commands->push_back(UiCommand{UiCommand::CloseContainer, 0, 0, 0});
 
-    // ---- dragging out of the window = take, double click = take
-    if (pressed && hover && hover->item) { lootDrag_.pressed = true; lootDrag_.active = false; lootDrag_.id = hover->item->id; lootDrag_.start = mp; }
+    // ---- drag and drop / double click between the panels (Put is only offered for containers, never for corpses)
+    const gnet::InvEntry* dragItem = nullptr;
+    if (lootDrag_.active) for (auto* e : *lists[lootDrag_.side]) if (e->id == lootDrag_.id) dragItem = e;
+    if (dragItem) {   // show where the item may go
+        if (lootDrag_.side == 0 && !corpse) DrawRectangleLinesEx(panelR[1], 2, Color{120, 235, 90, 200});
+        if (lootDrag_.side == 1) DrawRectangleLinesEx(panelR[0], 2, Color{120, 235, 90, 200});
+    }
+    if (pressed && hover && hover->item) { lootDrag_.pressed = true; lootDrag_.active = false; lootDrag_.id = hover->item->id; lootDrag_.side = hover->panel; lootDrag_.start = mp; }
     if (lootDrag_.pressed && !lootDrag_.active && IsMouseButtonDown(MOUSE_BUTTON_LEFT) &&
         std::hypot(mp.x - lootDrag_.start.x, mp.y - lootDrag_.start.y) > 6) lootDrag_.active = true;
     if (lootDrag_.pressed && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
         const gnet::InvEntry* di = nullptr;
-        for (auto& e : items) if (e.id == lootDrag_.id) di = &e;
+        for (auto* e : *lists[lootDrag_.side]) if (e->id == lootDrag_.id) di = e;
         if (di) {
+            const bool mineSide = lootDrag_.side == 0;
+            auto move = [&]() {
+                if (mineSide) { if (!corpse) ui.commands->push_back(UiCommand{UiCommand::Put, di->id, 0, 0}); }
+                else ui.commands->push_back(UiCommand{UiCommand::Take, core.containerOwner(), di->id, 0});
+            };
             if (!lootDrag_.active) {
-                if (lootClickId_ == di->id && ui.now - lootClickTime_ < 0.45) {
-                    ui.commands->push_back(UiCommand{UiCommand::Take, core.containerOwner(), di->id, 0});
-                    lootClickId_ = 0;
-                } else { lootClickId_ = di->id; lootClickTime_ = ui.now; }
-            } else if (!In(win, mp) && !In(Rectangle{0, sh - bar, sw, bar}, mp)) {
-                ui.commands->push_back(UiCommand{UiCommand::Take, core.containerOwner(), di->id, 0});
+                if (lootClickId_ == di->id && ui.now - lootClickTime_ < 0.45) { move(); lootClickId_ = 0; }
+                else { lootClickId_ = di->id; lootClickTime_ = ui.now; }
+            } else if (In(panelR[mineSide ? 1 : 0], mp)) {
+                move();
+            } else if (mineSide && In(trashR, mp)) {
+                ui.commands->push_back(UiCommand{UiCommand::Drop, di->id, 0});
             }
         }
         lootDrag_ = LootDrag{};
     }
     if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !lootDrag_.pressed) lootDrag_.active = false;
     if (hover && hover->item && !lootDrag_.active) Tooltip(hover->item->name, ItemText(*hover->item, ProtoOf(core, *hover->item)));
-    if (lootDrag_.active) {
-        const gnet::InvEntry* di = nullptr;
-        for (auto& e : items) if (e.id == lootDrag_.id) di = &e;
-        if (di) if (const ProtoInfo* p = ProtoOf(core, *di)) if (const Texture2D* ic = Texture(p->icon))
-            Blit(ic, Rectangle{mp.x - 32 * si, mp.y - 32 * si, 64 * si, 64 * si}, Color{255, 255, 255, 200});
-    }
+    if (dragItem) if (const ProtoInfo* p = ProtoOf(core, *dragItem)) if (const Texture2D* ic = Texture(p->icon))
+        Blit(ic, Rectangle{mp.x - 32 * s, mp.y - 32 * s, 64 * s, 64 * s}, Color{255, 255, 255, 200});
 }
 
 void OrigUi::DrawOverlay() {

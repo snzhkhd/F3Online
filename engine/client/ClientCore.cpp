@@ -123,7 +123,8 @@ void ClientCore::Poll() {
         bool have = false;
         if (containerCritter_) { auto it = critters_.find(containerOwner_); if (it != critters_.end()) { tp = it->second.pos; have = true; } }
         else { auto it = items_.find(containerOwner_); if (it != items_.end()) { tp = it->second.pos; have = true; } }
-        if (me && have && std::max(std::abs(me->pos.x - tp.x), std::abs(me->pos.y - tp.y)) > 6) CloseContainer();
+        // out of reach (the server serves loot within 3 cells) or out of view / on another map: closed
+        if (me && (!have || std::max(std::abs(me->pos.x - tp.x), std::abs(me->pos.y - tp.y)) > 4)) CloseContainer();
     }
 }
 

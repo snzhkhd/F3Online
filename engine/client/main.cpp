@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
     std::string draftArg;
     int toggleStep = 0;
     double lastToggle = 0;
-    bool noAssets = false, autowalk = false, hostGiven = false, legacy = false, autoattack = false, autopickup = false;
+    bool noAssets = false, autowalk = false, hostGiven = false, legacy = false, autoattack = false, autopickup = false, autoloot = false;
     std::vector<std::string> sayList;
     std::string traceFile;
     double runSeconds = 0;
@@ -131,6 +131,7 @@ int main(int argc, char** argv) {
         } else if (a == "--autowalk") autowalk = true;
         else if (a == "--autoattack") autoattack = true;
         else if (a == "--autopickup") autopickup = true;
+        else if (a == "--autoloot") autoloot = true;     // testing: loot the nearest corpse once (open the loot window)
         else if (a == "--legacy") legacy = true;
         else if (a == "--say") sayList.push_back(next());
         else if (a == "--trace") traceFile = next();
@@ -318,8 +319,8 @@ int main(int argc, char** argv) {
             typing = true;
         }
 
-        // opening a container / corpse also shows the inventory: it is the player's side of the loot window
-        { static bool hadContainer = false; if (core.hasContainer() && !hadContainer) uiState.inventory = true; hadContainer = core.hasContainer(); }
+        // the loot window has its own inventory panel and replaces the inventory window while it is open (uiState.inventory is untouched,
+        // so closing the loot returns to the previous state)
         // ---- hotkeys and mouse ----
         if (!typing && inGame && !creating) {
             if (in.keySkill) {   // S: skill cursor (the first press picks the last used skill, further presses cycle, Shift+S backwards)
@@ -416,6 +417,10 @@ int main(int argc, char** argv) {
         if (inGame && inGameSince >= 0) {
             if (!sayList.empty() && now - inGameSince > 1.0) { core.SendChat(sayList.front()); sayList.erase(sayList.begin()); }
             const ClientCritter* me = core.self();
+            if (me && autoloot && !core.hasContainer() && now - inGameSince > 3.5 && now - lastAutoAct > 2.0) {
+                lastAutoAct = now;
+                for (auto& [id, c] : core.critters()) if (id != core.selfId() && c.dead && c.kind == CritterKind::Npc) { core.Loot(id); break; }
+            }
             if (me && (autoattack || autopickup) && now - lastAutoAct > 2.0 && now - inGameSince > 2.5) {
                 lastAutoAct = now;
                 const CritterPose mp = core.Pose(*me, now);
