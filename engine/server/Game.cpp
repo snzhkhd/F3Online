@@ -152,10 +152,6 @@ void Server::InitCritterStats(Critter& c, const Proto& p) {
     c.dialog = p.dialog;
 }
 
-void Server::RecalcDerived(Critter& c) {
-    c.maxHp = std::max(1, 15 + c.special[0] + 2 * c.special[2]);
-}
-
 double Server::GetGlobalFor(const Critter* pc, const std::string& k) const {
     if (pc) { auto it = pc->gvars.find(k); if (it != pc->gvars.end()) return it->second; }
     return GetGlobal(k);
@@ -954,6 +950,7 @@ void Server::KillCritter(Critter& c, Critter* killer) {
     SendCritterState(c);
     if (c.IsPlayer()) { SendStats(c); Tell(c, "You have died."); }
     if (amx_) amx_->OnDeath(c);
+    if (c.IsNpc() && !c.isStatic && killer && killer->IsPlayer()) AddXp(*killer, KillXp(c));
     if (Map* m = world_.GetMap(c.mapId)) m->dirty = true;
     if (scripting_) {
         Critter* cp = world_.GetCritter(cid);
@@ -1037,8 +1034,23 @@ void Server::HandleGamePacket(ENetPeer*, Critter* c, GMsg id, ByteBuffer& b, boo
         }
         case GMsg::C2S_ReqState:
             ok = b.Ok();
-            if (ok && budget()) { SendStats(*c); SendInventory(*c); SendWaitState(*c); }
+            if (ok && budget()) { SendStats(*c); SendCharSheet(*c); SendInventory(*c); SendWaitState(*c); }
             break;
+        case static_cast<GMsg>(GMsgChar::C2S_CharCreate): {
+            gnet::CharCreate m; ok = m.Read(b);
+            if (ok && budget()) CreateCharacter(*c, m);
+            break;
+        }
+        case static_cast<GMsg>(GMsgChar::C2S_SpendSkill): {
+            gnet::SpendSkill m; ok = m.Read(b);
+            if (ok && budget()) SpendSkillPoints(*c, m.skill, m.points);
+            break;
+        }
+        case static_cast<GMsg>(GMsgChar::C2S_UseSkill): {
+            gnet::UseSkill m; ok = m.Read(b);
+            if (ok && budget()) UseSkill(*c, m.skill, m.kind, m.target);
+            break;
+        }
         case static_cast<GMsg>(GMsgDlg::C2S_Talk): {
             gnet::Talk m; ok = m.Read(b);
             if (ok && budget()) TalkTo(*c, m.critter);

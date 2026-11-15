@@ -84,7 +84,18 @@ public:
     bool EnterMapByName(Critter& c, const std::string& name, int entryId);
     void SendStats(Critter& c);
     void SendInventory(Critter& c);
-    void RecalcDerived(Critter& c);   // maxHp etc. from SPECIAL / level (Character.cpp)
+    // ---- character system (Character.cpp)
+    void RecalcDerived(Critter& c);   // maxHp from SPECIAL / level
+    int SkillRate(const Critter& c) const;
+    int SkillBase(const Critter& c, int skill) const;
+    int SkillValue(const Critter& c, int skill) const;
+    int XpForLevel(int level) const;
+    int KillXp(const Critter& victim) const;
+    void AddXp(Critter& c, int amount);
+    void SendCharSheet(Critter& c);
+    bool CreateCharacter(Critter& c, const gnet::CharCreate& m);
+    bool SpendSkillPoints(Critter& c, int skill, int points);
+    bool UseSkill(Critter& c, int skill, int kind, uint32_t target);
     // ---- accounts + persistence (Persist.cpp)
     bool SavePlayer(Critter& c);
     void SaveAllPlayers();

@@ -31,6 +31,16 @@ struct GameConfig {
     int CarryBase = 25, CarryPerStrength = 25;
     int WeightWeapon = 4, WeightArmor = 8, WeightAmmo = 1, WeightItem = 1;
     std::map<std::string, int> ItemWeights;
+    // character system (Character.cpp)
+    bool RequireCharacterCreation = true;   // new account characters must allocate SPECIAL + tag skills before playing
+    int SpecialBase = 5, CharPoints = 5, SpecialMin = 1, SpecialMax = 10;   // creation: 7 * SpecialBase + CharPoints = 40 points in total
+    int TagCount = 3, TagBonus = 20;
+    int SkillMax = 100, StartSkillPoints = 10;
+    int SkillRateBase = 5, SkillRatePerInt = 2;   // skill points per level = base + per * Intelligence
+    int XpBase = 1000, MaxLevel = 12, PerkRate = 3;   // xp for level L = XpBase * L * (L - 1) / 2
+    int HpBase = 15, HpPerLevelBase = 2;               // maxHp = HpBase + S + 2E + (level - 1) * (HpPerLevelBase + E / 2)
+    int KillXpBase = 30, KillXpPerHp = 8;              // xp for killing an NPC unless XpByProto has its prototype
+    std::map<std::string, int> XpByProto;
 };
 
 }  // namespace f3

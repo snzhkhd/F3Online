@@ -48,6 +48,14 @@ public:
         if (L_) lua::CallGlobal(*L_, fn, nullptr, std::forward<A>(args)...);
     }
 
+    // Hook that answers "handled?" (returns true when the Lua function exists, ran without error and returned true).
+    template <class... A> bool CallHandled(const char* fn, A&&... args) {
+        if (!L_) return false;
+        sol::object r;
+        if (!lua::CallGlobal(*L_, fn, &r, std::forward<A>(args)...)) return false;
+        return r.is<bool>() && r.as<bool>();
+    }
+
     const std::filesystem::path& Dir() const { return dir_; }
 
     // Real-time tunables: scripts/config.lua (global table `config`) -> GameConfig. Missing keys keep their defaults.

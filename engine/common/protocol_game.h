@@ -475,3 +475,65 @@ struct AuthResult {
 };
 }  // namespace gnet
 }  // namespace f3
+
+// ===================================================================================================
+// CHARACTER BLOCK (SPECIAL allocation, skills, XP / levels, skill use). Ids: client->server 34, 35, 37; server->client 141.
+// A new account character starts with SPECIAL 5 in everything, `unspentSpecial` free points and created = 0: until the client
+// answers with CharCreate{special, tagMask} the server ignores every request except chat / ping / ReqState / ClientCaps.
+// CharSheet carries everything the character window shows and is sent after login, ReqState and every change (level up,
+// skill spend, creation). Skill ids are the order of kSkillNames (the Van Buren skill list of English.stf, ids 83..96).
+// ===================================================================================================
+namespace f3 {
+enum class GMsgChar : uint8_t { C2S_CharCreate = 34, C2S_SpendSkill = 35, C2S_UseSkill = 37, S2C_CharSheet = 141 };
+inline constexpr int kSkillCount = 14;
+inline const char* const kSkillNames[kSkillCount] = {"Firearms", "Melee", "Unarmed", "Barter", "Persuasion", "Deception", "Mechanics",
+                                                     "Medic", "Outdoorsman", "Science", "Security", "Sneak", "Steal", "Traps"};
+namespace gnet {
+struct CharCreate {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgChar::C2S_CharCreate);
+    uint8_t special[7] = {5, 5, 5, 5, 5, 5, 5};
+    uint16_t tagMask = 0;   // bit i = kSkillNames[i] is a tag skill (exactly 3)
+    void Write(ByteBuffer& b) const { for (int i = 0; i < 7; i++) b.WriteU8(special[i]); b.WriteU16(tagMask); }
+    bool Read(ByteBuffer& b) { for (int i = 0; i < 7; i++) special[i] = b.ReadU8(); tagMask = b.ReadU16(); return b.Ok(); }
+};
+struct SpendSkill {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgChar::C2S_SpendSkill);
+    uint8_t skill = 0, points = 1;
+    void Write(ByteBuffer& b) const { b.WriteU8(skill); b.WriteU8(points); }
+    bool Read(ByteBuffer& b) { skill = b.ReadU8(); points = b.ReadU8(); return b.Ok(); }
+};
+struct UseSkill {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgChar::C2S_UseSkill);
+    uint8_t skill = 0;
+    uint8_t kind = 0;    // 0 = no target / self, 1 = critter, 2 = map object
+    uint32_t target = 0;
+    void Write(ByteBuffer& b) const { b.WriteU8(skill); b.WriteU8(kind); b.WriteU32(target); }
+    bool Read(ByteBuffer& b) { skill = b.ReadU8(); kind = b.ReadU8(); target = b.ReadU32(); return b.Ok(); }
+};
+struct CharSheet {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgChar::S2C_CharSheet);
+    uint8_t created = 1, level = 1, perkPoints = 0, unspentSpecial = 0, creationTotal = 40;   // creationTotal = SPECIAL sum to reach
+    uint32_t xp = 0, xpNext = 0;   // xpNext = total xp for the next level (0 at the level cap)
+    uint16_t skillPoints = 0, tagMask = 0;
+    uint8_t special[7] = {5, 5, 5, 5, 5, 5, 5};
+    uint16_t skill[kSkillCount] = {};   // total value (base from SPECIAL + tag bonus + spent ranks)
+    uint8_t rank[kSkillCount] = {};     // points spent
+    uint8_t maxAp = 0, healRate = 0, critChance = 0, skillRate = 0, tagCount = 3;
+    void Write(ByteBuffer& b) const {
+        b.WriteU8(created); b.WriteU8(level); b.WriteU8(perkPoints); b.WriteU8(unspentSpecial); b.WriteU8(creationTotal);
+        b.WriteU32(xp); b.WriteU32(xpNext); b.WriteU16(skillPoints); b.WriteU16(tagMask);
+        for (int i = 0; i < 7; i++) b.WriteU8(special[i]);
+        for (int i = 0; i < kSkillCount; i++) { b.WriteU16(skill[i]); b.WriteU8(rank[i]); }
+        b.WriteU8(maxAp); b.WriteU8(healRate); b.WriteU8(critChance); b.WriteU8(skillRate); b.WriteU8(tagCount);
+    }
+    bool Read(ByteBuffer& b) {
+        created = b.ReadU8(); level = b.ReadU8(); perkPoints = b.ReadU8(); unspentSpecial = b.ReadU8(); creationTotal = b.ReadU8();
+        xp = b.ReadU32(); xpNext = b.ReadU32(); skillPoints = b.ReadU16(); tagMask = b.ReadU16();
+        for (int i = 0; i < 7; i++) special[i] = b.ReadU8();
+        for (int i = 0; i < kSkillCount; i++) { skill[i] = b.ReadU16(); rank[i] = b.ReadU8(); }
+        maxAp = b.ReadU8(); healRate = b.ReadU8(); critChance = b.ReadU8(); skillRate = b.ReadU8(); tagCount = b.ReadU8();
+        return b.Ok();
+    }
+};
+}  // namespace gnet
+}  // namespace f3

@@ -162,6 +162,12 @@ void Server::HandlePacket(ENetPeer* peer, const uint8_t* data, size_t len) {
     Msg id = static_cast<Msg>(b.ReadU8());
     Critter* c = PeerCritter(world_, peer);
     bool ok = true;
+    if (c && !c->created) {   // character creation pending: only chat, ping, state requests and the creation itself
+        const uint8_t raw = static_cast<uint8_t>(id);
+        if (raw != static_cast<uint8_t>(Msg::C2S_Chat) && raw != static_cast<uint8_t>(Msg::C2S_Ping) && raw != static_cast<uint8_t>(GMsg::C2S_ReqState) &&
+            raw != static_cast<uint8_t>(GMsgRt::C2S_ClientCaps) && raw != static_cast<uint8_t>(GMsgChar::C2S_CharCreate))
+            return;
+    }
 
     switch (id) {
         case Msg::C2S_Login: {
@@ -246,6 +252,13 @@ bool Server::StartSession(ENetPeer* peer, const std::string& name, const nlohman
         c->dialog.clear();
     }
     if (restore) ApplyCharacter(*c, *saved);
+    else if (!account.empty() && rt_.RequireCharacterCreation) {   // new account character: SPECIAL 5 everywhere + free points to allocate
+        c->created = false;
+        for (int i = 0; i < 7; i++) c->special[i] = rt_.SpecialBase;
+        c->unspentSpecial = rt_.CharPoints;
+        RecalcDerived(*c);
+        c->hp = c->maxHp;
+    }
     TilePos spot = m->spawn;
     Dir dir = c->dir;
     bool placed = false;
@@ -271,6 +284,7 @@ bool Server::StartSession(ENetPeer* peer, const std::string& name, const nlohman
     SendMsg(*c, ok);
     SendMapInfo(*c, *m);
     SendStats(*c);
+    SendCharSheet(*c);
     SendInventory(*c);
     if (c->dead) SendCritterState(*c);
 

@@ -60,6 +60,13 @@ void Scripting::BindApi(sol::state& L) {
         "hp", sol::property([](Critter& c) { return c.hp; }),
         "max_hp", sol::property([](Critter& c) { return c.maxHp; }),
         "level", sol::property([](Critter& c) { return c.level; }),
+        "xp", sol::property([](Critter& c) { return c.xp; }),
+        "skill_points", sol::property([](Critter& c) { return c.skillPoints; }),
+        "perk_points", sol::property([](Critter& c) { return c.perkPoints; }),
+        "created", sol::property([](Critter& c) { return c.created; }),
+        "give_xp", [&S](Critter& c, int n) { S.AddXp(c, n); },
+        "skill", [&S](Critter& c, int i) { return S.SkillValue(c, i - 1); },   // 1-based like special(): 1 Firearms .. 14 Traps
+
         "team", sol::property([](Critter& c) { return c.team; }, [](Critter& c, int t) { c.team = t; }),
         "dead", sol::property([](Critter& c) { return c.dead; }),
         "is_static", sol::property([](Critter& c) { return c.isStatic; }),
@@ -331,6 +338,10 @@ void Scripting::ApplyConfig(sol::state_view L) {
     F3_CFG_INT(RtApCostAttackPerCost); F3_CFG_INT(RtApCostAttackMin); F3_CFG_INT(TransferLock); F3_CFG_INT(AggroAlertRadius); F3_CFG_INT(ForceMiss);
     F3_CFG_INT(CarryBase); F3_CFG_INT(CarryPerStrength);
     F3_CFG_INT(WeightWeapon); F3_CFG_INT(WeightArmor); F3_CFG_INT(WeightAmmo); F3_CFG_INT(WeightItem);
+    F3_CFG_INT(RequireCharacterCreation); F3_CFG_INT(SpecialBase); F3_CFG_INT(CharPoints); F3_CFG_INT(SpecialMin); F3_CFG_INT(SpecialMax);
+    F3_CFG_INT(TagCount); F3_CFG_INT(TagBonus); F3_CFG_INT(SkillMax); F3_CFG_INT(StartSkillPoints);
+    F3_CFG_INT(SkillRateBase); F3_CFG_INT(SkillRatePerInt); F3_CFG_INT(XpBase); F3_CFG_INT(MaxLevel); F3_CFG_INT(PerkRate);
+    F3_CFG_INT(HpBase); F3_CFG_INT(HpPerLevelBase); F3_CFG_INT(KillXpBase); F3_CFG_INT(KillXpPerHp);
 #undef F3_CFG_INT
 #undef F3_CFG_NUM
     {
@@ -339,6 +350,17 @@ void Scripting::ApplyConfig(sol::state_view L) {
             for (auto& kv : w.as<sol::table>())
                 if (kv.first.is<std::string>() && kv.second.is<int>()) g.ItemWeights[kv.first.as<std::string>()] = kv.second.as<int>();
     }
+    {
+        sol::object w = t["XpByProto"];
+        if (w.get_type() == sol::type::table)
+            for (auto& kv : w.as<sol::table>())
+                if (kv.first.is<std::string>() && kv.second.is<int>()) g.XpByProto[kv.first.as<std::string>()] = kv.second.as<int>();
+    }
+    g.SpecialMin = std::clamp(g.SpecialMin, 1, 10);
+    g.SpecialMax = std::clamp(g.SpecialMax, g.SpecialMin, 10);
+    g.TagCount = std::clamp(g.TagCount, 0, kSkillCount);
+    g.MaxLevel = std::clamp(g.MaxLevel, 1, 99);
+    g.SkillMax = std::clamp(g.SkillMax, 1, 255);
     g.Breaktime = std::max(0, g.Breaktime);
     g.WalkSpeed = std::clamp(g.WalkSpeed, 0.1, 100.0);
     g.RunSpeed = std::clamp(g.RunSpeed, 0.1, 100.0);

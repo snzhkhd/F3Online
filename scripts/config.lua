@@ -43,5 +43,26 @@ config = {
     WeightItem                = 1,
     ItemWeights               = {      -- per prototype overrides: ["Weapons9mm_Autoloader.WEA"] = 3,
     },
+    -- ---- character system (docs/server-data.md section 11). Placeholders: the demo data carries no formulas.
+    RequireCharacterCreation  = true,  -- new account characters allocate SPECIAL + tag skills first (guests / dev kit characters are Default_PC)
+    SpecialBase               = 5,     -- creation: every SPECIAL starts at SpecialBase ...
+    CharPoints                = 5,     -- ... plus CharPoints free points (7 * 5 + 5 = 40 in total), each value SpecialMin..SpecialMax
+    SpecialMin                = 1,
+    SpecialMax                = 10,
+    TagCount                  = 3,     -- tag skills (the original UI says "maximum of three tag skills")
+    TagBonus                  = 20,    -- added to a tag skill
+    SkillMax                  = 100,
+    StartSkillPoints          = 10,    -- unspent skill points of a fresh character
+    SkillRateBase             = 5,     -- skill points per level = SkillRateBase + SkillRatePerInt * Intelligence
+    SkillRatePerInt           = 2,
+    XpBase                    = 1000,  -- xp needed for level L = XpBase * L * (L - 1) / 2
+    MaxLevel                  = 12,
+    PerkRate                  = 3,     -- a perk point every PerkRate levels (placeholder, perks are not implemented)
+    HpBase                    = 15,    -- maxHp = HpBase + S + 2E + (level - 1) * (HpPerLevelBase + E / 2)
+    HpPerLevelBase            = 2,
+    KillXpBase                = 30,    -- xp for killing an NPC = KillXpBase + KillXpPerHp * its max HP, unless XpByProto lists it
+    KillXpPerHp               = 8,
+    XpByProto                 = {      -- ["Some_Critter.CRT"] = 250,
+    },
     TransferLock              = 3000,  -- ms during which a transition region cannot fire again after a map change
 }

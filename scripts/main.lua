@@ -63,6 +63,28 @@ function on_login(c)
     return true
 end
 
+-- Skill use hook (C2S_UseSkill, server checks AP / breaktime first): use_skill(cr, skill_name, value, kind, target_id)
+-- kind 0 = no target, 1 = critter, 2 = map object. Return true when the skill did something.
+function use_skill(c, skill, value, kind, target)
+    local t = (kind == 1 and target ~= 0) and get_critter(target) or c
+    if skill == "Medic" then
+        if t.dead then c:tell("It is too late for first aid."); return true end
+        if t.hp >= t.max_hp then c:tell((t == c and "You are" or t.name .. " is") .. " not hurt."); return true end
+        if t ~= c and c:distance_to(t) > 4 then c:tell("You are too far away."); return true end
+        local roll = math.random(1, 100)
+        if roll > math.max(value, 15) then c:tell("Your first aid attempt fails."); return true end
+        local heal = math.random(1, 4) + math.floor(value / 10)
+        t:heal(heal)
+        c:tell(string.format("You treat %s for %d hit points.", t == c and "yourself" or t.name, heal))
+        c:give_xp(5)
+        return true
+    elseif skill == "Outdoorsman" or skill == "Science" or skill == "Mechanics" or skill == "Security" or skill == "Traps" then
+        c:tell(skill .. " (" .. value .. "%): nothing here that needs it yet.")
+        return true
+    end
+    return false
+end
+
 function on_logout(c)
     broadcast(c.name .. " left the wasteland")
 end
@@ -131,6 +153,15 @@ function commands.near(c, arg)
 end
 
 function commands.heal(c) c:heal(c.max_hp) end
+-- dev helpers for the character system: /givexp n, /sheet
+function commands.givexp(c, arg) c:give_xp(math.floor(tonumber(arg or "") or 100)) end
+function commands.sheet(c)
+    local names = {"Firearms", "Melee", "Unarmed", "Barter", "Persuasion", "Deception", "Mechanics", "Medic", "Outdoorsman", "Science", "Security", "Sneak", "Steal", "Traps"}
+    local t = {}
+    for i, n in ipairs(names) do t[#t + 1] = n .. " " .. c:skill(i) end
+    c:tell(string.format("Level %d  XP %d  skill points %d  perk points %d", c.level, c.xp, c.skill_points, c.perk_points))
+    c:tell(table.concat(t, ", "))
+end
 -- dev helper: /gvar name [value]  reads / sets a per player (persisted) quest / script global
 function commands.gvar(c, arg)
     local k, v = (arg or ""):match("^(%S+)%s*(%S*)$")
