@@ -698,6 +698,7 @@ private:
         }
         lastCam_ = cam_.Build();
         labels_.clear();
+        critterHead_.clear();
         std::vector<PickRect> prevRects;
         prevRects.swap(pickRects_);
         // hover from last frame's rectangles
@@ -853,6 +854,7 @@ private:
         labels_.push_back({Vector3{w.x, w.y + height + 0.7f, w.z}, s.protos ? CritterLabel(*s.protos, c) : c.name,
                            c.kind == CritterKind::Npc ? Color{255, 220, 140, 255} : RAYWHITE, c.id, c.hp, c.maxHp, c.dead});
         critterWorld_[c.id] = Vector3{w.x, w.y + height * 0.8f, w.z};
+        critterHead_[c.id] = Vector3{w.x, w.y + height + 0.7f, w.z};
     }
 
     // The active weapon (appearance block) is drawn on the "R Handle_1" bone of the right hand. The bone matrix is in Granny space
@@ -948,6 +950,42 @@ private:
             DrawText(f.text.c_str(), static_cast<int>(sp.x) - tw / 2 + 1, static_cast<int>(sp.y) + 1, fs, Color{0, 0, 0, col.a});
             DrawText(f.text.c_str(), static_cast<int>(sp.x) - tw / 2, static_cast<int>(sp.y), fs, col);
         }
+        DrawSpeech(ui);
+    }
+
+    // Floating speech: Say lines of the chat log (from = speaker) stay above the speaker's nameplate for a few seconds
+    // (longer for longer text), newest nearest the head, older ones stacked above and fading out. Also stays in the chat log.
+    static double SpeechLife(const std::string& t) { return std::clamp(3.0 + 0.06 * static_cast<double>(t.size()), 3.0, 9.0); }
+    void DrawSpeech(const UiView& ui) {
+        if (!ui.chat || ui.chat->empty()) return;
+        std::unordered_map<CritterId, float> used;   // stacked height per speaker (pixels above the nameplate)
+        std::unordered_map<CritterId, int> count;
+        for (auto it = ui.chat->rbegin(); it != ui.chat->rend(); ++it) {
+            const ChatLine& l = *it;
+            const double age = ui.now - l.time;
+            if (age > 9.0) break;   // lines are in time order
+            if (l.channel != ChatChannel::Say || l.from == 0 || age > SpeechLife(l.text)) continue;
+            auto h = critterHead_.find(l.from);
+            if (h == critterHead_.end() || count[l.from] >= 3) continue;
+            const Vector2 sp = GetWorldToScreen(h->second, lastCam_);
+            const double life = SpeechLife(l.text);
+            const float alpha = static_cast<float>(std::clamp((life - age) / 0.7, 0.0, 1.0));
+            const ClientCritter* cc = ui.core ? ui.core->Find(l.from) : nullptr;
+            const Color col = cc && cc->kind == CritterKind::Npc ? Color{255, 235, 150, 255} : Color{245, 245, 245, 255};
+            float& u = used[l.from];
+            const float hgt = orig_.ok() ? orig_.DrawSpeech(l.text, sp.x, sp.y - 16 - u, col, alpha)
+                                         : DrawSpeechPlain(l.text, sp.x, sp.y - 16 - u, col, alpha);
+            u += hgt + 2;
+            ++count[l.from];
+        }
+    }
+    static float DrawSpeechPlain(const std::string& t, float cx, float bottomY, Color c, float alpha) {
+        const int fs = 14;
+        const int tw = MeasureText(t.c_str(), fs);
+        c.a = static_cast<unsigned char>(alpha * 255);
+        DrawText(t.c_str(), static_cast<int>(cx) - tw / 2 + 1, static_cast<int>(bottomY) - fs + 1, fs, Color{0, 0, 0, c.a});
+        DrawText(t.c_str(), static_cast<int>(cx) - tw / 2, static_cast<int>(bottomY) - fs, fs, c);
+        return static_cast<float>(fs);
     }
 
     // ---------------------------------------------------------------- HUD widgets
@@ -1370,6 +1408,7 @@ private:
     std::vector<Rectangle> uiRects_;
     std::unordered_map<CritterId, Visual> visuals_;
     std::unordered_map<CritterId, Vector3> critterWorld_;
+    std::unordered_map<CritterId, Vector3> critterHead_;   // nameplate anchor of the critters drawn this frame (speech sits above it)
     std::unordered_map<ItemId, bool> doorState_;
     CritterId hoverCrit_ = 0;
     ItemId hoverItem_ = 0;

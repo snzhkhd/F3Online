@@ -259,7 +259,7 @@ void ClientCore::Handle(const uint8_t* data, size_t len) {
         case Msg::S2C_Chat: {
             net::ChatMsg m;
             if (!m.Read(b)) return;
-            AddChat(ChatLine{m.name, m.text, m.channel, 0});
+            AddChat(ChatLine{m.name, m.text, m.channel, 0, m.from});
             break;
         }
         case Msg::S2C_ItemAdd: {

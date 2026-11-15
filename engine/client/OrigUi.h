@@ -31,6 +31,8 @@ public:
     bool HasLoot() const { return ok_ && haveLoot_; }
     void DrawLoot(const UiView& ui, std::vector<Rectangle>& rects);
     void DrawOverlay();   // tooltip, after all windows
+    // Floating speech: word-wrapped outlined text (gothic font), centred on cx, the block's bottom edge at bottomY. Returns the block height.
+    float DrawSpeech(const std::string& text, float cx, float bottomY, Color c, float alpha, float maxW = 230);
     // Cursor art (TGA): loose file in extracted/Interface (searched upwards from the cwd and the exe; the custom "Cursor" lives
     // there), else the game resource of that name. nullptr if neither exists. usedPath gets the source for the log.
     const Texture2D* CursorTexture(const std::string& name, std::string* usedPath = nullptr);

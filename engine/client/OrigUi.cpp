@@ -178,6 +178,44 @@ void OrigUi::Text(const Font& f, const std::string& s, float x, float y, float s
     DrawTextEx(f, s.c_str(), Vector2{std::floor(x), std::floor(y)}, size, 1, c);
 }
 
+float OrigUi::DrawSpeech(const std::string& text, float cx, float bottomY, Color c, float alpha, float maxW) {
+    const Font& f = haveFonts_ ? gothic_ : GetFontDefault();
+    const float fs = 16;
+    std::vector<std::string> lines;
+    std::string cur;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t sp = text.find(' ', pos);
+        std::string word = text.substr(pos, sp == std::string::npos ? std::string::npos : sp - pos + 1);
+        pos = sp == std::string::npos ? text.size() : sp + 1;
+        while (TextW(f, word, fs) > maxW && word.size() > 1) {
+            size_t n = word.size();
+            while (n > 1 && TextW(f, word.substr(0, n), fs) > maxW) --n;
+            if (!cur.empty()) { lines.push_back(cur); cur.clear(); }
+            lines.push_back(word.substr(0, n));
+            word = word.substr(n);
+        }
+        if (!cur.empty() && TextW(f, cur + word, fs) > maxW) { lines.push_back(cur); cur.clear(); }
+        cur += word;
+    }
+    if (!cur.empty()) lines.push_back(cur);
+    const float lh = fs + 1;
+    const float h = lh * lines.size();
+    const unsigned char a = static_cast<unsigned char>(std::clamp(alpha, 0.0f, 1.0f) * 255);
+    Color col = c; col.a = a;
+    Color ol{0, 0, 0, a};
+    float y = bottomY - h;
+    for (const std::string& l : lines) {
+        const float x = cx - TextW(f, l, fs) / 2;
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy)
+                if (dx || dy) Text(f, l, x + dx, y + dy, fs, ol);
+        Text(f, l, x, y, fs, col);
+        y += lh;
+    }
+    return h;
+}
+
 void OrigUi::Blit(const Texture2D* t, Rectangle dst, Color tint) {
     if (!t) return;
     DrawTexturePro(*t, Rectangle{0, 0, static_cast<float>(t->width), static_cast<float>(t->height)}, dst, Vector2{0, 0}, 0, tint);

@@ -78,6 +78,7 @@ struct ChatLine {
     std::string text;
     ChatChannel channel = ChatChannel::Say;
     double time = 0;
+    CritterId from = 0;  // speaker (0 = system); the renderer shows Say lines above this critter's head
 };
 
 struct Floater {  // floating combat text
