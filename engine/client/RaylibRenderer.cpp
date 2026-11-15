@@ -677,6 +677,8 @@ private:
         (void)tw; (void)th;
     }
 
+    static float Hypot2(float a, float b) { return std::sqrt(a * a + b * b); }
+
     Rectangle ProjectRect(const Vector3& foot, float height, float width) const {
         Vector2 f = GetWorldToScreen(foot, lastCam_);
         Vector2 h = GetWorldToScreen(Vector3{foot.x, foot.y + height, foot.z}, lastCam_);
@@ -716,6 +718,15 @@ private:
                 }
         }
 
+        // fog of war: the server's visibility radius (Perception based, MapInfo) around the player, soft edge over the outer 10 cells
+        fogR_ = 0;
+        if (nm && s.hasSelf && nm->viewCells > 0) {
+            const Vector3 c0 = map_.TileToWorld(s.cameraX, s.cameraY, tw, th);
+            const float cell = Vector3Distance(map_.TileToWorld(1, 0, tw, th), map_.TileToWorld(0, 0, tw, th));
+            fogR_ = nm->viewCells * cell;
+            fogC_ = c0;
+            assets_->SetFog(c0.x, c0.z, std::max(0.0f, fogR_ - 10 * cell), fogR_, 0.08f);
+        } else assets_->SetFog(0, 0, 0, 0);
         rlSetClipPlanes(30.0, 1500.0);
         BeginMode3D(lastCam_);
         map_.Update(GetFrameTime());
@@ -821,6 +832,7 @@ private:
         std::string model = proto && !proto->model.empty() ? proto->model : "HumMNor";
         Vector3 w = OnGround(map_.TileToWorld(sc.x, sc.y, tw, th));
         seen.insert(c.id);
+        if (fogR_ > 0 && !sc.isSelf && Hypot2(w.x - fogC_.x, w.z - fogC_.z) > fogR_ * 1.02f) return;   // outside the visible radius: not drawn
 
         Visual& v = visuals_[c.id];
         Appearance app;
@@ -931,6 +943,7 @@ private:
     void DrawItem(const SceneView& s, const ClientItem& it, int tw, int th) {
         const ProtoInfo* proto = s.protos ? s.protos->ByPid(it.pid) : nullptr;
         Vector3 w = OnGround(map_.TileToWorld(static_cast<float>(it.pos.x), static_cast<float>(it.pos.y), tw, th));
+        if (fogR_ > 0 && Hypot2(w.x - fogC_.x, w.z - fogC_.z) > fogR_ * 1.02f) return;
         bool drawn = false;
         float height = 2.0f;
         if (it.kind == gnet::ObjectKind::Ground) {
@@ -1453,6 +1466,8 @@ private:
     std::unordered_map<CritterId, Vector3> critterWorld_;
     std::unordered_map<CritterId, Vector3> critterHead_;   // nameplate anchor of the critters drawn this frame (speech sits above it)
     std::unordered_map<ItemId, bool> doorState_;
+    float fogR_ = 0;            // fog radius in world units this frame (0 = no fog)
+    Vector3 fogC_{0, 0, 0};
     CritterId hoverCrit_ = 0;
     ItemId hoverItem_ = 0;
     struct PhCritter { CritterId id; float x, y; bool self; };

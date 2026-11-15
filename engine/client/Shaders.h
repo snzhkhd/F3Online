@@ -18,12 +18,14 @@ out vec2 vUv2;
 out vec4 vCol;
 out vec3 vNrm;
 out float vWorldY;
+out vec2 vWorldXZ;
 void main() {
     vUv = vertexTexCoord;
     vUv2 = vertexTexCoord2;
     vCol = vertexColor;
     vec4 wp = matModel * vec4(vertexPosition, 1.0);
     vWorldY = wp.y;
+    vWorldXZ = wp.xz;
     vNrm = mat3(matModel) * vertexNormal;
     gl_Position = mvp * vec4(vertexPosition, 1.0);
 }
@@ -36,6 +38,9 @@ in vec2 vUv2;
 in vec4 vCol;
 in vec3 vNrm;
 in float vWorldY;
+in vec2 vWorldXZ;
+uniform vec4 uFog;            // fog of war: centre xz, inner radius, outer radius (world units); outer huge = off
+uniform float uFogDark;       // brightness factor beyond the outer radius
 uniform sampler2D texture0;   // diffuse
 uniform sampler2D texture1;   // lightmap
 uniform int uUseTex;
@@ -57,6 +62,11 @@ void main() {
         col *= 0.55 + 0.55 * ndl;
     }
     col *= uTint.rgb;
+    {
+        float f = clamp((length(vWorldXZ - uFog.xy) - uFog.z) / max(uFog.w - uFog.z, 0.001), 0.0, 1.0);
+        f = f * f * (3.0 - 2.0 * f);
+        col *= mix(1.0, uFogDark, f);
+    }
     float a = 1.0;
     if (uAlphaMode == 1) a = vCol.a;
     else if (uAlphaMode == 2) { a = base.a; if (a < 0.5) discard; a = 1.0; }

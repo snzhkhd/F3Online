@@ -55,6 +55,13 @@ GameAssets::~GameAssets() { Unload(); }
 
 bool GameAssets::Open(const std::string& gameDir, std::string* err) { return data_.Open(gameDir, err); }
 
+void GameAssets::SetFog(float cx, float cz, float inner, float outer, float dark) {
+    if (!gpu_ || locs.fog < 0) return;
+    const float f[4] = {cx, cz, outer > 0 ? inner : 1e9f, outer > 0 ? outer : 2e9f};
+    SetShaderValue(shader_, locs.fog, f, SHADER_UNIFORM_VEC4);
+    SetShaderValue(shader_, locs.fogDark, &dark, SHADER_UNIFORM_FLOAT);
+}
+
 bool GameAssets::InitGpu() {
     if (gpu_) return true;
     shader_ = LoadShaderFromMemory(kVertexShader, kFragmentShader);
@@ -67,12 +74,15 @@ bool GameAssets::InitGpu() {
     locs.tint = GetShaderLocation(shader_, "uTint");
     locs.clipY = GetShaderLocation(shader_, "uClipY");
     locs.lmGain = GetShaderLocation(shader_, "uLmGain");
+    locs.fog = GetShaderLocation(shader_, "uFog");
+    locs.fogDark = GetShaderLocation(shader_, "uFogDark");
     mat_ = Material{};
     mat_.shader = shader_;
     mat_.maps = static_cast<MaterialMap*>(MemAlloc(kMaxMaterialMaps * sizeof(MaterialMap)));
     std::memset(mat_.maps, 0, kMaxMaterialMaps * sizeof(MaterialMap));
     for (int i = 0; i < kMaxMaterialMaps; ++i) mat_.maps[i].color = WHITE;
     gpu_ = true;
+    SetFog(0, 0, 0, 0);
     return true;
 }
 

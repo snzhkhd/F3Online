@@ -41,6 +41,9 @@ struct GameConfig {
     int SkillRateBase = 5, SkillRatePerInt = 2;   // skill points per level = base + per * Intelligence
     int XpBase = 1000, MaxLevel = 12, PerkRate = 3;   // xp for level L = XpBase * L * (L - 1) / 2
     int HpBase = 15, HpPerLevelBase = 2;               // maxHp = HpBase + S + 2E + (level - 1) * (HpPerLevelBase + E / 2)
+    // fog of war / visibility: a player sees (and is sent) critters, items and speech within ViewBase + ViewPerPerception * Perception cells
+    // (Euclidean, 1 cell = 0.5 world unit); the same radius goes to the client in MapInfo for the fog edge. Default PE 5 -> 48 cells.
+    int ViewBase = 28, ViewPerPerception = 4;
     int KillXpBase = 30, KillXpPerHp = 8;              // xp for killing an NPC unless XpByProto has its prototype
     std::map<std::string, int> XpByProto;
 };

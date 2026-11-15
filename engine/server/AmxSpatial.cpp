@@ -115,7 +115,7 @@ bool AmxHost::Visible(const Map& map, float x, float z) const {
     const int cx = static_cast<int>(std::floor((x - map.originX) * 2.f)), cy = static_cast<int>(std::floor((z - map.originZ) * 2.f));
     for (const Critter* p : map.critters) {
         if (!p->IsPlayer() || p->dead) continue;
-        if (std::max(std::abs(p->pos.x - cx), std::abs(p->pos.y - cy)) > Server::kViewCells) continue;
+        { const int dx = p->pos.x - cx, dy = p->pos.y - cy, r = server_.ViewCells(*p); if (dx * dx + dy * dy > r * r) continue; }
         if (LineClear(map, p->fx * 0.5f + map.originX, p->fy * 0.5f + map.originZ, x, z)) return true;
     }
     return false;

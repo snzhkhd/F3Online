@@ -98,16 +98,20 @@ struct MapInfo {
     std::string name;
     uint16_t width = 0, height = 0;
     std::vector<uint8_t> blocked;  // width*height, 1 = blocked
+    uint16_t viewCells = 0;        // optional trailing field: this player's visibility radius in cells (0 = unknown, the client draws no fog)
     void Write(ByteBuffer& b) const {
         b.WriteU16(mapId); b.WriteString(name); b.WriteU16(width); b.WriteU16(height);
         b.WriteBytes(blocked.data(), blocked.size());
+        b.WriteU16(viewCells);
     }
     bool Read(ByteBuffer& b) {
         mapId = b.ReadU16(); name = b.ReadString(64); width = b.ReadU16(); height = b.ReadU16();
         size_t n = static_cast<size_t>(width) * height;
         if (!b.Ok() || n > (1u << 20) || n > b.Remaining()) return false;
         blocked.resize(n);
-        return b.ReadBytes(blocked.data(), n) && b.Ok();
+        if (!b.ReadBytes(blocked.data(), n) || !b.Ok()) return false;
+        viewCells = b.Remaining() >= 2 ? b.ReadU16() : 0;
+        return b.Ok();
     }
 };
 

@@ -68,6 +68,7 @@ struct ClientMap {
     std::string name;
     int width = 0, height = 0;
     std::vector<uint8_t> blocked;
+    int viewCells = 0;   // server visibility radius for this player in cells (Perception based), 0 = unknown
     bool IsBlocked(int x, int y) const {
         return x < 0 || y < 0 || x >= width || y >= height || blocked[static_cast<size_t>(y) * width + x] != 0;
     }

@@ -343,7 +343,7 @@ void Scripting::ApplyConfig(sol::state_view L) {
     F3_CFG_INT(WeightWeapon); F3_CFG_INT(WeightArmor); F3_CFG_INT(WeightAmmo); F3_CFG_INT(WeightItem);
     F3_CFG_INT(RequireCharacterCreation); F3_CFG_INT(SpecialBase); F3_CFG_INT(CharPoints); F3_CFG_INT(SpecialMin); F3_CFG_INT(SpecialMax);
     F3_CFG_INT(TagCount); F3_CFG_INT(TraitMax); F3_CFG_INT(SkillUseRange); F3_CFG_INT(TagBonus); F3_CFG_INT(SkillMax); F3_CFG_INT(StartSkillPoints);
-    F3_CFG_INT(SkillRateBase); F3_CFG_INT(SkillRatePerInt); F3_CFG_INT(XpBase); F3_CFG_INT(MaxLevel); F3_CFG_INT(PerkRate);
+    F3_CFG_INT(ViewBase); F3_CFG_INT(ViewPerPerception); F3_CFG_INT(SkillRateBase); F3_CFG_INT(SkillRatePerInt); F3_CFG_INT(XpBase); F3_CFG_INT(MaxLevel); F3_CFG_INT(PerkRate);
     F3_CFG_INT(HpBase); F3_CFG_INT(HpPerLevelBase); F3_CFG_INT(KillXpBase); F3_CFG_INT(KillXpPerHp);
 #undef F3_CFG_INT
 #undef F3_CFG_NUM

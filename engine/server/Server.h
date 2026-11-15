@@ -56,7 +56,10 @@ public:
     const Config& GetConfig() const { return cfg_; }
     uint64_t Tick() const { return tick_; }
     const DataStore& Data() const { return data_; }
-    static constexpr int kViewCells = 48;  // visibility radius in cells (24 world units)
+    static constexpr int kViewCells = 48;  // default visibility radius in cells (24 world units, Perception 5); see ViewCells()
+    // Visibility radius of a critter in cells: GameConfig ViewBase + ViewPerPerception * Perception (clamped 8..200).
+    int ViewCells(const Critter& c) const { return std::clamp(rt_.ViewBase + rt_.ViewPerPerception * c.special[1], 8, 200); }
+    static bool InRange(TilePos a, TilePos b, int r) { const int dx = a.x - b.x, dy = a.y - b.y; return dx * dx + dy * dy <= r * r; }
 
     Map* CreateMap(const std::string& name, int w, int h, std::vector<uint8_t> blocked, TilePos spawn);
     Critter* SpawnNpc(MapId map, const std::string& name, TilePos pos, const std::string& type, uint32_t color);

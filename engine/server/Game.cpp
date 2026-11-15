@@ -985,7 +985,7 @@ void Server::TickCombat(Critter& c) {
     }
     ByteBuffer b = gnet::PackG(ev);
     for (Critter* p : m->critters)
-        if (p->IsPlayer() && TileDist(p->pos, c.pos) <= kViewCells) Send(*p, b);
+        if (p->IsPlayer() && InRange(p->pos, c.pos, ViewCells(*p))) Send(*p, b);
     (void)attackerId;
 }
 

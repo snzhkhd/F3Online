@@ -48,7 +48,10 @@ public:
     gd::GameData& data() { return data_; }
     Shader& shader() { return shader_; }
     Material& material() { return mat_; }   // asset shader + two map slots (diffuse, lightmap)
-    struct Locs { int useTex = -1, useLM = -1, alphaMode = -1, lit = -1, tint = -1, clipY = -1, lmGain = -1; } locs;
+    struct Locs { int useTex = -1, useLM = -1, alphaMode = -1, lit = -1, tint = -1, clipY = -1, lmGain = -1, fog = -1, fogDark = -1; } locs;
+    // Fog of war on the asset shader: darkens everything farther than `outer` from (cx, cz) with a smooth edge starting at `inner`.
+    // outer <= 0 switches it off. Call once per frame before drawing.
+    void SetFog(float cx, float cz, float inner, float outer, float dark = 0.1f);
     bool InitGpu();   // after the window exists: compiles the shader
     void Unload();    // before CloseWindow
 

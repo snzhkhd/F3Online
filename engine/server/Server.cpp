@@ -436,6 +436,7 @@ void Server::SendMapInfo(Critter& player, const Map& m) {
     mi.mapId = m.id; mi.name = m.name;
     mi.width = static_cast<uint16_t>(m.width); mi.height = static_cast<uint16_t>(m.height);
     mi.blocked = m.blocked;
+    mi.viewCells = static_cast<uint16_t>(ViewCells(player));
     SendMsg(player, mi);
 }
 
@@ -536,7 +537,7 @@ void Server::Say(Critter& speaker, const std::string& text) {
     ByteBuffer buf = net::Pack(msg);
     std::vector<CritterId> npcsNear;
     for (Critter* p : m->critters) {
-        if (TileDist(p->pos, speaker.pos) > kViewCells && p != &speaker) continue;
+        if (!InRange(p->pos, speaker.pos, std::max(ViewCells(*p), ViewCells(speaker))) && p != &speaker) continue;
         if (p->IsPlayer()) Send(*p, buf);
         else if (p != &speaker && TileDist(p->pos, speaker.pos) <= 24) npcsNear.push_back(p->id);
     }
@@ -592,7 +593,7 @@ void Server::UpdateVisibility(Map& m) {
         if (!p->IsPlayer()) continue;
         std::unordered_set<CritterId> now;
         for (Critter* c : m.critters)
-            if (c == p || TileDist(c->pos, p->pos) <= kViewCells) now.insert(c->id);
+            if (c == p || InRange(c->pos, p->pos, ViewCells(*p))) now.insert(c->id);
         // self first so the client always knows who it is before anyone else
         if (!p->visCritters.count(p->id)) {
             SendMsg(*p, MakeAdd(*p));
@@ -619,7 +620,7 @@ void Server::UpdateVisibility(Map& m) {
 
         std::unordered_set<ItemId> nowItems;
         for (auto& [iid, it] : m.items)
-            if (TileDist(it.pos, p->pos) <= kViewCells) nowItems.insert(iid);
+            if (InRange(it.pos, p->pos, ViewCells(*p))) nowItems.insert(iid);
         for (ItemId iid : nowItems)
             if (!p->visItems.count(iid)) {
                 const Item& it = m.items[iid];

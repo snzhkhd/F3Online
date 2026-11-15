@@ -194,6 +194,7 @@ void ClientCore::Handle(const uint8_t* data, size_t len) {
             if (!m.Read(b)) return;
             map_.id = m.mapId; map_.name = m.name; map_.width = m.width; map_.height = m.height;
             map_.blocked = std::move(m.blocked);
+            map_.viewCells = m.viewCells;
             ++mapSerial_;
             critters_.clear();  // new map: everything gets re-announced by the visibility pass
             items_.clear();
