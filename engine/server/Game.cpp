@@ -1,6 +1,7 @@
 // Gameplay on top of the data-driven world: loading maps and entity instances, stats, inventory,
 // doors/containers, map transitions and a first-pass real-time combat system.
 // Numbers marked "guess" are placeholders: the original formulas are not decoded yet (docs/server-data.md).
+#include <functional>
 #include <enet/enet.h>
 
 #include <algorithm>
@@ -231,10 +232,24 @@ ItemId Server::SpawnObjectProto(MapId mapId, const Proto& p, TilePos pos, uint16
 
 // ------------------------------------------------------------------ stats
 
+// Unit weight: per-prototype override (config.ItemWeights), else the class default from the config table.
+int Server::ProtoWeight(const Proto& p) const {
+    auto o = rt_.ItemWeights.find(p.key);
+    if (o != rt_.ItemWeights.end()) return std::max(0, o->second);
+    switch (p.cls) {
+        case PClass::Weapon: return rt_.WeightWeapon;
+        case PClass::Armor: return rt_.WeightArmor;
+        case PClass::Ammo: return rt_.WeightAmmo;
+        default: return rt_.WeightItem;
+    }
+}
+
+int Server::CarryLimit(const Critter& c) const { return std::max(0, rt_.CarryBase + rt_.CarryPerStrength * c.special[0]); }
+
 int Server::Weight(const Critter& c) const {
     int w = 0;
     for (auto& it : c.inventory)
-        if (const Proto* p = data_.GetProto(it.pid)) w += p->weight * it.count;
+        if (const Proto* p = data_.GetProto(it.pid)) w += ProtoWeight(*p) * it.count;
     return w;
 }
 
@@ -249,9 +264,9 @@ ArmorInfo WornArmor(const Critter& c, const DataStore& d) {
                 if (p->cls == PClass::Armor) { a.dt += p->armor[0] / 2; a.ac += p->armor[1] / 4; }
     return a;
 }
-const Proto* EquippedWeapon(const Critter& c, const DataStore& d) {
+const Proto* EquippedWeapon(const Critter& c, const DataStore& d) {   // the active weapon: hand 1
     for (auto& it : c.inventory)
-        if (it.equipped)
+        if (it.slot == gnet::SlotHand1)
             if (const Proto* p = d.GetProto(it.pid))
                 if (p->cls == PClass::Weapon) return p;
     return nullptr;
@@ -269,15 +284,15 @@ void Server::SendStats(Critter& c) {
     s.armorClass = static_cast<uint8_t>(std::min(255, c.special[5] + WornArmor(c, data_).ac));
     s.sequence = static_cast<uint8_t>(2 * c.special[1]);
     s.meleeBonus = static_cast<uint8_t>(std::max(0, c.special[0] - 5));
-    s.carryWeight = static_cast<uint16_t>(25 + 25 * c.special[0]);
+    s.carryWeight = static_cast<uint16_t>(std::min(65535, CarryLimit(c)));
     s.carried = static_cast<uint16_t>(Weight(c));
     Send(c, gnet::PackG(s));
 }
 
-static gnet::InvEntry MakeEntry(const DataStore& d, const InvItem& it) {
+static gnet::InvEntry MakeEntry(const DataStore& d, const InvItem& it, const std::function<int(const Proto&)>& wf) {
     gnet::InvEntry e;
-    e.id = it.id; e.pid = it.pid; e.count = it.count; e.equipped = it.equipped ? 1 : 0;
-    if (const Proto* p = d.GetProto(it.pid)) e.name = p->DisplayName();
+    e.id = it.id; e.pid = it.pid; e.count = it.count; e.equipped = it.slot;
+    if (const Proto* p = d.GetProto(it.pid)) { e.name = p->DisplayName(); e.weight = static_cast<uint16_t>(std::clamp(wf(*p), 0, 65535)); }
     return e;
 }
 
@@ -285,7 +300,7 @@ void Server::SendInventory(Critter& c) {
     if (!c.peer) return;
     gnet::Inventory m;
     m.owner = c.id;
-    for (auto& it : c.inventory) m.items.push_back(MakeEntry(data_, it));
+    for (auto& it : c.inventory) m.items.push_back(MakeEntry(data_, it, [this](const Proto& q) { return ProtoWeight(q); }));
     Send(c, gnet::PackG(m));
 }
 
@@ -348,19 +363,41 @@ ItemId Server::GiveItem(Critter& c, const Proto& p, int count) {
     return first;
 }
 
-bool Server::EquipItem(Critter& c, ItemId invId, bool on) {
+// Equip rules (server authoritative): weapons go to the hands (hand 1 = active, hand 2 = spare), armor to the body or
+// (helmets) the head slot. `slot` 0 = automatic: a weapon takes hand 1 and pushes the old hand-1 weapon to hand 2 when
+// that is free (otherwise it is unequipped); an explicit slot must suit the item class. Moving an equipped weapon onto
+// an occupied hand swaps the two.
+bool Server::EquipItem(Critter& c, ItemId invId, bool on, uint8_t slot) {
     InvItem* target = nullptr;
     for (auto& it : c.inventory)
         if (it.id == invId) target = &it;
     if (!target) return false;
     const Proto* p = data_.GetProto(target->pid);
     if (!p || !Equippable(*p)) return false;
-    if (on)
+    auto occupant = [&](uint8_t s) -> InvItem* {
         for (auto& it : c.inventory)
-            if (&it != target && it.equipped)
-                if (const Proto* q = data_.GetProto(it.pid))
-                    if (q->cls == p->cls) it.equipped = false;
-    target->equipped = on;
+            if (it.slot == s && &it != target) return &it;
+        return nullptr;
+    };
+    auto set = [](InvItem& it, uint8_t s) { it.slot = s; it.equipped = s != 0; };
+    if (!on) { set(*target, gnet::SlotNone); }
+    else if (p->cls == PClass::Armor) {
+        const uint8_t want = p->headArmor ? gnet::SlotHead : gnet::SlotBody;
+        if (slot != 0 && slot != want) return false;
+        if (InvItem* o = occupant(want)) set(*o, gnet::SlotNone);
+        set(*target, want);
+    } else {
+        if (slot != 0 && slot != gnet::SlotHand1 && slot != gnet::SlotHand2) return false;
+        const uint8_t from = target->slot;
+        const uint8_t want = slot ? slot : gnet::SlotHand1;
+        if (from == want) return true;
+        if (InvItem* o = occupant(want)) {
+            if (from == gnet::SlotHand1 || from == gnet::SlotHand2) set(*o, from);                  // swap hands
+            else if (!slot && want == gnet::SlotHand1 && !occupant(gnet::SlotHand2)) set(*o, gnet::SlotHand2);  // push old weapon
+            else set(*o, gnet::SlotNone);
+        }
+        set(*target, want);
+    }
     if (c.IsPlayer()) { SendInventory(c); SendStats(c); }
     return true;
 }
@@ -387,7 +424,7 @@ bool Server::PickUp(Critter& c, ItemId groundId) {
     if (TileDist(it->second.pos, c.pos) > 2) return false;
     const Proto* p = data_.GetProto(it->second.pid);
     if (!p) return false;
-    if (c.IsPlayer() && Weight(c) + p->weight * it->second.count > 25 + 25 * c.special[0]) {
+    if (c.IsPlayer() && Weight(c) + ProtoWeight(*p) * it->second.count > CarryLimit(c)) {
         Tell(c, "You cannot carry that much.");
         return false;
     }
@@ -416,7 +453,7 @@ bool Server::TakeFrom(Critter& c, ItemId containerId, ItemId entry) {
     for (size_t i = 0; i < cont.size();) {
         if (entry != 0 && cont[i].id != entry) { ++i; continue; }
         const Proto* p = data_.GetProto(cont[i].pid);
-        if (p && (!c.IsPlayer() || Weight(c) + p->weight * cont[i].count <= 25 + 25 * c.special[0])) {
+        if (p && (!c.IsPlayer() || Weight(c) + ProtoWeight(*p) * cont[i].count <= CarryLimit(c))) {
             GiveItem(c, *p, cont[i].count);
             cont.erase(cont.begin() + static_cast<long>(i));
             any = true;
@@ -430,7 +467,7 @@ bool Server::TakeFrom(Critter& c, ItemId containerId, ItemId entry) {
         SendStats(c);
         gnet::Container cm;
         cm.owner = containerId;
-        for (auto& e : cont) cm.items.push_back(MakeEntry(data_, e));
+        for (auto& e : cont) cm.items.push_back(MakeEntry(data_, e, [this](const Proto& q) { return ProtoWeight(q); }));
         Send(c, gnet::PackG(cm));
     }
     return any;
@@ -519,7 +556,7 @@ bool Server::UseObject(Critter& c, ItemId objId) {
             if (c.IsPlayer()) {
                 gnet::Container cm;
                 cm.owner = o.id;
-                for (auto& e : o.contents) cm.items.push_back(MakeEntry(data_, e));
+                for (auto& e : o.contents) cm.items.push_back(MakeEntry(data_, e, [this](const Proto& q) { return ProtoWeight(q); }));
                 Send(c, gnet::PackG(cm));
             }
             break;
@@ -914,7 +951,7 @@ void Server::HandleGamePacket(ENetPeer*, Critter* c, GMsg id, ByteBuffer& b, boo
         case GMsg::C2S_Equip: {
             gnet::Equip m; ok = m.Read(b);
             if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok) {
-                if (EquipItem(*c, m.id, m.on != 0)) CommitAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id)), rt_.Breaktime);
+                if (EquipItem(*c, m.id, m.on != 0, m.slot)) CommitAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id)), rt_.Breaktime);
                 else SendWaitState(*c, static_cast<uint8_t>(id), gnet::ActionResult::Invalid);
             }
             break;

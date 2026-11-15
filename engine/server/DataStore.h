@@ -42,6 +42,7 @@ struct Proto {
     // ammo
     int ammoCaliber = -1, ammoDmgMin = 0, ammoDmgMax = 0;
     int weight = 1;
+    bool headArmor = false;  // armor worn on the head (helmets) instead of the body
 
     const std::string& DisplayName() const { return !name.empty() ? name : (!name2.empty() ? name2 : key); }
 };

@@ -325,8 +325,16 @@ void Scripting::ApplyConfig(sol::state_view L) {
     F3_CFG_INT(ApBase); F3_CFG_INT(ApAgilityDiv); F3_CFG_NUM(WalkSpeed); F3_CFG_NUM(RunSpeed); F3_CFG_NUM(MoveClearance);
     F3_CFG_INT(AttackMinMs); F3_CFG_INT(AttackMaxMs); F3_CFG_INT(AttackMsPerCost);
     F3_CFG_INT(RtApCostAttackPerCost); F3_CFG_INT(RtApCostAttackMin); F3_CFG_INT(TransferLock);
+    F3_CFG_INT(CarryBase); F3_CFG_INT(CarryPerStrength);
+    F3_CFG_INT(WeightWeapon); F3_CFG_INT(WeightArmor); F3_CFG_INT(WeightAmmo); F3_CFG_INT(WeightItem);
 #undef F3_CFG_INT
 #undef F3_CFG_NUM
+    {
+        sol::object w = t["ItemWeights"];
+        if (w.get_type() == sol::type::table)
+            for (auto& kv : w.as<sol::table>())
+                if (kv.first.is<std::string>() && kv.second.is<int>()) g.ItemWeights[kv.first.as<std::string>()] = kv.second.as<int>();
+    }
     g.Breaktime = std::max(0, g.Breaktime);
     g.WalkSpeed = std::clamp(g.WalkSpeed, 0.1, 100.0);
     g.RunSpeed = std::clamp(g.RunSpeed, 0.1, 100.0);

@@ -17,7 +17,8 @@ struct InvItem {
     ItemId id = 0;
     uint16_t pid = 0;
     uint16_t count = 1;
-    bool equipped = false;
+    bool equipped = false;   // == (slot != 0)
+    uint8_t slot = 0;        // EquipSlot (protocol_game.h): 0 none, 1 body, 2 head, 3 hand1 (active weapon), 4 hand2
 };
 
 enum class ObjKind : uint8_t { Ground = 0, Door = 1, Container = 2, Usable = 3 };

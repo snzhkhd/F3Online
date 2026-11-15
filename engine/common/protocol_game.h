@@ -61,8 +61,11 @@ struct Equip {
     static constexpr GMsg kId = GMsg::C2S_Equip;
     uint32_t id = 0;
     uint8_t on = 1;
-    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU8(on); }
-    bool Read(ByteBuffer& b) { id = b.ReadU32(); on = b.ReadU8(); return b.Ok(); }
+    // --- inventory UI block: optional target slot (EquipSlot, 0 = server picks); older clients omit the byte ---
+    uint8_t slot = 0;
+    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU8(on); b.WriteU8(slot); }
+    bool Read(ByteBuffer& b) { id = b.ReadU32(); on = b.ReadU8(); slot = b.Remaining() ? b.ReadU8() : 0; return b.Ok(); }
+    // --- end inventory UI block ---
 };
 struct Use {
     static constexpr GMsg kId = GMsg::C2S_Use;
@@ -120,13 +123,20 @@ struct Stats {
     }
 };
 
+// --- inventory UI block ---------------------------------------------------------------------------------------
+// Equipment slots. InvEntry.equipped is the slot the item occupies (0 = carried only), so "equipped != 0" still
+// means "worn/wielded" for older code. Hand1 is the active weapon (used for attacks), Hand2 the spare weapon.
+enum EquipSlot : uint8_t { SlotNone = 0, SlotBody = 1, SlotHead = 2, SlotHand1 = 3, SlotHand2 = 4, SlotCount = 5 };
+// -------------------------------------------------------------------------------------------------------------
+
 struct InvEntry {
     uint32_t id = 0;
     uint16_t pid = 0, count = 1;
-    uint8_t equipped = 0;
+    uint8_t equipped = 0;   // EquipSlot
     std::string name;
-    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU16(pid); b.WriteU16(count); b.WriteU8(equipped); b.WriteString(name); }
-    bool Read(ByteBuffer& b) { id = b.ReadU32(); pid = b.ReadU16(); count = b.ReadU16(); equipped = b.ReadU8(); name = b.ReadString(64); return b.Ok(); }
+    uint16_t weight = 0;    // inventory UI block: weight of ONE unit (server table / config), carried weight = weight * count
+    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU16(pid); b.WriteU16(count); b.WriteU8(equipped); b.WriteString(name); b.WriteU16(weight); }
+    bool Read(ByteBuffer& b) { id = b.ReadU32(); pid = b.ReadU16(); count = b.ReadU16(); equipped = b.ReadU8(); name = b.ReadString(64); weight = b.ReadU16(); return b.Ok(); }
 };
 
 // Owner's inventory (S2C_Inventory) or a container's contents (S2C_Container, owner = container id).

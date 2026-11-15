@@ -124,6 +124,7 @@ bool DataStore::Load(const fs::path& dir, std::string& err) {
             case PClass::Armor: p.weight = 8; break;
             default: p.weight = 1; break;
         }
+        p.headArmor = p.cls == PClass::Armor && Lower(p.key).find("helmet") != std::string::npos;
         byKey_[Lower(p.key)] = p.pid;
         protos_.push_back(std::move(p));
     }

@@ -62,7 +62,7 @@ public:
     ItemId GiveItem(Critter& c, const Proto& p, int count);  // returns inventory entry id
     bool PickUp(Critter& c, ItemId groundId);
     bool DropItem(Critter& c, ItemId invId);
-    bool EquipItem(Critter& c, ItemId invId, bool on);
+    bool EquipItem(Critter& c, ItemId invId, bool on, uint8_t slot = 0);
     bool UseObject(Critter& c, ItemId objId);
     Item* FindObject(ItemId id, Map** mapOut = nullptr);
     void SetDoorLocked(Item& door, bool locked);   // script API (UnlockDoor / LockDoor)
@@ -77,6 +77,8 @@ public:
     void SendStats(Critter& c);
     void SendInventory(Critter& c);
     int Weight(const Critter& c) const;
+    int ProtoWeight(const Proto& p) const;   // unit weight (config class table / per-prototype override)
+    int CarryLimit(const Critter& c) const;  // CarryBase + CarryPerStrength * ST
     std::string Examine(Critter& viewer, ItemId id, bool isCritter);
     Map* FindMap(const std::string& name) { return world_.FindMapByName(name); }
     double GetGlobal(const std::string& k) const { auto it = globals_.find(k); return it == globals_.end() ? 0.0 : it->second; }

@@ -33,5 +33,13 @@ config = {
     RtApCostAttackPerCost     = 5,     -- placeholder
     -- attack AP (1/100) = weapon cost word * RtApCostAttackPerCost, at least RtApCostAttackMin (9mm: 1 AP)
     RtApCostAttackMin         = 50,
+    CarryBase                 = 25,    -- carry limit = CarryBase + CarryPerStrength * Strength
+    CarryPerStrength          = 25,
+    WeightWeapon              = 4,     -- default unit weight by item class (the demo data carries no weights)
+    WeightArmor               = 8,
+    WeightAmmo                = 1,
+    WeightItem                = 1,
+    ItemWeights               = {      -- per prototype overrides: ["Weapons9mm_Autoloader.WEA"] = 3,
+    },
     TransferLock              = 3000,  -- ms during which a transition region cannot fire again after a map change
 }

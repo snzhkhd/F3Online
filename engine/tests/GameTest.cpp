@@ -219,6 +219,16 @@ int main(int argc, char** argv) {
     bool hasGun = false, hasEquipped = false;
     for (auto& e : a.inv) { if (e.name.find("9mm") != std::string::npos) hasGun = true; if (e.equipped) hasEquipped = true; }
     CHECK(hasGun && hasEquipped, "starter inventory present (%zu entries, names from English.stf)", a.inv.size());
+    {   // slots + weight (inventory UI block)
+        int gunSlot = -1, armSlot = -1, wsum = 0;
+        for (auto& e : a.inv) {
+            if (e.name.find("9mm Auto") != std::string::npos) gunSlot = e.equipped;
+            if (e.name.find("Leather") != std::string::npos) armSlot = e.equipped;
+            wsum += e.weight * e.count;
+        }
+        CHECK(gunSlot == gnet::SlotHand1 && armSlot == gnet::SlotBody, "equip slots: gun in hand 1 (%d), armor on body (%d)", gunSlot, armSlot);
+        CHECK(wsum == a.stats.carried && a.stats.carried <= a.stats.carryWeight, "weight: carried %u == sum of entries %d, limit %u", a.stats.carried, wsum, a.stats.carryWeight);
+    }
     CHECK(WaitFor({&a, &b}, 3, [&] { return a.critters.size() >= 2; }), "bot A sees bot B and NPCs (%zu critters)", a.critters.size());
 
     // --- walking with the real grid

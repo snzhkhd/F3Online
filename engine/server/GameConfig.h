@@ -1,4 +1,6 @@
 #pragma once
+#include <map>
+#include <string>
 // Real-time tunables (FOnline config.fos names). Filled from scripts/config.lua (see Scripting::LoadConfig), hot-reloadable.
 namespace f3 {
 
@@ -22,6 +24,11 @@ struct GameConfig {
     int AttackMinMs = 400, AttackMaxMs = 1000, AttackMsPerCost = 40;
     int RtApCostAttackPerCost = 5, RtApCostAttackMin = 50;
     int TransferLock = 3000;
+    // carry weight (server authoritative): limit = CarryBase + CarryPerStrength * ST; unit weights by item class
+    // (the demo data has no weights), ItemWeights overrides single prototypes by key ("Weapons9mm_Autoloader.WEA")
+    int CarryBase = 25, CarryPerStrength = 25;
+    int WeightWeapon = 4, WeightArmor = 8, WeightAmmo = 1, WeightItem = 1;
+    std::map<std::string, int> ItemWeights;
 };
 
 }  // namespace f3
