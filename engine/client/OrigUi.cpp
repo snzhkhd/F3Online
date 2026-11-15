@@ -754,12 +754,12 @@ void OrigUi::DrawLoot(const UiView& ui, std::vector<Rectangle>& rects) {
     }
     const Rectangle trashR = PP(0, 244, 528, 48, 48);
 
-    // ---- right bottom: Done / Take All (the buttons of Container.gui, art f3_button_*.tga stretched as nine patches)
+    // ---- right bottom: Done / Take All (the buttons of Container.gui, neutral art f3_chargen_age_* stretched as nine patches)
     auto button = [&](const Rectangle& r, const std::string& label, bool enabled) {
         const bool hot = enabled && In(r, mp);
         const bool down = hot && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
-        if (const Texture2D* t = Texture(down ? "f3_button_down.tga" : "f3_button_up.tga")) {
-            NPatchInfo np{Rectangle{0, 0, static_cast<float>(t->width), static_cast<float>(t->height)}, 8, 8, 8, 8, NPATCH_NINE_PATCH};
+        if (const Texture2D* t = Texture(down ? "f3_chargen_age_down.tga" : "f3_chargen_age_up.tga")) {
+            NPatchInfo np{Rectangle{0, 0, static_cast<float>(t->width), static_cast<float>(t->height)}, 14, 12, 14, 12, NPATCH_NINE_PATCH};
             DrawTextureNPatch(*t, np, r, Vector2{0, 0}, 0, enabled ? WHITE : Color{150, 150, 150, 255});
         }
         if (hot) DrawRectangleRec(r, Color{255, 255, 255, 24});
