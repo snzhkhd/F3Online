@@ -843,7 +843,8 @@ int main(int argc, char** argv) {
         CHECK(started && tStart - tShot < 1500, "queued walk starts when the wait ends (%.0f ms after the shot)", tStart - tShot);
         size_t shotsAfter = 0;
         const size_t combat1 = a.combat.size();
-        CHECK(WaitFor({&a, &b}, 10, [&] { return a.pos == away && !a.stops.empty() && a.stops.back().reason == 0; }), "bot A walked away to %d,%d (at %d,%d)", away.x, away.y, a.pos.x, a.pos.y);
+        // (within one cell: AMX-driven NPCs wander now (A_Wander) and may stand on the goal cell)
+        CHECK(WaitFor({&a, &b}, 10, [&] { return TileDist(a.pos, away) <= 1 && !a.stops.empty() && a.stops.back().reason == 0; }), "bot A walked away to %d,%d (at %d,%d)", away.x, away.y, a.pos.x, a.pos.y);
         for (size_t i = combat1; i < a.combat.size(); ++i) if (a.combat[i].attacker == a.myId) ++shotsAfter;
         CHECK(shotsAfter == 0, "the auto attack stopped when walking away (%zu shots after the walk started)", shotsAfter);
         CHECK(std::hypot(a.fx - startX, a.fy - startY) >= 2.0f, "bot A really moved (%.1f cells)", std::hypot(a.fx - startX, a.fy - startY));
@@ -1042,7 +1043,7 @@ int main(int argc, char** argv) {
             auto r = amx("floatdiv f1 f0;floatdiv f-1 f0;floatdiv f1 f2;x=floatdiv f0 f0;floatcmp @x f1;floatfract f-1.25");
             CHECK(r.size() == 6 && ret(r, 0) == 0x7F800000 && ret(r, 1) == static_cast<int>(0xFF800000u) && ret(r, 2) == 0x3F000000, "floatdiv by zero is +-infinity (IEEE), 1/2 = 0.5");
             CHECK(r.size() == 6 && ret(r, 4) == -1, "floatcmp with NaN is -1 (not equal, not greater)");
-            CHECK(r.size() == 6 && ret(r, 5) == 0x3E800000, "floatfract(-1.25) = 0.75: bits %lld", ret(r, 5));
+            CHECK(r.size() == 6 && ret(r, 5) == 0x3F400000, "floatfract(-1.25) = 0.75 (x - floor(x)): bits %lld", ret(r, 5));
             auto q = amx("floatround f2.5 0;floatround f-2.5 0;floatround f-1.5 1;floatround f1.2 2;floatround f-1.7 3;floatround f1.7 3;floatround f2.5");
             CHECK(q.size() == 7 && ret(q, 0) == 3 && ret(q, 1) == -2 && ret(q, 2) == -2 && ret(q, 3) == 2 && ret(q, 4) == -1 && ret(q, 5) == 1 && ret(q, 6) == 3,
                   "floatround modes: round(2.5)=3, round(-2.5)=-2 (floor(x+.5)), floor(-1.5)=-2, ceil(1.2)=2, trunc(-1.7)=-1, trunc(1.7)=1, no mode = round: %lld %lld %lld %lld %lld %lld %lld",
@@ -1111,23 +1112,24 @@ int main(int argc, char** argv) {
         }
         // FindObjects (farthest first, owner excluded, output cell untouched when nothing is found) + GetObject + GetType
         {
-            auto r = amx("n=FindObjects &h p" + A + " f30;x0=GetObject @h 0;x1=GetObject @h 1;d0=Distance " + A + " @x0;d1=Distance " + A + " @x1;GetType @x0;n2=FindObjects &g p" + A + " f0.1");
+            auto r = amx("n=FindObjects &h p" + A + " f30;x0=GetObject @h 0;x1=GetObject @h 1;d0=Distance " + A + " @x0;d1=Distance " + A + " @x1;GetType @x0;n2=FindObjects &g v-500,0,-500 f1");
             const long long n = ret(r, 0), x0 = ret(r, 1), x1 = ret(r, 2), d0 = ret(r, 3), d1 = ret(r, 4);
             CHECK(r.size() == 7 && n >= 2 && x0 > 0 && x1 > 0 && x0 != a.myId && x1 != a.myId, "FindObjects finds %lld entities within 30 units, the owner is not among them (%lld, %lld)", n, x0, x1);
             CHECK(r.size() == 7 && d0 >= d1 && d0 <= 31, "FindObjects sorts farthest first (distances %lld >= %lld)", d0, d1);
             CHECK(r.size() == 7 && ret(r, 5) >= 1 && ret(r, 5) <= 9, "GetType of a found entity is an entity class (%lld)", ret(r, 5));
-            CHECK(r.size() == 7 && ret(r, 6) == 0 && r[6].find("g:i=0") != std::string::npos, "FindObjects with nothing in range returns 0 and leaves the output cell unchanged");
+            CHECK(r.size() == 7 && ret(r, 6) == 0 && r.size() > 6 && r[6].find("g:i=0") != std::string::npos, "FindObjects with nothing in range returns 0 and leaves the output cell unchanged (%s)", r.size() > 6 ? r[6].c_str() : "?");
         }
         // waypoints (EPTH) and nav points (EMNP): map data of the owner's map
         {
-            auto r = amx("GetWayPointCount sWaypoint01;GetWayPointCount sWaypoint04;GetWayPointCount sNoSuchPath;GetWayPointPosition sWaypoint01 1 &w;GetWayPointPosition sWaypoint01 4 &w2;GetWayPointPosition sNoSuchPath 0 &w3;GetNearestPath " + A + " &nm;GetNavPointCount;GetNavPointPosition 0 &np");
+            auto r = amx("GetWayPointCount sWaypoint01;GetWayPointCount sWaypoint04;GetWayPointCount sNoSuchPath;GetWayPointPosition sWaypoint01 1 &w");
+            auto r2 = amx("GetWayPointPosition sWaypoint01 4 &w2;GetWayPointPosition sNoSuchPath 0 &w3;GetNearestPath " + A + " &nm;GetNavPointCount;GetNavPointPosition 0 &np");
             float w[3] = {0, 0, 0};
-            CHECK(r.size() == 9 && ret(r, 0) == 4 && ret(r, 1) == 5 && ret(r, 2) == 0, "GetWayPointCount: Waypoint01 has %lld, Waypoint04 %lld, unknown 0 (%lld)", ret(r, 0), ret(r, 1), ret(r, 2));
-            CHECK(r.size() == 9 && ret(r, 3) == 1 && buf(r, 3, w) && std::fabs(w[0] - 91.9215f) < 0.01f && std::fabs(w[2] - 182.1852f) < 0.01f && w[1] == 0.f,
+            CHECK(r.size() == 4 && ret(r, 0) == 4 && ret(r, 1) == 5 && ret(r, 2) == 0, "GetWayPointCount: Waypoint01 has %lld, Waypoint04 %lld, unknown 0 (%lld)", ret(r, 0), ret(r, 1), ret(r, 2));
+            CHECK(r.size() == 4 && ret(r, 3) == 1 && buf(r, 3, w) && std::fabs(w[0] - 91.9215f) < 0.01f && std::fabs(w[2] - 182.1852f) < 0.01f && w[1] == 0.f,
                   "GetWayPointPosition(Waypoint01, 1) = (%.3f, %.3f, %.3f) world units", w[0], w[1], w[2]);
-            CHECK(r.size() == 9 && ret(r, 4) == 0 && ret(r, 5) == 0, "GetWayPointPosition: index past the end and unknown path return 0");
-            CHECK(r.size() == 9 && ret(r, 6) == 1 && bufStr(r, 6).rfind("Waypoint0", 0) == 0, "GetNearestPath writes the name of the nearest path ('%s')", bufStr(r, 6).c_str());
-            CHECK(r.size() == 9 && ret(r, 7) == 0 && ret(r, 8) == 0, "no nav points on the demo maps (count %lld)", ret(r, 7));
+            CHECK(r2.size() == 5 && ret(r2, 0) == 0 && ret(r2, 1) == 0, "GetWayPointPosition: index past the end and unknown path return 0");
+            CHECK(r2.size() == 5 && ret(r2, 2) == 1 && bufStr(r2, 2).rfind("Waypoint0", 0) == 0, "GetNearestPath writes the name of the nearest path ('%s')", bufStr(r2, 2).c_str());
+            CHECK(r2.size() == 5 && ret(r2, 3) == 0 && ret(r2, 4) == 0, "no nav points on the demo maps (count %lld)", ret(r2, 3));
         }
         // visual effects: the server only allocates ids
         {
@@ -1138,8 +1140,9 @@ int main(int argc, char** argv) {
         // HasDied reads the _DEAD_<instance name> counter; a dying NPC bumps it; IsDead of an unknown entity is 1
         {
             CritterId victim = 0;
-            for (auto& [id, cr] : a.critters)
-                if (cr.kind == CritterKind::Npc && id != a.myId && id != b.myId && cr.name.find("GMC Soldier") == std::string::npos && cr.name.find("Insurgent") == std::string::npos) { victim = id; break; }
+            int farD = 0;
+            for (auto& [id, cr] : a.critters)   // the most distant NPC in view
+                if (cr.kind == CritterKind::Npc && id != a.myId && id != b.myId && TileDist(TilePos{cr.x, cr.y}, a.pos) > farD) { farD = TileDist(TilePos{cr.x, cr.y}, a.pos); victim = id; }
             if (victim) {
                 const std::string V = std::to_string(victim);
                 auto r = amx("HasDied n" + V + ";IsDead " + V + ";IsDead 0;A_Kill " + V);
