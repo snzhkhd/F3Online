@@ -149,7 +149,7 @@ tunes the transform. The old code drew the ground model at 0.5, i.e. too small f
 `Inventory.gui`, `f3_*.tga`, item icons `*_INV.tga` / `*_ACT.tga`, fonts `Fonts\r_fallouty.ttf` + `TT0807M_.TTF`); layout format in
 `docs/formats/gui.md`. Nothing is copied into the repo. If any of it is missing, `Load()` fails, a warning is logged and the old
 raylib HUD is used; `--no-origui` forces the raylib HUD, `--open-inv` starts with the inventory open (screenshots).
-The character creation screen and the character window (C) come from `Interface\CharacterGeneration.gui` (`OrigUiChar.cpp`, next section). Everything else (dialogue, container, labels, login) is still raylib; docs/formats/gui.md lists every layout and its status.
+The character creation screen and the character window (C) come from `Interface\CharacterGeneration.gui` (`OrigUiChar.cpp`, next section). The loot window (corpses and containers) comes from `Interface\Container.gui` (`OrigUi::DrawLoot`, over the inventory window). Everything else (dialogue, labels, login) is still raylib; docs/formats/gui.md lists every layout and its status.
 
 * The layout is 1024 wide (bar 1024x164 anchored bottom centre, inventory 1024x604 centred above it); both scale down uniformly
   on small windows. Background textures are stretched (800 -> 1024), buttons are 1:1.

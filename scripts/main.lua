@@ -183,6 +183,23 @@ function commands.near(c, arg)
     c:tell('nothing named like that on this map (' .. #names .. ' critters: ' .. table.concat(names, ', ', 1, math.min(#names, 6)) .. ')')
 end
 
+-- dev (--dev-kit): /killnear [name part]  kills the nearest living NPC without a dialogue (and within 20 cells) whose name contains the text (corpse / loot tests)
+function commands.killnear(c, arg)
+    if not dev_kit() then c:tell("killnear needs a --dev-kit server"); return end
+    local m = get_map(c.map_id)
+    local want = (arg or ''):lower()
+    local best, bd = nil, 1e9
+    if m then
+        for _, o in ipairs(m:critters()) do
+            if o:is_npc() and o.dialog == '' and not o.dead and o.name:lower():find(want, 1, true) then
+                local d = math.max(math.abs(o.x - c.x), math.abs(o.y - c.y))
+                if d < bd and d <= 30 then best, bd = o, d end
+            end
+        end
+    end
+    if best then best:kill() else c:tell('nothing alive named like that') end
+end
+
 function commands.heal(c) c:heal(c.max_hp) end
 -- dev helpers for the character system: /givexp n, /sheet
 function commands.givexp(c, arg) c:give_xp(math.floor(tonumber(arg or "") or 100)) end

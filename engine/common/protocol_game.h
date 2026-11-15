@@ -25,6 +25,8 @@ enum class GMsg : uint8_t {
     C2S_Take = 25,     // container id + inventory entry id (0 = take everything)
     C2S_Examine = 26,  // id + isCritter, answered with a system chat line
     C2S_ReqState = 27, // resend Stats + Inventory
+    C2S_Loot = 38,     // dead critter id (corpse): walk next to it, then open its container window (S2C_Container)
+    C2S_Put = 39,      // container / corpse id + isCritter + own inventory entry id: move an item into it
     // server -> client
     S2C_Stats = 120,
     S2C_Inventory = 121,
@@ -83,8 +85,23 @@ struct Attack {
 struct Take {
     static constexpr GMsg kId = GMsg::C2S_Take;
     uint32_t container = 0, entry = 0;
-    void Write(ByteBuffer& b) const { b.WriteU32(container); b.WriteU32(entry); }
-    bool Read(ByteBuffer& b) { container = b.ReadU32(); entry = b.ReadU32(); return b.Ok(); }
+    uint8_t isCritter = 0;   // loot block: 1 = `container` is a corpse (critter id); older clients omit the byte
+    void Write(ByteBuffer& b) const { b.WriteU32(container); b.WriteU32(entry); b.WriteU8(isCritter); }
+    bool Read(ByteBuffer& b) { container = b.ReadU32(); entry = b.ReadU32(); isCritter = b.Remaining() ? b.ReadU8() : 0; return b.Ok(); }
+};
+// Loot block: open a corpse (C2S_Loot) / move one of the player's own items into a container or corpse (C2S_Put).
+struct Loot {
+    static constexpr GMsg kId = GMsg::C2S_Loot;
+    uint32_t id = 0;
+    void Write(ByteBuffer& b) const { b.WriteU32(id); }
+    bool Read(ByteBuffer& b) { id = b.ReadU32(); return b.Ok(); }
+};
+struct Put {
+    static constexpr GMsg kId = GMsg::C2S_Put;
+    uint32_t container = 0, entry = 0;
+    uint8_t isCritter = 0;
+    void Write(ByteBuffer& b) const { b.WriteU32(container); b.WriteU32(entry); b.WriteU8(isCritter); }
+    bool Read(ByteBuffer& b) { container = b.ReadU32(); entry = b.ReadU32(); isCritter = b.ReadU8(); return b.Ok(); }
 };
 struct Examine {
     static constexpr GMsg kId = GMsg::C2S_Examine;
@@ -158,7 +175,19 @@ struct ItemList {
     }
 };
 struct Inventory : ItemList { static constexpr GMsg kId = GMsg::S2C_Inventory; };
-struct Container : ItemList { static constexpr GMsg kId = GMsg::S2C_Container; };
+// Contents of a container object or a corpse. isCritter = 1: `owner` is a critter id (corpse); name = window title.
+struct Container : ItemList {
+    static constexpr GMsg kId = GMsg::S2C_Container;
+    uint8_t isCritter = 0;
+    std::string name;
+    void Write(ByteBuffer& b) const { ItemList::Write(b); b.WriteU8(isCritter); b.WriteString(name); }
+    bool Read(ByteBuffer& b) {
+        if (!ItemList::Read(b)) return false;
+        isCritter = b.Remaining() ? b.ReadU8() : 0;
+        name = b.Remaining() ? b.ReadString(64) : std::string();
+        return b.Ok();
+    }
+};
 
 enum class ObjectKind : uint8_t { Ground = 0, Door = 1, Container = 2, Usable = 3 };
 
@@ -190,8 +219,9 @@ struct CritterState {
     uint32_t id = 0;
     int16_t hp = 0, maxHp = 0;
     uint8_t dead = 0;
-    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteI16(hp); b.WriteI16(maxHp); b.WriteU8(dead); }
-    bool Read(ByteBuffer& b) { id = b.ReadU32(); hp = b.ReadI16(); maxHp = b.ReadI16(); dead = b.ReadU8(); return b.Ok(); }
+    uint8_t appear = 0;   // 1 = sent while the critter enters the view: a dead critter is shown in its final pose (no death animation)
+    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteI16(hp); b.WriteI16(maxHp); b.WriteU8(dead); b.WriteU8(appear); }
+    bool Read(ByteBuffer& b) { id = b.ReadU32(); hp = b.ReadI16(); maxHp = b.ReadI16(); dead = b.ReadU8(); appear = b.Remaining() ? b.ReadU8() : 0; return b.Ok(); }
 };
 
 enum class HitResult : uint8_t { Miss = 0, Hit = 1, Critical = 2, Kill = 3 };

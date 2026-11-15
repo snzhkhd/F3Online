@@ -60,6 +60,7 @@ struct Bot {
     std::map<ItemId, net::ItemAdd> items;
     std::map<ItemId, gnet::ObjectInfo> objInfo;
     std::vector<gnet::CombatEvent> combat;
+    std::vector<gnet::Container> cons;   // S2C_Container messages (container objects and corpses)
     std::vector<std::string> chat, chatFrom;
     // dialogue
     std::vector<gnet::DialogOpen> dlgOpens;
@@ -126,6 +127,7 @@ struct Bot {
             case (uint8_t)Msg::S2C_Chat: { net::ChatMsg m; m.Read(b); chat.push_back(m.text); chatFrom.push_back(m.name); break; }
             case (uint8_t)GMsg::S2C_Stats: { stats.Read(b); haveStats = true; break; }
             case (uint8_t)GMsg::S2C_Inventory: { gnet::Inventory m; if (m.Read(b)) { inv = m.items; ++invUpdates; } break; }
+            case (uint8_t)GMsg::S2C_Container: { gnet::Container m; if (m.Read(b)) cons.push_back(m); break; }
             case (uint8_t)GMsg::S2C_ObjectInfo: { gnet::ObjectInfo m; m.Read(b); objInfo[m.id] = m; break; }
             case (uint8_t)GMsg::S2C_CritterState: { gnet::CritterState m; m.Read(b); states[m.id] = m; break; }
             case (uint8_t)GMsg::S2C_CombatEvent: { gnet::CombatEvent m; m.Read(b); combat.push_back(m); combatMs.push_back(LocalMs()); break; }
@@ -705,6 +707,62 @@ int main(int argc, char** argv) {
         }
     }
 
+    // --- pickup after the item left the view and came back (walk spot used to be 3 cells away, PickUp needs 2: "invalid")
+    {
+        auto say = [&](const std::string& t) { net::ChatReq c; c.text = t; a.Send(net::Pack(c)); };
+        auto idle = [&](double sec) { WaitFor({&a, &b}, sec, [] { return false; }); };
+        // a walkable cell farc (> minD) from p
+        auto farCell = [&](TilePos p, int minD) {
+            for (int y = 0; y < a.map.height; y += 5)
+                for (int x = 0; x < a.map.width; x += 5)
+                    if (Walkable(a, x, y) && TileDist(TilePos{(int16_t)x, (int16_t)y}, p) > minD) return TilePos{(int16_t)x, (int16_t)y};
+            return TilePos{-1, -1};
+        };
+        // a walkable cell with a straight walkable line to p, between d0 and d1 cells away
+        auto nearCell = [&](TilePos p, int d0, int d1) {
+            for (int d = d0; d <= d1; ++d)
+                for (int dy = -d; dy <= d; ++dy)
+                    for (int dx = -d; dx <= d; ++dx) {
+                        if (std::max(std::abs(dx), std::abs(dy)) != d) continue;
+                        int x = p.x + dx, y = p.y + dy;
+                        if (Walkable(a, x, y) && SegmentWalkable(a, x + 0.5f, y + 0.5f, p.x + 0.5f, p.y + 0.5f)) return TilePos{(int16_t)x, (int16_t)y};
+                    }
+            return TilePos{-1, -1};
+        };
+        auto tp = [&](TilePos t) { say("/tp " + std::to_string(t.x) + " " + std::to_string(t.y)); };
+        idle(1.0);
+        // ---- bug 2: pick up right after coming back into view
+        std::map<ItemId, bool> known;
+        for (auto& [id, it] : a.items) known[id] = true;
+        say("/spawn Weapons44_Revolver.WEA");
+        ItemId drop = 0;
+        WaitFor({&a, &b}, 3, [&] { for (auto& [id, it] : a.items) if (!known.count(id)) { drop = id; return true; } return false; });
+        CHECK(drop != 0, "reload test: a revolver was spawned next to bot A");
+        if (drop) {
+            TilePos ip{a.items[drop].x, a.items[drop].y};
+            TilePos farc = farCell(ip, 60), backc = nearCell(ip, 8, 12);
+            CHECK(farc.x >= 0 && backc.x >= 0, "reload test: found a far cell (%d,%d) and a return cell (%d,%d)", farc.x, farc.y, backc.x, backc.y);
+            if (farc.x >= 0 && backc.x >= 0) {
+                tp(farc);
+                CHECK(WaitFor({&a, &b}, 5, [&] { return !a.items.count(drop); }), "the item left bot A's view range (ItemRemove)");
+                tp(backc);
+                CHECK(WaitFor({&a, &b}, 5, [&] { return a.items.count(drop) != 0; }), "the item re-entered the view (same id %u)", drop);
+                idle(1.0);
+                size_t wc = a.waits.size();
+                int upd = a.invUpdates;
+                gnet::PickUp pu; pu.id = drop;
+                a.Send(gnet::PackG(pu));   // immediately, from ~8 cells away: the server walks the player and picks up on arrival
+                bool done = WaitFor({&a, &b}, 15, [&] { return !a.items.count(drop) && a.invUpdates > upd; });
+                bool invalid = false;
+                for (size_t i = wc; i < a.waits.size(); ++i)
+                    if (a.waits[i].w.action == (uint8_t)GMsg::C2S_PickUp && a.waits[i].w.result == gnet::ActionResult::Invalid) invalid = true;
+                CHECK(done && !invalid, "picked up the returned item at the first attempt (done %d, invalid answer %d, bot at %d,%d, item at %d,%d)", (int)done, (int)invalid, a.pos.x, a.pos.y, ip.x, ip.y);
+                if (!done || invalid) for (size_t i = a.chat.size() > 3 ? a.chat.size() - 3 : 0; i < a.chat.size(); ++i) std::printf("note: chat: %s\n", a.chat[i].c_str());
+            }
+        }
+        idle(1.0);
+    }
+
     // --- NPC AI: the Junktown insurgent (team 2, cell ~183,226) must attack a nearby player (hostile.lua + server combat)
     {
         net::ChatReq c; c.text = "/tp 183 232";
@@ -1217,6 +1275,122 @@ int main(int argc, char** argv) {
         say("/glob 00_Generator_Status");
         CHECK(WaitFor({&a, &b}, 3, [&] { return sawChat("00_Generator_Status = 1"); }), "generator status is 1 after repair");
         CHECK(sawChat("Task completed"), "task 3231 completed");
+    }
+
+    // --- an already dead critter re-entering the view (CritterState.appear = no death animation again) and the corpse loot flow
+    {
+        auto say = [&](const std::string& t) { net::ChatReq c; c.text = t; a.Send(net::Pack(c)); };
+        auto idle = [&](double sec) { WaitFor({&a, &b}, sec, [] { return false; }); };
+        // a walkable cell farc (> minD) from p
+        auto farCell = [&](TilePos p, int minD) {
+            for (int y = 0; y < a.map.height; y += 5)
+                for (int x = 0; x < a.map.width; x += 5)
+                    if (Walkable(a, x, y) && TileDist(TilePos{(int16_t)x, (int16_t)y}, p) > minD) return TilePos{(int16_t)x, (int16_t)y};
+            return TilePos{-1, -1};
+        };
+        // a walkable cell with a straight walkable line to p, between d0 and d1 cells away
+        auto nearCell = [&](TilePos p, int d0, int d1) {
+            for (int d = d0; d <= d1; ++d)
+                for (int dy = -d; dy <= d; ++dy)
+                    for (int dx = -d; dx <= d; ++dx) {
+                        if (std::max(std::abs(dx), std::abs(dy)) != d) continue;
+                        int x = p.x + dx, y = p.y + dy;
+                        if (Walkable(a, x, y) && SegmentWalkable(a, x + 0.5f, y + 0.5f, p.x + 0.5f, p.y + 0.5f)) return TilePos{(int16_t)x, (int16_t)y};
+                    }
+            return TilePos{-1, -1};
+        };
+        auto tp = [&](TilePos t) { say("/tp " + std::to_string(t.x) + " " + std::to_string(t.y)); };
+        idle(1.0);
+        // ---- bug 3 + loot flow: kill an NPC, leave, return
+        say("/near Insurgent");
+        idle(1.5);
+        std::map<CritterId, bool> deadBefore;
+        for (auto& [id, st] : a.states) if (st.dead) deadBefore[id] = true;
+        say("/killnear Insurgent");
+        CritterId corpse = 0;
+        WaitFor({&a, &b}, 5, [&] {
+            for (auto& [id, st] : a.states)
+                if (st.dead && !deadBefore.count(id) && id != a.myId && id != b.myId) { corpse = id; return true; }
+            return false;
+        });
+        if (!corpse) { for (size_t i = a.chat.size() > 4 ? a.chat.size() - 4 : 0; i < a.chat.size(); ++i) std::printf("note: chat: %s\n", a.chat[i].c_str()); std::printf("note: a at %d,%d, %zu critters in view, %zu dead states\n", a.pos.x, a.pos.y, a.critters.size(), deadBefore.size()); }
+        CHECK(corpse != 0, "an NPC was killed next to bot A (dev command)");
+        if (corpse && a.critters.count(corpse)) {
+            CHECK(a.states[corpse].appear == 0, "a live kill sends the dead state without 'appear' (the death animation plays)");
+            TilePos cp{a.critters[corpse].x, a.critters[corpse].y};
+            int groundBefore = (int)a.items.size();
+            TilePos farc = farCell(cp, 60), backc = nearCell(cp, 5, 8);
+            if (farc.x >= 0 && backc.x >= 0) {
+                tp(farc);
+                CHECK(WaitFor({&a, &b}, 5, [&] { return !a.critters.count(corpse); }), "the corpse left bot A's view");
+                a.states.erase(corpse);
+                tp(backc);
+                CHECK(WaitFor({&a, &b}, 5, [&] { return a.critters.count(corpse) && a.states.count(corpse); }) && a.states[corpse].dead && a.states[corpse].appear == 1,
+                      "the corpse re-enters the view already dead and marked 'appear' (no death animation again)");
+            } else {
+                CHECK(false, "no farc / return cell for the corpse test");
+            }
+            (void)groundBefore;
+            // ---- loot window protocol
+            idle(1.0);
+            size_t nc = a.cons.size();
+            gnet::Loot lo; lo.id = corpse;
+            a.Send(gnet::PackG(lo));
+            CHECK(WaitFor({&a, &b}, 15, [&] { return a.cons.size() > nc; }) && a.cons.back().owner == corpse && a.cons.back().isCritter == 1,
+                  "Loot on the corpse opens its container (isCritter, name '%s')", a.cons.empty() ? "" : a.cons.back().name.c_str());
+            if (a.cons.size() > nc) {
+                size_t had = a.cons.back().items.size();
+                CHECK(had > 0, "the corpse keeps its inventory (%zu entries) instead of dropping it on the ground", had);
+                bool onGround = false;   // nothing was dropped at the corpse's feet
+                for (auto& [id, it] : a.items) if (TileDist(TilePos{it.x, it.y}, cp) <= 1 && !a.objInfo.count(id)) onGround = true;
+                CHECK(!onGround, "no loose items lie at the corpse");
+                if (had > 0) {
+                    idle(1.0);
+                    gnet::InvEntry e = a.cons.back().items[0];
+                    size_t invBefore = a.inv.size();
+                    int upd = a.invUpdates;
+                    size_t nc2 = a.cons.size();
+                    gnet::Take tk; tk.container = corpse; tk.entry = e.id; tk.isCritter = 1;
+                    a.Send(gnet::PackG(tk));
+                    bool ok = WaitFor({&a, &b}, 8, [&] { return a.invUpdates > upd && a.cons.size() > nc2; });
+                    CHECK(ok && a.cons.back().items.size() == had - 1, "Take moves one entry (%s) from the corpse (%zu -> %zu entries)", e.name.c_str(), had, a.cons.back().items.size());
+                    CHECK(a.inv.size() >= invBefore, "the taken item is in bot A's inventory");
+                    // Put it backc
+                    idle(1.0);
+                    uint32_t mine = 0;
+                    for (auto& x : a.inv) if (x.pid == e.pid && !x.equipped) mine = x.id;
+                    if (mine) {
+                        size_t nc3 = a.cons.size();
+                        gnet::Put pt; pt.container = corpse; pt.entry = mine; pt.isCritter = 1;
+                        a.Send(gnet::PackG(pt));
+                        CHECK(WaitFor({&a, &b}, 8, [&] { return a.cons.size() > nc3; }) && a.cons.back().items.size() == had, "Put moves the item back onto the corpse (%zu entries)", a.cons.back().items.size());
+                    } else {
+                        CHECK(false, "the taken item (pid %u) was not found in the inventory to put backc", e.pid);
+                    }
+                    // Take All
+                    idle(1.0);
+                    size_t nc4 = a.cons.size();
+                    gnet::Take all; all.container = corpse; all.entry = 0; all.isCritter = 1;
+                    a.Send(gnet::PackG(all));
+                    WaitFor({&a, &b}, 8, [&] { return a.cons.size() > nc4; });
+                    bool heavy = false;
+                    for (auto& t : a.chat) if (t.find("cannot carry") != std::string::npos) heavy = true;
+                    CHECK(a.cons.size() > nc4 && (a.cons.back().items.empty() || heavy), "Take All empties the corpse (%zu left)", a.cons.back().items.size());
+                }
+            }
+            // a live NPC cannot be looted (no container comes backc)
+            idle(1.0);
+            CritterId live = 0;
+            for (auto& [id, cr] : a.critters)
+                if (id != a.myId && id != b.myId && cr.kind == CritterKind::Npc && TileDist(TilePos{cr.x, cr.y}, a.pos) <= 3 && !(a.states.count(id) && a.states[id].dead)) { live = id; break; }
+            if (live) {
+                size_t nc5 = a.cons.size();
+                gnet::Loot l2; l2.id = live;
+                a.Send(gnet::PackG(l2));
+                idle(2.0);
+                CHECK(a.cons.size() == nc5, "Loot on a living NPC opens nothing");
+            }
+        }
     }
 
     // --- map transition: go to the Vault side of Junktown's transition region

@@ -94,6 +94,8 @@ int Server::ActionCost(uint8_t action) const {
         case GMsg::C2S_Equip: return rt_.RtApCostMoveItemInventory;
         case GMsg::C2S_Use: return rt_.RtApCostUseItem;
         case GMsg::C2S_Take: return rt_.RtApCostMoveItemContainer;
+        case GMsg::C2S_Put: return rt_.RtApCostMoveItemContainer;
+        case GMsg::C2S_Loot: return rt_.RtApCostUseItem;
         default: return 0;
     }
 }

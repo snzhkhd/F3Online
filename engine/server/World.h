@@ -41,11 +41,12 @@ struct Item {
     std::string script;                // original AMX script name (informational / AMX host)
 };
 
-enum class PendingType : uint8_t { None, Pickup, Use, Take };
+enum class PendingType : uint8_t { None, Pickup, Use, Take, Loot, Put };
 struct Pending {
     PendingType type = PendingType::None;
     ItemId id = 0;       // map object
-    ItemId sub = 0;      // inventory item inside the object (Take), 0 = all
+    ItemId sub = 0;      // inventory item inside the object (Take), 0 = all; Put: the item of the actor
+    bool critter = false;  // `id` is a critter (corpse), not a map object
 };
 
 struct Critter {

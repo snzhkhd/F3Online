@@ -82,7 +82,7 @@ widget record (recursive):
 | Inventory | v4, 167 | backpack, paperdoll, per-slot stats, description | **OrigUi** (list, equip slots, drag and drop, sort, examine) |
 | CharacterGeneration | v4, 564 | full-screen character creation (SPECIAL, 13 skills + tags, 16 traits, derived stats, thresholds, appearance) and the same screen as the character window | **OrigUi**: creation screen and the C window (`OrigUiChar.cpp`). Not built: the Appearance row (no appearance data on the server), the character model, the Options button, Age / Sex plates |
 | CharGen_NAS | v4, 24 | name / age / sex sub-dialog of the creation | - (the server has no age / sex) |
-| Container | v4, 16 | container window (Take All, Done) | raylib |
+| Container | v4, 16 | container window (256x176: ten 50x50 slots Slot0..9 in 5x2, TakeAll, Done, Name; English.stf 1713 / 75) | **OrigUi** (`DrawLoot`: layout geometry and labels; the window skin is not drawn, a dark panel stands in; items of the target here, the player's side is the inventory window beside it; drag / double click, Take All, Done) |
 | Dialog | v3, 9 | speaker / listener model windows of the dialogue (the text window is drawn by the engine) | raylib (dialogue box) |
 | Mainmenu | v4, 9 | main menu: New Game, Load, Multi, Cinematics, Options, Quit | - (a raylib login screen replaces it) |
 | EscapeMenu | v4, 22 | Esc menu: Continue, Load/Save, Options, Quit | - |

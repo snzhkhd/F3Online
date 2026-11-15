@@ -74,7 +74,10 @@ public:
     bool UseObject(Critter& c, ItemId objId);
     Item* FindObject(ItemId id, Map** mapOut = nullptr);
     void SetDoorLocked(Item& door, bool locked);   // script API (UnlockDoor / LockDoor)
-    bool TakeFrom(Critter& c, ItemId containerId, ItemId entry);
+    bool TakeFrom(Critter& c, ItemId containerId, ItemId entry, bool corpse = false);
+    bool PutInto(Critter& c, ItemId containerId, ItemId entry, bool corpse);   // move one of c's items into a container / corpse
+    bool OpenLoot(Critter& c, ItemId id, bool corpse);                          // send the contents (S2C_Container)
+    void SendContainer(Critter& c, ItemId id, bool corpse);
     bool StartAttack(Critter& c, CritterId target);
     bool InAttackRange(const Critter& c, const Critter& target);   // weapon range + line of sight (AMX A_JustAttack)
     void Damage(Critter& target, int amount, Critter* attacker);
@@ -178,7 +181,9 @@ private:
     void ExecCommand(const std::string& cmd);
 
     void HandleGamePacket(struct _ENetPeer* peer, Critter* c, GMsg id, ByteBuffer& b, bool& ok);
-    void BeginInteract(Critter& c, PendingType type, ItemId id, ItemId sub);
+    void BeginInteract(Critter& c, PendingType type, ItemId id, ItemId sub, bool critter = false);
+    // The contents vector of a container object or a corpse (dead NPC) within reach of c (same map, range); nullptr otherwise.
+    std::vector<InvItem>* LootTarget(Critter& c, ItemId id, bool corpse, std::string* name = nullptr);
     void RunPending(Critter& c);
     void TickCombat(Critter& c);
     void CheckRegions(Critter& c);

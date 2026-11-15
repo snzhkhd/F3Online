@@ -127,15 +127,17 @@ server messages. `ItemAdd` now also carries doors, containers and usables; an `O
 | C 22 | Equip | `u32 invId, u8 on` |
 | C 23 | Use | `u32 objectId` (door toggle / container list / usable) |
 | C 24 | Attack | `u32 critterId` (0 = stop) |
-| C 25 | Take | `u32 containerId, u32 invId (0 = all)` |
+| C 25 | Take | `u32 containerId, u32 invId (0 = all), u8 isCritter` (isCritter 1: containerId is a corpse) |
+| C 38 | Loot | `u32 critterId`: walk next to a corpse (dead NPC), then it answers with Container |
+| C 39 | Put | `u32 containerId, u32 ownInvId, u8 isCritter`: move an own item into a container / corpse (worn items are taken off first) |
 | C 26 | Examine | `u32 id, u8 isCritter` (answered with a system chat line: name, stf description, hp) |
 | C 27 | ReqState | resend Stats + Inventory |
 | S 120 | Stats | `u32 critterId, u8 special[7], u8 level, i16 hp, i16 maxHp, u8 armorClass, u8 sequence, u8 meleeBonus, u16 carryWeight, u16 carried` |
 | S 121 | Inventory | `u32 owner, u16 n, n x {u32 id, u16 pid, u16 count, u8 equipped, str name}` |
 | S 122 | ObjectInfo | `u32 id, u8 kind (0 ground,1 door,2 container,3 usable), u8 open` |
-| S 123 | CritterState | `u32 id, i16 hp, i16 maxHp, u8 dead` |
+| S 123 | CritterState | `u32 id, i16 hp, i16 maxHp, u8 dead, u8 appear` (appear 1 = sent while the critter enters the view: a dead critter is shown in its final pose, no death animation) |
 | S 124 | CombatEvent | `u32 attacker, u32 target, u8 result (0 miss,1 hit,2 crit,3 kill), i16 damage, i16 targetHp` |
-| S 125 | Container | same list layout as Inventory, `owner` = container id |
+| S 125 | Container | same list layout as Inventory, `owner` = container id / corpse critter id, then `u8 isCritter, string name` |
 | S 126 | CellsSet | `u16 n, n x {i16 x, i16 y, u8 blocked}` |
 
 Existing messages: `MapInfo` now carries the real grid (up to 644x644 = 414k bytes, one ENet reliable fragmented packet) and the real map name;
@@ -316,3 +318,10 @@ Server authoritative; every number is a placeholder in `scripts/config.lua` (the
 * **Client**: `C` toggles the window (original art, `CharacterGeneration.gui`; see docs/client-rendering.md). During creation (before the world) the creation screen is shown by itself: `-`/`+` per SPECIAL, live preview of the derived values and every skill, a radio per skill to tag it, 16 trait radios (two at most), **Done** sends `CharCreate` when 0 points are left and 3 tags are chosen. Afterwards the window shows SPECIAL, derived values, level / XP, skill points, all skills with `+` (spend); clicking a skill name (or the `S` key) selects the skill cursor and a click on a critter / object / yourself sends `UseSkill` with that target. `--autocreate` creates the character with a fixed allocation (scripted tests).
 * **Tests** (`f3_gametest --accounts`): new account gets only LoginOk + CharSheet (no MapInfo / critters / inventory), movement / chat / commands ignored while creating, an observer in the world neither sees nor hears the creating session, `ReqState` during creation, quitting during creation leaves the account new, four invalid creation requests rejected (sum, range, tag count, three traits), valid creation puts the character into the world (the observer sees it only now; derived HP 33, Firearms 45, Medic 46, 10 skill points, 7 AP), spend 4 points, over-spend capped, `/givexp 1000` -> level 2 (+21 skill points, next level 3000 xp, maxHp 37), everything restored after a server restart, `use_skill` hook answers for Medic.
 * **Unverified / gaps**: kill XP is implemented but not covered by an automated test; perks, traits and the skill-based combat modifiers (weapon skill does not affect hit chance yet), skill checks for lockpicking / stealing, Barter / Persuasion in dialogue are not implemented; the formulas above are guesses, not the original ones.
+
+
+## Loot flow (corpses and containers)
+
+* A killed NPC keeps its inventory: the corpse is a container (it no longer drops items on the ground; it is removed 90 s after death with whatever is left on it). `Loot` (corpse) and `Use` (container object) walk the player to within 3 cells, then answer with `Container`; `Take` / `Put` move items and are answered with fresh Inventory, Stats and Container messages. Target, same map, range (3 cells) and carry weight are checked on every request; AP / breaktime follow the other actions (`RtApCostMoveItemContainer`, `RtApCostUseItem`). Single click on a loose item still picks it up.
+* Walk-then-act range: the walk stops within the reach of the action (pickup 2 cells, use / take / put / loot 3) and the action re-checks it on arrival. Before, the walk could stop 3 cells from a loose item although PickUp needs 2, so a pickup that required walking failed with `Invalid` (chat "invalid") and only worked once the player stood next to the item. If the walk ends short the interaction is dropped with "You cannot reach that.".
+* Dev command (`--dev-kit`): `/killnear [name part]` kills the nearest NPC without a dialogue (corpse tests).

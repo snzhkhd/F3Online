@@ -473,13 +473,46 @@ bool Server::PickUp(Critter& c, ItemId groundId) {
     return true;
 }
 
-bool Server::TakeFrom(Critter& c, ItemId containerId, ItemId entry) {
+// Container objects and corpses (dead NPCs keep their inventory) share the loot flow: LootTarget gives the item list when the
+// target is on the actor's map and within reach.
+std::vector<InvItem>* Server::LootTarget(Critter& c, ItemId id, bool corpse, std::string* name) {
     Map* m = world_.GetMap(c.mapId);
-    if (!m || c.dead) return false;
-    auto it = m->items.find(containerId);
-    if (it == m->items.end() || it->second.kind != ObjKind::Container) return false;
-    if (TileDist(it->second.pos, c.pos) > 3) return false;
-    auto& cont = it->second.contents;
+    if (!m || c.dead) return nullptr;
+    if (corpse) {
+        Critter* t = world_.GetCritter(static_cast<CritterId>(id));
+        if (!t || t == &c || !t->dead || !t->IsNpc() || t->mapId != c.mapId || TileDist(t->pos, c.pos) > 3) return nullptr;
+        if (name) *name = t->name;
+        return &t->inventory;
+    }
+    auto it = m->items.find(id);
+    if (it == m->items.end() || it->second.kind != ObjKind::Container || TileDist(it->second.pos, c.pos) > 3) return nullptr;
+    if (name) *name = it->second.name;
+    return &it->second.contents;
+}
+
+void Server::SendContainer(Critter& c, ItemId id, bool corpse) {
+    if (!c.IsPlayer()) return;
+    std::string name;
+    std::vector<InvItem>* cont = LootTarget(c, id, corpse, &name);
+    if (!cont) return;
+    gnet::Container cm;
+    cm.owner = id;
+    cm.isCritter = corpse ? 1 : 0;
+    cm.name = name;
+    for (auto& e : *cont) cm.items.push_back(MakeEntry(data_, e, [this](const Proto& q) { return ProtoWeight(q); }));
+    Send(c, gnet::PackG(cm));
+}
+
+bool Server::OpenLoot(Critter& c, ItemId id, bool corpse) {
+    if (!LootTarget(c, id, corpse)) return false;
+    SendContainer(c, id, corpse);
+    return true;
+}
+
+bool Server::TakeFrom(Critter& c, ItemId containerId, ItemId entry, bool corpse) {
+    std::vector<InvItem>* contp = LootTarget(c, containerId, corpse);
+    if (!contp) return false;
+    auto& cont = *contp;
     bool any = false;
     for (size_t i = 0; i < cont.size();) {
         if (entry != 0 && cont[i].id != entry) { ++i; continue; }
@@ -496,12 +529,35 @@ bool Server::TakeFrom(Critter& c, ItemId containerId, ItemId entry) {
     if (c.IsPlayer()) {
         SendInventory(c);
         SendStats(c);
-        gnet::Container cm;
-        cm.owner = containerId;
-        for (auto& e : cont) cm.items.push_back(MakeEntry(data_, e, [this](const Proto& q) { return ProtoWeight(q); }));
-        Send(c, gnet::PackG(cm));
+        SendContainer(c, containerId, corpse);
     }
     return any;
+}
+
+bool Server::PutInto(Critter& c, ItemId containerId, ItemId entry, bool corpse) {
+    std::vector<InvItem>* contp = LootTarget(c, containerId, corpse);
+    if (!contp) return false;
+    auto find = [&]() { return std::find_if(c.inventory.begin(), c.inventory.end(), [&](const InvItem& i) { return i.id == entry; }); };
+    auto it = find();
+    if (it == c.inventory.end()) return false;
+    const Proto* p = data_.GetProto(it->pid);
+    if (!p) return false;
+    if (it->slot) EquipItem(c, entry, false);   // worn / wielded items are taken off first (updates the appearance)
+    it = find();
+    if (it == c.inventory.end() || it->slot) return false;
+    InvItem moved = *it;
+    c.inventory.erase(it);
+    bool merged = false;
+    if (Stackable(*p))
+        for (auto& e : *contp)
+            if (e.pid == moved.pid) { e.count = static_cast<uint16_t>(std::min(65535, e.count + moved.count)); merged = true; break; }
+    if (!merged) contp->push_back(moved);
+    if (c.IsPlayer()) {
+        SendInventory(c);
+        SendStats(c);
+        SendContainer(c, containerId, corpse);
+    }
+    return true;
 }
 
 // Doors. The doorway of a door entity is the 8-connected group of 0x1b cells nearest to its position (the doorway is wider than the
@@ -584,12 +640,7 @@ bool Server::UseObject(Critter& c, ItemId objId) {
             SetDoor(*m, o, !o.open);
             break;
         case ObjKind::Container:
-            if (c.IsPlayer()) {
-                gnet::Container cm;
-                cm.owner = o.id;
-                for (auto& e : o.contents) cm.items.push_back(MakeEntry(data_, e, [this](const Proto& q) { return ProtoWeight(q); }));
-                Send(c, gnet::PackG(cm));
-            }
+            SendContainer(c, o.id, false);
             break;
         case ObjKind::Usable: break;
         case ObjKind::Ground: return false;
@@ -599,18 +650,31 @@ bool Server::UseObject(Critter& c, ItemId objId) {
     return true;
 }
 
-void Server::BeginInteract(Critter& c, PendingType type, ItemId id, ItemId sub) {
+// Reach of the walk-then-act interactions in cells. The walk stops on a cell within this distance and the action re-checks the
+// same limit on arrival: a pickup needs 2 (PickUp), use / take / put / loot 3. (Before, the walk went up to 3 cells away and
+// PickUp then failed with "invalid" when the player came from afar.)
+static int InteractRange(PendingType t) { return t == PendingType::Pickup ? 2 : 3; }
+
+void Server::BeginInteract(Critter& c, PendingType type, ItemId id, ItemId sub, bool critter) {
     Map* m = world_.GetMap(c.mapId);
     if (!m || c.dead) return;
-    auto it = m->items.find(id);
-    if (it == m->items.end()) return;
-    c.pending = Pending{type, id, sub};
-    if (TileDist(it->second.pos, c.pos) <= 2) { StopMove(c); RunPending(c); return; }
-    // stand on a free cell within 3 cells of the object, nearest to us first (the object may sit inside a wall)
+    TilePos op;
+    if (critter) {
+        Critter* t = world_.GetCritter(static_cast<CritterId>(id));
+        if (!t || t->mapId != c.mapId) return;
+        op = t->pos;
+    } else {
+        auto it = m->items.find(id);
+        if (it == m->items.end()) return;
+        op = it->second.pos;
+    }
+    c.pending = Pending{type, id, sub, critter};
+    const int range = InteractRange(type);
+    if (TileDist(op, c.pos) <= range) { StopMove(c); RunPending(c); return; }
+    // stand on a free cell within reach of the object, nearest to us first (the object may sit inside a wall)
     std::vector<TilePos> spots;
-    TilePos op = it->second.pos;
-    for (int dy = -3; dy <= 3; ++dy)
-        for (int dx = -3; dx <= 3; ++dx) {
+    for (int dy = -range; dy <= range; ++dy)
+        for (int dx = -range; dx <= range; ++dx) {
             TilePos t{static_cast<int16_t>(op.x + dx), static_cast<int16_t>(op.y + dy)};
             if (m->IsFree(t)) spots.push_back(t);
         }
@@ -658,7 +722,23 @@ void Server::RunPending(Critter& c) {
         case PendingType::Pickup: action = static_cast<uint8_t>(GMsg::C2S_PickUp); break;
         case PendingType::Use: action = static_cast<uint8_t>(GMsg::C2S_Use); break;
         case PendingType::Take: action = static_cast<uint8_t>(GMsg::C2S_Take); break;
+        case PendingType::Put: action = static_cast<uint8_t>(GMsg::C2S_Put); break;
+        case PendingType::Loot: action = static_cast<uint8_t>(GMsg::C2S_Loot); break;
         case PendingType::None: return;
+    }
+    // the target must still be there and within reach; while the walk is under way keep waiting, if it ended short (blocked,
+    // interrupted) the interaction is dropped with a message instead of failing later as "invalid"
+    {
+        Map* pm = world_.GetMap(c.mapId);
+        TilePos tp;
+        bool have = false;
+        if (p.critter) { if (Critter* t = world_.GetCritter(static_cast<CritterId>(p.id)); t && t->mapId == c.mapId) { tp = t->pos; have = true; } }
+        else if (pm) { auto it = pm->items.find(p.id); if (it != pm->items.end()) { tp = it->second.pos; have = true; } }
+        if (!have) { c.pending = Pending{}; return; }
+        if (TileDist(tp, c.pos) > InteractRange(p.type)) {
+            if (!c.mv.active) { c.pending = Pending{}; if (c.IsPlayer()) Tell(c, "You cannot reach that."); }
+            return;
+        }
     }
     int cost = ActionCost(action);
     gnet::ActionResult gate = CheckAction(c, action, cost, false);
@@ -669,7 +749,9 @@ void Server::RunPending(Critter& c) {
     switch (p.type) {
         case PendingType::Pickup: ok = PickUp(c, p.id); break;
         case PendingType::Use: ok = UseObject(c, p.id); break;
-        case PendingType::Take: ok = TakeFrom(c, p.id, p.sub); break;
+        case PendingType::Take: ok = TakeFrom(c, p.id, p.sub, p.critter); break;
+        case PendingType::Put: ok = PutInto(c, p.id, p.sub, p.critter); break;
+        case PendingType::Loot: ok = OpenLoot(c, p.id, true); break;
         case PendingType::None: break;
     }
     if (ok) CommitAction(c, action, cost, rt_.Breaktime);
@@ -966,7 +1048,7 @@ void Server::KillCritter(Critter& c, Critter* killer) {
     c.target = 0;
     c.pending = Pending{};
     CritterId cid = c.id, kid = killer ? killer->id : 0;
-    if (c.IsNpc()) DropAllToGround(c);
+    // an NPC corpse is a container: its inventory stays on it (Loot / Take), see LootTarget
     SendCritterState(c);
     if (c.IsPlayer()) { SendStats(c); Tell(c, "You have died."); }
     if (amx_) amx_->OnDeath(c);
@@ -1041,7 +1123,19 @@ void Server::HandleGamePacket(ENetPeer*, Critter* c, GMsg id, ByteBuffer& b, boo
         case GMsg::C2S_Take: {
             gnet::Take m; ok = m.Read(b);
             if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok)
-                BeginInteract(*c, PendingType::Take, m.container, m.entry);
+                BeginInteract(*c, PendingType::Take, m.container, m.entry, m.isCritter != 0);
+            break;
+        }
+        case GMsg::C2S_Put: {
+            gnet::Put m; ok = m.Read(b);
+            if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok)
+                BeginInteract(*c, PendingType::Put, m.container, m.entry, m.isCritter != 0);
+            break;
+        }
+        case GMsg::C2S_Loot: {
+            gnet::Loot m; ok = m.Read(b);
+            if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok)
+                BeginInteract(*c, PendingType::Loot, m.id, 0, true);
             break;
         }
         case GMsg::C2S_Examine: {

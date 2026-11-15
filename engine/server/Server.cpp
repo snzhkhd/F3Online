@@ -609,7 +609,7 @@ void Server::UpdateVisibility(Map& m) {
                     if (c->mv.active) SendMovePath(*c, p);
                 }
                 if (c->dead || c->hp != c->maxHp) {
-                    gnet::CritterState st{c->id, static_cast<int16_t>(c->hp), static_cast<int16_t>(c->maxHp), static_cast<uint8_t>(c->dead)};
+                    gnet::CritterState st{c->id, static_cast<int16_t>(c->hp), static_cast<int16_t>(c->maxHp), static_cast<uint8_t>(c->dead), 1};   // appear = 1: dead critters come in already dead (final pose)
                     Send(*p, gnet::PackG(st));
                 }
             }
