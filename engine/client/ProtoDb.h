@@ -18,7 +18,8 @@ struct WornPart {
 struct ProtoInfo {
     std::string key;     // "Critters00_TMBobby.CRT"
     std::string cls;     // critter weapon armor ammo item door container usable
-    std::string model;   // b3d resource name ("HumMNor"), may be empty
+    std::string model;   // b3d resource name ("HumMNor"), may be empty (items: the GROUND model, GD_WP_*)
+    std::string heldModel;   // weapons: b3d drawn in the hand (WP_*, authored in hand space, from the item record), may be empty
     std::string name;    // English display name
     std::string skin;    // texture override for "Skin_*" parts, may be empty
     std::vector<WornPart> worn;  // critters: appearance sockets (hair, beard, ...) plus the parts of equipped armor

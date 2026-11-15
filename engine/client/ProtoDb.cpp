@@ -48,6 +48,29 @@ std::vector<WornPart> ParseArmorParts(const std::string& hex) {
     return out;
 }
 
+// Items end with `heldModel, heldTexture` (u16 len + chars, see vbdecomp GameItem::ReadVersion0). We only need the model: the last
+// printable length-prefixed string that looks like a model name ("WP_223Minigun"); some records carry earlier fillers ("minigun").
+std::string ParseHeldModel(const std::string& hex) {
+    std::vector<uint8_t> b;
+    for (size_t i = 0; i + 1 < hex.size(); i += 2) b.push_back(static_cast<uint8_t>(std::stoi(hex.substr(i, 2), nullptr, 16)));
+    std::string best;
+    for (size_t i = 0; i + 2 < b.size();) {
+        const size_t len = b[i] | (static_cast<size_t>(b[i + 1]) << 8);
+        if (len >= 4 && len <= 96 && i + 2 + len <= b.size()) {
+            bool ok = true;
+            for (size_t k = 0; k < len; ++k) { const uint8_t ch = b[i + 2 + k]; if (!std::isalnum(ch) && ch != '_') ok = false; }
+            if (ok) {
+                std::string s(reinterpret_cast<const char*>(&b[i + 2]), len);
+                if (Lower(s.substr(0, 3)) == "wp_") best = s;
+                i += 2 + len;
+                continue;
+            }
+        }
+        ++i;
+    }
+    return best;
+}
+
 bool FileExists(const std::string& p) { std::ifstream f(p, std::ios::binary); return f.good(); }
 }  // namespace
 
@@ -132,6 +155,8 @@ bool ProtoDb::Load(const std::string& hint, std::string* err) {
             }
             if (p.cls == "armor" && v.contains("item") && v["item"].contains("raw_hex") && v["item"]["raw_hex"].is_string())
                 armorParts[p.key] = p.armorParts = ParseArmorParts(v["item"]["raw_hex"].get<std::string>());
+            if (p.cls == "weapon" && v.contains("item") && v["item"].contains("raw_hex") && v["item"]["raw_hex"].is_string())
+                p.heldModel = ParseHeldModel(v["item"]["raw_hex"].get<std::string>());
             protos_.push_back(std::move(p));
         }
         for (auto& [pid, keys] : equip) {
