@@ -1338,6 +1338,8 @@ int main(int argc, char** argv) {
             a.Send(gnet::PackG(lo));
             CHECK(WaitFor({&a, &b}, 15, [&] { return a.cons.size() > nc; }) && a.cons.back().owner == corpse && a.cons.back().isCritter == 1,
                   "Loot on the corpse opens its container (isCritter, name '%s')", a.cons.empty() ? "" : a.cons.back().name.c_str());
+            CHECK(a.cons.size() > nc && a.cons.back().name.find(".CRT") == std::string::npos && a.cons.back().name.find("Critters0") == std::string::npos && !a.cons.back().name.empty(),
+                  "the loot title is a readable name, not the internal file name ('%s')", a.cons.size() > nc ? a.cons.back().name.c_str() : "");
             if (a.cons.size() > nc) {
                 size_t had = a.cons.back().items.size();
                 CHECK(had > 0, "the corpse keeps its inventory (%zu entries) instead of dropping it on the ground", had);
@@ -1355,17 +1357,21 @@ int main(int argc, char** argv) {
                     bool ok = WaitFor({&a, &b}, 8, [&] { return a.invUpdates > upd && a.cons.size() > nc2; });
                     CHECK(ok && a.cons.back().items.size() == had - 1, "Take moves one entry (%s) from the corpse (%zu -> %zu entries)", e.name.c_str(), had, a.cons.back().items.size());
                     CHECK(a.inv.size() >= invBefore, "the taken item is in bot A's inventory");
-                    // Put it backc
+                    // Put onto the corpse is refused (the dead are not storage); the item stays with the player
                     idle(1.0);
                     uint32_t mine = 0;
                     for (auto& x : a.inv) if (x.pid == e.pid && !x.equipped) mine = x.id;
                     if (mine) {
                         size_t nc3 = a.cons.size();
+                        size_t invN = a.inv.size();
                         gnet::Put pt; pt.container = corpse; pt.entry = mine; pt.isCritter = 1;
                         a.Send(gnet::PackG(pt));
-                        CHECK(WaitFor({&a, &b}, 8, [&] { return a.cons.size() > nc3; }) && a.cons.back().items.size() == had, "Put moves the item back onto the corpse (%zu entries)", a.cons.back().items.size());
+                        idle(2.0);
+                        bool told = false;
+                        for (auto& t : a.chat) if (t.find("cannot put items into the dead") != std::string::npos) told = true;
+                        CHECK(a.cons.size() == nc3 && a.inv.size() == invN && told, "Put onto a corpse is rejected server-side (container unchanged, told)");
                     } else {
-                        CHECK(false, "the taken item (pid %u) was not found in the inventory to put backc", e.pid);
+                        CHECK(false, "the taken item (pid %u) was not found in the inventory", e.pid);
                     }
                     // Take All
                     idle(1.0);

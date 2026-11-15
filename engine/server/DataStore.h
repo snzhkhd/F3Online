@@ -45,6 +45,19 @@ struct Proto {
     bool headArmor = false;  // armor worn on the head (helmets) instead of the body
 
     const std::string& DisplayName() const { return !name.empty() ? name : (!name2.empty() ? name2 : key); }
+    // Name for people: the English name, else the key made readable ("Critters00_TMCommunist_Insurgent_Shiv.CRT" ->
+    // "TMCommunist Insurgent Shiv"). Never used as a lookup key (the client maps critter names back to prototypes).
+    std::string ReadableName() const {
+        if (!name.empty()) return name;
+        if (!name2.empty()) return name2;
+        std::string s = key;
+        const size_t d = s.rfind('.');
+        if (d != std::string::npos && s.size() - d <= 5) s.resize(d);
+        size_t u = s.find('_');
+        if (u != std::string::npos && u > 0 && u < 14 && s.compare(0, 8, "Critters") == 0) s.erase(0, u + 1);
+        for (char& ch : s) if (ch == '_') ch = ' ';
+        return s;
+    }
 };
 
 struct EntryPointDef {

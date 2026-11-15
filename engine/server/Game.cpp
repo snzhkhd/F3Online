@@ -481,12 +481,18 @@ std::vector<InvItem>* Server::LootTarget(Critter& c, ItemId id, bool corpse, std
     if (corpse) {
         Critter* t = world_.GetCritter(static_cast<CritterId>(id));
         if (!t || t == &c || !t->dead || !t->IsNpc() || t->mapId != c.mapId || TileDist(t->pos, c.pos) > 3) return nullptr;
-        if (name) *name = t->name;
+        if (name) {
+            const Proto* tp = t->protoPid >= 0 ? data_.GetProto(static_cast<uint16_t>(t->protoPid)) : nullptr;
+            *name = tp ? tp->ReadableName() : t->name;   // the critter's own name may be the internal file name
+        }
         return &t->inventory;
     }
     auto it = m->items.find(id);
     if (it == m->items.end() || it->second.kind != ObjKind::Container || TileDist(it->second.pos, c.pos) > 3) return nullptr;
-    if (name) *name = it->second.name;
+    if (name) {
+        const Proto* op = data_.GetProto(it->second.pid);
+        *name = op ? op->ReadableName() : it->second.name;
+    }
     return &it->second.contents;
 }
 
@@ -535,6 +541,10 @@ bool Server::TakeFrom(Critter& c, ItemId containerId, ItemId entry, bool corpse)
 }
 
 bool Server::PutInto(Critter& c, ItemId containerId, ItemId entry, bool corpse) {
+    if (corpse) {   // the dead are not storage: items go into chests / lockers / crates only
+        if (c.IsPlayer()) Tell(c, "You cannot put items into the dead.");
+        return false;
+    }
     std::vector<InvItem>* contp = LootTarget(c, containerId, corpse);
     if (!contp) return false;
     auto find = [&]() { return std::find_if(c.inventory.begin(), c.inventory.end(), [&](const InvItem& i) { return i.id == entry; }); };
@@ -1128,7 +1138,8 @@ void Server::HandleGamePacket(ENetPeer*, Critter* c, GMsg id, ByteBuffer& b, boo
         }
         case GMsg::C2S_Put: {
             gnet::Put m; ok = m.Read(b);
-            if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok)
+            if (ok && m.isCritter) { if (budget()) Tell(*c, "You cannot put items into the dead."); }   // corpses take nothing
+            else if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok)
                 BeginInteract(*c, PendingType::Put, m.container, m.entry, m.isCritter != 0);
             break;
         }
