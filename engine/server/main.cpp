@@ -62,7 +62,9 @@ int main(int argc, char** argv) {
         else if (a == "--tickrate") cfg.tickRate = std::max(1, std::atoi(next("--tickrate")));
         else if (a == "--dev-kit") cfg.devKit = true;
         else if (a == "--run-seconds") cfg.maxRunSeconds = std::atoi(next("--run-seconds"));
-        else { std::cerr << "usage: f3_server [--port N] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit]\n"; return 2; }
+        else if (a == "--bind") cfg.bindHost = next("--bind");
+        else if (a == "--local") cfg.bindHost = "127.0.0.1";
+        else { std::cerr << "usage: f3_server [--port N] [--bind ADDR | --local] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit]\n"; return 2; }
     }
     if (!scriptsGiven) cfg.scriptsDir = FindScripts(argv[0]);
     if (!dataGiven && !cfg.noData) cfg.dataDir = FindData(argv[0]);

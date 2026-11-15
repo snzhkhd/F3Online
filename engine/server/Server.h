@@ -34,6 +34,7 @@ public:
         bool devKit = false;            // --dev-kit: new players get a few test items (gun, ammo, armor, revolver); default: nothing
         bool noData = false;            // --no-data: never load gamedata even if present
         int maxRunSeconds = 0;  // 0 = run until stopped; used by smoke tests
+        std::string bindHost;   // empty = all interfaces; "127.0.0.1" = loopback only (no Windows Firewall prompt)
     };
 
     explicit Server(Config cfg);
@@ -100,6 +101,7 @@ public:
     void SyncAp(Critter& c);                         // regenerates AP up to now
     bool IsFree(const Critter& c) const { return NowMs() >= c.waitEndMs; }
     void Wait(Critter& c, int ms, bool notify = true);   // cr.Wait(ms): busy until now + ms
+    void OnAttacked(Critter& target, Critter& attacker);  // every attack attempt, hit or miss
     void SetBattle(Critter& c, bool notify = true, int ms = -1);  // battle flag for TimeoutBattle ms
     bool SpendAp(Critter& c, int cost);              // spends if available
     gnet::ActionResult CheckAction(Critter& c, uint8_t action, int apCost, bool report = true);  // free? dead? enough AP? (no side effects)

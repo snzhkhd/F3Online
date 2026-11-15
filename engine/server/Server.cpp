@@ -64,6 +64,11 @@ bool Server::Init() {
     if (enet_initialize() != 0) { log::Error("enet_initialize failed"); return false; }
     ENetAddress addr{};
     addr.host = ENET_HOST_ANY;
+    if (!cfg_.bindHost.empty() && enet_address_set_host(&addr, cfg_.bindHost.c_str()) != 0) {
+        log::Error("cannot resolve bind address '%s'", cfg_.bindHost.c_str());
+        enet_deinitialize();
+        return false;
+    }
     addr.port = cfg_.port;
     host_ = enet_host_create(&addr, static_cast<size_t>(cfg_.maxClients), 2, 0, 0);
     if (!host_) { log::Error("cannot listen on port %u (already in use?)", cfg_.port); enet_deinitialize(); return false; }
