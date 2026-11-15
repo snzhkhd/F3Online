@@ -46,6 +46,8 @@ struct FrameInput {
     bool keyHand = false;             // B: switch the active hand
     bool keyStop = false;             // Tab: stop attacking
     bool keySkill = false;            // S: next skill cursor (Shift+S: previous)
+    int keyNumber = -1;               // top-row 1..9 -> 0..8, 0 -> 9: skill hotkey (Alt = use on yourself)
+    bool alt = false;
 };
 
 struct SceneCritter {

@@ -148,6 +148,9 @@ public:
         in.keyStop = IsKeyPressed(KEY_TAB);
         in.keyHand = IsKeyPressed(KEY_B);
         in.keySkill = IsKeyPressed(KEY_S);
+        in.alt = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
+        for (int k = 0; k < 10; ++k)
+            if (IsKeyPressed(k == 9 ? KEY_ZERO : KEY_ONE + k)) in.keyNumber = k;
         // right button: a click (toggle cursor mode) unless the mouse was dragged (camera orbit)
         if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) { rmbDown_ = true; rmbTravel_ = 0; }
         if (rmbDown_) {

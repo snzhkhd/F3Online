@@ -32,6 +32,7 @@ static const char* kUsage =
     "           --cam AZ,EL,FOV  --target X,Z  --clipy Y  --noentities  --modelscale S\n"
     "controls:  LMB act, RMB click toggles Move/Examine cursor (A = attack cursor, RMB/Esc back) or drag to orbit;\n"
     "           pickup / use / talk cursors switch by themselves over items / usable objects / NPCs,\n"
+    "           1-9, 0 = skill 1..10 (next click uses it on the target), Alt+1..0 = use the skill on yourself, S cycles skills,\n"
     "           I inventory, C character, X examine, B switch active hand, Tab stop attack, Enter chat (PgUp/PgDn or wheel over the chat scrolls it),\n"
     "           wheel zoom, Shift+LMB = walk.\n";
 
@@ -327,6 +328,11 @@ int main(int argc, char** argv) {
                 if (uiState.mode == CursorMode::Skill) uiState.skill = (uiState.skill + (in.shift ? kSkillCount - 1 : 1)) % kSkillCount;
                 uiState.mode = CursorMode::Skill;
                 uiState.charSheet = false;
+            }
+            if (in.keyNumber >= 0 && in.keyNumber < kSkillCount) {   // 1..9, 0: skill 1..10 of the character sheet; Alt = on yourself now
+                uiState.skill = in.keyNumber;
+                if (in.alt) core.UseSkill(uiState.skill, 0, 0);
+                else { uiState.mode = CursorMode::Skill; uiState.charSheet = false; }
             }
             if (in.keyAttack) uiState.mode = CursorMode::Attack;
             if (in.keyInventory) uiState.inventory = !uiState.inventory;
