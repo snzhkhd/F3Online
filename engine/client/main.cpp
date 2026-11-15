@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
     std::string host = cfg.count("host") ? cfg["host"] : "127.0.0.1";
     std::string name = cfg.count("name") ? cfg["name"] : "Player";
     std::string viewMap, protosHint, gameDirArg, password;
-    bool doRegister = false, guest = false;
+    bool doRegister = false, guest = false, autoCreate = false;
     uint16_t port = cfg.count("port") ? static_cast<uint16_t>(std::atoi(cfg["port"].c_str())) : kDefaultPort;
     bool openInv = false, toggleEquip = false;
     int toggleStep = 0;
@@ -108,6 +108,7 @@ int main(int argc, char** argv) {
         else if (a == "--password") password = next();
         else if (a == "--register") doRegister = true;
         else if (a == "--guest") guest = true;
+        else if (a == "--autocreate") autoCreate = true;   // scripted tests: create the character with a fixed allocation
         else if (a == "--gamedir") gameDirArg = next();
         else if (a == "--protos") protosHint = next();
         else if (a == "--no-assets") noAssets = true;
@@ -274,6 +275,14 @@ int main(int argc, char** argv) {
         const double now = core.Now();
         const bool inGame = core.state() == ClientCore::State::InGame;
         if (inGame && inGameSince < 0) inGameSince = now;
+        if (inGame && core.hasSheet() && !core.sheet().created) {
+            uiState.charSheet = true;   // character creation screen
+            if (autoCreate) {
+                static const uint8_t sp[7] = {7, 5, 5, 5, 8, 6, 4};   // sums to 40
+                core.CharCreate(sp, (1u << 0) | (1u << 7) | (1u << 9));
+                autoCreate = false;
+            }
+        }
 
         // ---- chat input ----
         if (typing) {
@@ -484,6 +493,14 @@ int main(int argc, char** argv) {
                 case UiCommand::CloseContainer: core.CloseContainer(); break;
                 case UiCommand::DialogChoose: core.DialogChoose(static_cast<int>(c.a)); break;
                 case UiCommand::DialogClose: core.DialogClose(); break;
+                case UiCommand::CharCreate: {
+                    uint8_t sp[7];
+                    for (int i = 0; i < 7; i++) sp[i] = static_cast<uint8_t>(uiState.draft.special[i]);
+                    core.CharCreate(sp, static_cast<uint16_t>(uiState.draft.tagMask));
+                    break;
+                }
+                case UiCommand::SpendSkill: core.SpendSkill(static_cast<int>(c.a), static_cast<int>(c.b)); break;
+                case UiCommand::UseSkill: core.UseSkill(static_cast<int>(c.a)); break;
             }
         }
         commands.clear();

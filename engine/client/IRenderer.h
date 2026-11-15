@@ -107,11 +107,19 @@ struct LoginLayout {
 };
 
 struct UiCommand {
-    enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, CloseContainer, DialogChoose, DialogClose } type = SetMode;
+    enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, CloseContainer, DialogChoose, DialogClose,
+                CharCreate, SpendSkill, UseSkill } type = SetMode;   // SpendSkill/UseSkill: a = skill index, b = points; CharCreate sends UiState::draft
     uint32_t a = 0, b = 0, c = 0;   // Equip: a = inventory id, b = on, c = EquipSlot (0 = automatic)
 };
 
+struct CharDraft {            // character creation in progress (client side until "Create" is pressed)
+    bool init = false;
+    int special[7] = {5, 5, 5, 5, 5, 5, 5};
+    unsigned tagMask = 0;
+};
+
 struct UiState {
+    CharDraft draft;
     CursorMode mode = CursorMode::Move;   // chosen by the player: Move, Examine or Attack
     bool inventory = false;
     bool charSheet = false;

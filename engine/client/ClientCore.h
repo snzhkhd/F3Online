@@ -141,6 +141,11 @@ public:
 
     bool hasStats() const { return hasStats_; }
     const gnet::Stats& stats() const { return stats_; }
+    bool hasSheet() const { return hasSheet_; }
+    const gnet::CharSheet& sheet() const { return sheet_; }   // character window data (level, xp, skills, ...)
+    void CharCreate(const uint8_t special[7], uint16_t tagMask);
+    void SpendSkill(int skill, int points);
+    void UseSkill(int skill, int kind = 0, uint32_t target = 0);
     const std::vector<gnet::InvEntry>& inventory() const { return inventory_; }
     bool hasContainer() const { return containerOwner_ != 0; }
     uint32_t containerOwner() const { return containerOwner_; }
@@ -199,6 +204,8 @@ private:
     std::vector<Floater> floaters_;
 
     bool hasStats_ = false;
+    bool hasSheet_ = false;
+    gnet::CharSheet sheet_;
     gnet::Stats stats_;
     std::vector<gnet::InvEntry> inventory_;
     uint32_t containerOwner_ = 0;

@@ -1092,25 +1092,125 @@ private:
 
     void DrawCharSheet(const UiView& ui) {
         const ClientCore& core = *ui.core;
-        Rectangle p{10, 64, 220, 210};
-        DrawRectangleRec(p, Color{10, 12, 16, 225});
+        UiState& st = *ui.state;
+        const bool creating = core.hasSheet() && !core.sheet().created;
+        Rectangle p{10, 64, 600, 492};
+        DrawRectangleRec(p, Color{10, 12, 16, 235});
         DrawRectangleLinesEx(p, 1, Color{80, 84, 100, 255});
         uiRects_.push_back(p);
-        DrawText("Character", static_cast<int>(p.x) + 8, static_cast<int>(p.y) + 6, 16, RAYWHITE);
-        if (!core.hasStats()) { DrawText("(no data)", static_cast<int>(p.x) + 10, static_cast<int>(p.y) + 34, 14, GRAY); return; }
+        const int px = static_cast<int>(p.x), py = static_cast<int>(p.y);
+        DrawText(creating ? "Create your character" : "Character", px + 10, py + 8, 18, RAYWHITE);
+        if (!core.hasStats() || !core.hasSheet()) { DrawText("(no data)", px + 10, py + 36, 14, GRAY); return; }
         const gnet::Stats& s = core.stats();
-        const char* sp[7] = {"Strength", "Perception", "Endurance", "Charisma", "Intelligence", "Agility", "Luck"};
-        float y = p.y + 30;
-        for (int i = 0; i < 7; ++i, y += 18) {
-            char b[64];
-            std::snprintf(b, sizeof b, "%-13s %d", sp[i], s.special[i]);
-            DrawText(b, static_cast<int>(p.x) + 10, static_cast<int>(y), 14, Color{220, 220, 230, 255});
+        const gnet::CharSheet& sh = core.sheet();
+        static const char* spNames[7] = {"Strength", "Perception", "Endurance", "Charisma", "Intelligence", "Agility", "Luck"};
+        const Color txt{220, 220, 230, 255}, dim{150, 155, 165, 255}, gold{210, 200, 120, 255};
+        CharDraft& d = st.draft;
+        if (creating && !d.init) { for (int i = 0; i < 7; ++i) d.special[i] = s.special[i]; d.tagMask = 0; d.init = true; }
+        if (!creating) d.init = false;
+        int used = 0;
+        if (creating) for (int i = 0; i < 7; ++i) used += d.special[i];
+        const int left = sh.creationTotal - used;
+        char b[128];
+
+        // ---- SPECIAL
+        int y = py + 40;
+        DrawText("SPECIAL", px + 10, y, 14, gold);
+        y += 22;
+        for (int i = 0; i < 7; ++i, y += 24) {
+            DrawText(spNames[i], px + 10, y + 3, 14, txt);
+            const int v = creating ? d.special[i] : s.special[i];
+            std::snprintf(b, sizeof b, "%d", v);
+            DrawText(b, px + 128, y + 3, 14, txt);
+            if (creating) {
+                if (Button(Rectangle{static_cast<float>(px + 152), static_cast<float>(y), 22, 20}, "-", false, v > 1)) d.special[i] = v - 1;
+                if (Button(Rectangle{static_cast<float>(px + 178), static_cast<float>(y), 22, 20}, "+", false, v < 10 && left > 0)) d.special[i] = v + 1;
+            }
         }
-        char b[96];
-        std::snprintf(b, sizeof b, "Level %d   AC %d   Seq %d", s.level, s.armorClass, s.sequence);
-        DrawText(b, static_cast<int>(p.x) + 10, static_cast<int>(y) + 6, 14, Color{200, 200, 140, 255});
-        std::snprintf(b, sizeof b, "HP %d/%d  Melee +%d", s.hp, s.maxHp, s.meleeBonus);
-        DrawText(b, static_cast<int>(p.x) + 10, static_cast<int>(y) + 24, 14, Color{220, 140, 140, 255});
+        if (creating) {
+            std::snprintf(b, sizeof b, "Points left: %d", left);
+            DrawText(b, px + 10, y + 2, 14, left == 0 ? Color{140, 230, 140, 255} : Color{240, 180, 100, 255});
+            y += 22;
+        }
+        // ---- derived values
+        y += 8;
+        DrawText("Derived", px + 10, y, 14, gold);
+        y += 20;
+        auto line = [&](const char* fmt, int a, int b2 = 0) { std::snprintf(b, sizeof b, fmt, a, b2); DrawText(b, px + 10, y, 14, txt); y += 18; };
+        if (creating) {   // preview from the draft, same formulas as the server defaults (the server is authoritative)
+            line("Hit points %d", 15 + d.special[0] + 2 * d.special[2]);
+            line("Action points %d", 5 + d.special[5] / 2);
+            line("Carry weight %d", 25 + 25 * d.special[0]);
+            line("Armor class %d", d.special[5]);
+        } else {
+            line("Hit points %d / %d", s.hp, s.maxHp);
+            line("Action points %d", sh.maxAp);
+            line("Armor class %d", s.armorClass);
+            line("Sequence %d", s.sequence);
+            line("Carry weight %d / %d", s.carried, s.carryWeight);
+            line("Melee damage +%d", s.meleeBonus);
+            line("Healing rate %d", sh.healRate);
+            line("Critical chance %d%%", sh.critChance);
+        }
+        if (!creating) {
+            y += 6;
+            std::snprintf(b, sizeof b, "Level %d", sh.level);
+            DrawText(b, px + 10, y, 16, gold); y += 22;
+            if (sh.xpNext) std::snprintf(b, sizeof b, "XP %u / %u", sh.xp, sh.xpNext); else std::snprintf(b, sizeof b, "XP %u (max level)", sh.xp);
+            DrawText(b, px + 10, y, 14, txt); y += 18;
+            std::snprintf(b, sizeof b, "Skill points %d   Perk points %d", sh.skillPoints, sh.perkPoints);
+            DrawText(b, px + 10, y, 14, sh.skillPoints ? Color{140, 230, 140, 255} : txt);
+        }
+
+        // ---- skills
+        const int sx = px + 260;
+        int sy = py + 40;
+        int tags = 0;
+        if (creating) for (int i = 0; i < kSkillCount; ++i) if (d.tagMask & (1u << i)) ++tags;
+        DrawText(creating ? "Skills (click to tag)" : "Skills", sx, sy, 14, gold);
+        if (!creating) { std::snprintf(b, sizeof b, "points: %d", sh.skillPoints); DrawText(b, sx + 250, sy, 14, dim); }
+        else { std::snprintf(b, sizeof b, "tags %d/%d", tags, sh.tagCount); DrawText(b, sx + 250, sy, 14, tags == sh.tagCount ? Color{140, 230, 140, 255} : Color{240, 180, 100, 255}); }
+        sy += 22;
+        for (int i = 0; i < kSkillCount; ++i, sy += 24) {
+            const bool tagged = creating ? (d.tagMask & (1u << i)) != 0 : (sh.tagMask & (1u << i)) != 0;
+            const Rectangle row{static_cast<float>(sx), static_cast<float>(sy), 322, 22};
+            if (creating) {
+                if (Button(row, "", tagged, true)) {
+                    if (tagged) d.tagMask &= ~(1u << i);
+                    else if (tags < sh.tagCount) d.tagMask |= (1u << i);
+                }
+            }
+            DrawText(tagged ? "*" : " ", sx + 6, sy + 4, 14, gold);
+            DrawText(kSkillNames[i], sx + 20, sy + 4, 14, txt);
+            int value = sh.skill[i];
+            if (creating) {   // preview: base from the draft SPECIAL + tag bonus (server formulas, see Character.cpp)
+                const int S = d.special[0], P = d.special[1], E = d.special[2], C = d.special[3], I = d.special[4], A = d.special[5];
+                switch (i) {
+                    case 0: value = 5 + 4 * A; break;       case 1: value = 20 + 2 * (S + A); break;  case 2: value = 30 + 2 * (S + A); break;
+                    case 3: value = 4 * C; break;           case 4: value = 5 + 4 * C; break;         case 5: value = 5 + 3 * C + I; break;
+                    case 6: value = 3 * I; break;           case 7: value = 2 * (P + I); break;       case 8: value = 5 + 2 * (E + I); break;
+                    case 9: value = 4 * I; break;           case 10: value = 10 + P + A; break;       case 11: value = 5 + 3 * A; break;
+                    case 12: value = 3 + 3 * A; break;      default: value = 10 + P + A; break;
+                }
+                if (tagged) value += 20;
+            }
+            std::snprintf(b, sizeof b, "%d%%", value);
+            DrawText(b, sx + 150, sy + 4, 14, txt);
+            if (!creating) {
+                if (Button(Rectangle{static_cast<float>(sx + 200), static_cast<float>(sy + 1), 24, 20}, "+", false, sh.skillPoints > 0 && value < 100))
+                    ui.commands->push_back(UiCommand{UiCommand::SpendSkill, static_cast<uint32_t>(i), 1});
+                if (Button(Rectangle{static_cast<float>(sx + 230), static_cast<float>(sy + 1), 40, 20}, "Use", false, true))
+                    ui.commands->push_back(UiCommand{UiCommand::UseSkill, static_cast<uint32_t>(i), 0});
+            }
+        }
+        if (creating) {
+            const bool ready = left == 0 && tags == sh.tagCount;
+            if (Button(Rectangle{static_cast<float>(sx), static_cast<float>(py + 438), 150, 28}, "Create character", ready, ready))
+                ui.commands->push_back(UiCommand{UiCommand::CharCreate, 0, 0});
+            DrawText(ready ? "Ready." : "Spend all points and tag the skills.", sx + 160, py + 445, 13, dim);
+        } else {
+            DrawText("C closes this window.  Use applies the skill to yourself.", px + 10, py + 472, 12, dim);
+        }
     }
 
     // cursor mode label and tooltip for whatever is under the mouse
