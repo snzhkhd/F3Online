@@ -280,15 +280,31 @@ void MapView::Draw(GameAssets& assets, const DrawOptions& opt) {
     drawBatches(false);
     entitiesDrawn_ = 0;
     if (opt.entities) {
-        for (const MapEntityInstance& e : entities_) {
+        for (size_t i = 0; i < entities_.size(); ++i) {
+            const MapEntityInstance& e = entities_[i];
             if (e.hidden) continue;
-            DrawModel(assets, e.rig ? e.rig->asset() : *e.model, e.transform, WHITE, e.skin, opt, true);
+            DrawModel(assets, e.rig ? e.rig->asset() : *e.model, e.transform, static_cast<int>(i) == tintIdx_ ? tintCol_ : WHITE, e.skin, opt, true);
             ++entitiesDrawn_;
         }
     }
+    tintIdx_ = -1;
     rlDisableDepthMask();
     drawBatches(true);
     rlEnableDepthMask();
+}
+
+void MapView::SetEntityTint(const Vector3& p, Color tint) {
+    int best = -1;
+    float bd = 2.5f;
+    for (size_t i = 0; i < entities_.size(); ++i) {
+        const MapEntityInstance& e = entities_[i];
+        if (e.src.type != "DOR" && e.src.type != "CON" && e.src.type != "USE") continue;
+        const float dx = e.src.pos[0] - p.x, dz = -e.src.pos[2] - p.z;
+        const float d = std::sqrt(dx * dx + dz * dz);
+        if (d < bd) { bd = d; best = static_cast<int>(i); }
+    }
+    tintIdx_ = best;
+    tintCol_ = tint;
 }
 
 void MapView::SetDoorOpen(const Vector3& p, bool open) {

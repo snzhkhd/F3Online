@@ -697,6 +697,10 @@ private:
             cam_.target = Vector3Add(w, panOffset_);   // exact follow: the critter pose is already smooth
         }
         lastCam_ = cam_.Build();
+        if (const char* tm = std::getenv("F3_TEST_MOUSE")) {   // test hook: park the mouse (screenshots of hover effects)
+            int mx = 0, my = 0;
+            if (std::sscanf(tm, "%d,%d", &mx, &my) == 2) SetMousePosition(static_cast<float>(mx), static_cast<float>(my));
+        }
         labels_.clear();
         critterHead_.clear();
         std::vector<PickRect> prevRects;
@@ -769,6 +773,46 @@ private:
         EndMode3D();
     }
 
+    // ---- object highlight. Original technique (Effects.grp VFX records "highlight", "select1", "select2", decoded from the binary
+    // effect definitions; there is no highlight code in vbdecomp, only the Combat "show outlines" setting):
+    //  * "highlight" = model effect on the target (applies to attachments too): model colour (70,255,251) pulsing to (0,193,188), sine, 1 Hz.
+    //  * "select1" / "select2" = discs under the target (Disc_select_01 / 02.b3d, textures select_01 / select_02.tga, radius 0.637 model units,
+    //    VFX scale 0.30 / 0.34), RP_BLEND_ADD, colour (70,255,251), alpha 255 -> 100 sine 1 Hz; select1 scale 0.30 -> 0.25 sine 0.5 Hz.
+    static float Pulse(double t, float hz) { return 0.5f + 0.5f * std::sin(static_cast<float>(t) * 6.2831853f * hz); }
+    static Color HighlightTint() {
+        const float k = Pulse(GetTime(), 1.0f);
+        // the original modulates the model by this colour outright (very dark teal on our lighting); we blend it 60% with white
+        auto L = [&](float a, float b) { const float c = a + (b - a) * k; return static_cast<unsigned char>(255 + (c - 255) * 0.6f); };
+        return Color{L(70, 0), L(255, 193), L(251, 188), 255};
+    }
+    void DrawSelectDisc(const Vector3& w) {
+        const double t = GetTime();
+        struct D { const char* tex; float scale, scaleEnd, scaleHz; } discs[2] = {{"select_01", 0.30f, 0.25f, 0.5f}, {"select_02", 0.34f, 0.34f, 1.0f}};
+        const float alpha = (255.0f + (100.0f - 255.0f) * Pulse(t, 1.0f)) / 255.0f;
+        BeginBlendMode(BLEND_ADDITIVE);
+        rlDisableDepthMask();
+        rlDisableBackfaceCulling();
+        for (const D& d : discs) {
+            const Texture2D* tex = assets_->Texture(d.tex);
+            if (!tex) continue;
+            const float sc = d.scale + (d.scaleEnd - d.scale) * Pulse(t, d.scaleHz);
+            const float r = 0.6367f * 10.0f * sc;   // b3d bounds +-0.6367, non-preconverted model = 1/10 world units
+            const float y = w.y + 0.2f;
+            rlSetTexture(tex->id);
+            rlBegin(RL_QUADS);
+            rlColor4ub(70, 255, 251, static_cast<unsigned char>(255 * alpha));
+            rlTexCoord2f(0, 0); rlVertex3f(w.x - r, y, w.z - r);
+            rlTexCoord2f(0, 1); rlVertex3f(w.x - r, y, w.z + r);
+            rlTexCoord2f(1, 1); rlVertex3f(w.x + r, y, w.z + r);
+            rlTexCoord2f(1, 0); rlVertex3f(w.x + r, y, w.z - r);
+            rlEnd();
+            rlSetTexture(0);
+        }
+        rlEnableBackfaceCulling();
+        rlEnableDepthMask();
+        EndBlendMode();
+    }
+
     void DrawCritter(const SceneView& s, const SceneCritter& sc, int tw, int th, std::unordered_set<CritterId>& seen) {
         const ClientCritter& c = *sc.critter;
         const ProtoInfo* proto = s.protos ? s.protos->ByPid(static_cast<uint32_t>(std::max(0, c.pid))) : nullptr;
@@ -822,16 +866,15 @@ private:
         }
         Matrix m = MatrixMultiply(MatrixMultiply(MatrixScale(k, k, k), MatrixRotateY(yaw)), MatrixTranslate(w.x, w.y, w.z));
         Color tint = WHITE;
+        const bool hovered = hoverCrit_ == c.id;
+        if (hovered) tint = HighlightTint();
         if (v.inst) MapView::DrawModel(*assets_, v.inst->asset(), m, tint, v.skin, dopt_, true);
         else if (v.staticModel) MapView::DrawModel(*assets_, *v.staticModel, m, tint, v.skin, dopt_, true);
         else DrawCylinder(w, 1.0f, 1.0f, 6.0f, 10, Unpack(c.color));
         if (v.inst && !c.dead) DrawHeldWeapon(s, c, v, m);
 
-        const bool hovered = hoverCrit_ == c.id;
-        if (hovered || sc.isSelf) {
-            Color rc = sc.isSelf ? Color{80, 220, 120, 200} : (c.kind == CritterKind::Npc ? Color{255, 90, 70, 220} : Color{255, 220, 80, 220});
-            if (!sc.isSelf || hovered) DrawCircle3D(Vector3{w.x, w.y + 0.05f, w.z}, hovered ? 1.7f : 1.4f, Vector3{1, 0, 0}, 90.0f, rc);
-        }
+        if (hovered) DrawSelectDisc(w);
+        else if (sc.isSelf) DrawCircle3D(Vector3{w.x, w.y + 0.05f, w.z}, 1.4f, Vector3{1, 0, 0}, 90.0f, Color{80, 220, 120, 200});
         {   // pick bounds: feet-to-head capsule unioned with the projected bones of the posed skeleton (lying corpses are wide), plus a margin
             Rectangle pr = ProjectRect(w, height, 0.6f);
             if (v.inst) {
@@ -896,7 +939,7 @@ private:
             if (ma) {
                 const float ks = k * ma->unitScale;
                 Matrix m = MatrixMultiply(MatrixScale(ks, ks, ks), MatrixTranslate(w.x, w.y + 0.08f, w.z));
-                MapView::DrawModel(*assets_, *ma, m, WHITE, nullptr, dopt_, true);
+                MapView::DrawModel(*assets_, *ma, m, hoverItem_ == it.id ? HighlightTint() : WHITE, nullptr, dopt_, true);
                 drawn = true;
                 height = std::max(1.2f, (ma->bmax.y - ma->bmin.y) * ks);
             }
@@ -911,8 +954,8 @@ private:
         }
         const bool hovered = hoverItem_ == it.id;
         if (hovered) {
-            Color rc = it.kind == gnet::ObjectKind::Ground ? Color{255, 220, 80, 230} : Color{120, 200, 255, 230};
-            DrawCircle3D(Vector3{w.x, w.y + 0.05f, w.z}, 1.4f, Vector3{1, 0, 0}, 90.0f, rc);
+            DrawSelectDisc(w);
+            if (it.kind != gnet::ObjectKind::Ground) map_.SetEntityTint(w, HighlightTint());   // door / container / usable baked into the map
         }
         Rectangle r = ProjectRect(Vector3{w.x, w.y, w.z}, height, 1.0f);
         r.width = std::max(r.width, 26.0f);

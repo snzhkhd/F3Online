@@ -62,6 +62,8 @@ public:
     void SetDoorOpen(const Vector3& worldPos, bool open);
     void SetRigs(RigLibrary* rigs) { rigs_ = rigs; }   // optional, before Load: skeletal doors
     void Update(float dt);                              // door animation
+    // Colour-modulate the baked map entity (door / container / usable) nearest to `worldPos` in the next Draw() only (object highlight).
+    void SetEntityTint(const Vector3& worldPos, Color tint);
 
     void Draw(GameAssets& assets, const DrawOptions& opt);
     // Draws one model instance with the asset shader (used for network critters/items as well).
@@ -123,6 +125,8 @@ private:
     std::vector<MapBatch> batches_;
     std::vector<MapEntityInstance> entities_;
     size_t entitiesDrawn_ = 0;
+    int tintIdx_ = -1;
+    Color tintCol_ = WHITE;
     int missing_ = 0;
     size_t tris_ = 0;
     int badSubRecords_ = 0;
