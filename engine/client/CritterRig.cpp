@@ -68,6 +68,7 @@ const char* RigLibrary::ClipKey(ClipKind k) {
         case ClipKind::Attack: return "attack";
         case ClipKind::Hit: return "hit";
         case ClipKind::Death: return "death";
+        case ClipKind::Equip: return "equip";
         default: return "?";
     }
 }
@@ -116,6 +117,7 @@ void SkinnedInstance::Pose(const Clip* a, float ta, const Clip* b, float tb, flo
         }
     }
     std::vector<float> world = gr2::worldMatrices(sk, &pose);
+    world_ = world;
     const size_t nb = sk.bones.size();
     for (size_t j = 0; j < nb; ++j) Mul4(&m.invWorld[j * 16], &world[j * 16], &palette_[j * 16]);
     const float ss = m.skelScale;
@@ -150,6 +152,16 @@ void SkinnedInstance::Pose(const Clip* a, float ta, const Clip* b, float tb, flo
         UpdateMeshBuffer(mesh, 0, mesh.vertices, static_cast<int>(nv * 3 * sizeof(float)), 0);
         UpdateMeshBuffer(mesh, 2, mesh.normals, static_cast<int>(nv * 3 * sizeof(float)), 0);
     }
+}
+
+bool SkinnedInstance::BoneWorld(const char* name, float* out16) const {
+    const gr2::Skeleton& sk = model_->sk;
+    for (size_t i = 0; i < sk.bones.size(); ++i)
+        if (Lower(sk.bones[i].name) == Lower(name) && world_.size() >= (i + 1) * 16) {
+            for (int k = 0; k < 16; ++k) out16[k] = world_[i * 16 + k];
+            return true;
+        }
+    return false;
 }
 
 std::string Appearance::Key() const {
@@ -427,6 +439,14 @@ const Clip* RigLibrary::GetNamed(SkinModel& m, const std::string& animName) {
     return it->second.valid ? &it->second : nullptr;
 }
 
+const Clip* RigLibrary::GetFor(SkinModel& m, ClipKind k, const WeaponAnim& w, bool combat) {
+    const std::string& P = m.animPrefix;
+    if (P.compare(0, 3, "Hum") != 0) return k == ClipKind::Equip ? nullptr : Get(m, k);
+    for (const std::string& n : HumanClipNames(P, static_cast<int>(k), w, combat))
+        if (const Clip* c = GetNamed(m, n)) return c;
+    return k == ClipKind::Equip ? nullptr : Get(m, k);
+}
+
 const Clip* RigLibrary::Get(SkinModel& m, ClipKind k) {
     const int ki = static_cast<int>(k);
     ClipSet& cs = *m.clipSet;
@@ -443,6 +463,7 @@ const Clip* RigLibrary::Get(SkinModel& m, ClipKind k) {
             case ClipKind::Death: cands = {P + "_Com_Una_Laydown_ProneB_01", P + "_ProneB_Una_Death_01", P + "_Com_Una_Knock_ProneB_01"}; break;
             default: break;
         }
+        if (k == ClipKind::Equip) return nullptr;
         for (const std::string& c : cands)
             if (LoadClip(m, c, cs.clips[ki])) break;
         if (!cs.clips[ki].valid) log::Warn("rig %s: no '%s' clip", m.name.c_str(), ClipKey(k));

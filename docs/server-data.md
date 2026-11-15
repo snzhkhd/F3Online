@@ -272,3 +272,9 @@ No reload/skill/pick-critter actions (their `RtApCost*` keys are inert); no queu
 
 * `InvEntry.equipped` carries the slot: 0 carried, 1 body, 2 head, 3 hand 1 (active weapon, used for attacks), 4 hand 2 (spare weapon). `C2S_Equip` has an optional trailing `slot` byte (0 = automatic). Rules (server authoritative, `Server::EquipItem`): weapons only in the hands, armor in the body slot, helmets (`*Helmet*` keys) in the head slot; automatic weapon equip takes hand 1 and pushes the previous hand-1 weapon to hand 2 when that is free; equipping onto an occupied hand from the other hand swaps.
 * Weight: `Stats.carryWeight` = `CarryBase + CarryPerStrength * ST` (config.lua, 25 + 25*ST), `Stats.carried` = sum of unit weight * count, `InvEntry.weight` = unit weight. The demo data has no weights, so unit weights come from a class table (`WeightWeapon 4, WeightArmor 8, WeightAmmo 1, WeightItem 1`) with per-prototype overrides `config.ItemWeights["Key.WEA"] = n`. Pick up / take from containers is refused over the limit.
+
+## Appearance block (protocol_game.h)
+
+* `S2C_Appearance = 139` `{u32 critter, u16 body, u16 head, u16 weapon}` (prototype indices, 0xFFFF = none): sent to a client when it first sees a critter (right after `CritterProto`) and to everybody who sees the critter (and the critter itself) on every equip / unequip.
+  The client builds the worn b3d parts from `armorParts` of those prototypes (players start from the base body: the `Default_PC` sockets for body / feet / back / hands / head are dropped; hair, beard, pip-boy sockets stay) and draws the weapon model in the right hand.
+* `CombatEvent` gained a trailing `u16 durMs` (attack action length) used to time the attack animation.

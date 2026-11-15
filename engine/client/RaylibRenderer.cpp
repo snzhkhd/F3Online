@@ -81,6 +81,8 @@ public:
                 }
             }
         }
+        if (const char* e = std::getenv("F3_HELD"))   // dev: held weapon transform "scale,rx,ry,rz,ox,oy,oz" (degrees, b3d units)
+            std::sscanf(e, "%f,%f,%f,%f,%f,%f,%f", &kHeldScale, &kHeldRotX, &kHeldRotY, &kHeldRotZ, &kHeldOffX, &kHeldOffY, &kHeldOffZ);
         showGrid_ = opt_.showGrid;
         startTime_ = GetTime();
         return true;
@@ -414,6 +416,8 @@ private:
 
     struct AnimState {
         ClipKind cur = ClipKind::Idle, prev = ClipKind::Idle;
+        const Clip* curClip = nullptr; const Clip* prevClip = nullptr;   // the clips actually playing (weapon set / stance dependent)
+        int setKey = -1;
         double curStart = 0, prevStart = 0, blendStart = -10;
         float yaw = 0;
         bool yawInit = false;
@@ -485,33 +489,43 @@ private:
         const float dt = a.lastNow > 0 ? static_cast<float>(std::min(0.1, now - a.lastNow)) : 0.016f;
         a.lastNow = now;
 
-        auto clipOf = [&](ClipKind k) -> const Clip* { return rigs_->Get(m, k); };
+        // weapon class and stance choose the clip set (WeaponAnim.h); combat stance for a while after fighting
+        const ProtoInfo* wp = (c.hasApp && c.appWeapon != 0xFFFF && s.protos) ? s.protos->ByPid(c.appWeapon) : nullptr;
+        const WeaponAnim wa = ClassifyWeapon(wp);
+        const bool combat = (c.attackT >= 0 && now - c.attackT < 8.0) || (c.hitT >= 0 && now - c.hitT < 8.0);
+        auto clipOf = [&](ClipKind k) -> const Clip* { return rigs_->GetFor(m, k, wa, combat); };
         ClipKind want = ClipKind::Idle;
         double start = now;
+        const Clip* equipClip = c.equipT >= 0 ? clipOf(ClipKind::Equip) : nullptr;
+        // an attack lasts as long as the server action: the clip is stretched / squeezed to it (see timeOf)
+        auto attackRate = [&](const Clip* cl) { return c.attackDur > 0.05 && cl ? static_cast<float>(std::clamp(cl->duration / c.attackDur, 0.5, 2.5)) : 1.0f; };
         if (c.dead) {
             want = ClipKind::Death;
             start = c.deathT >= 0 ? c.deathT : now - 100.0;
-        } else if (c.attackT >= 0 && clipOf(ClipKind::Attack) && now - c.attackT < clipOf(ClipKind::Attack)->duration) {
+        } else if (c.attackT >= 0 && clipOf(ClipKind::Attack) && now - c.attackT < clipOf(ClipKind::Attack)->duration / attackRate(clipOf(ClipKind::Attack))) {
             want = ClipKind::Attack; start = c.attackT;
         } else if (c.hitT >= 0 && clipOf(ClipKind::Hit) && now - c.hitT < clipOf(ClipKind::Hit)->duration) {
             want = ClipKind::Hit; start = c.hitT;
+        } else if (equipClip && now - c.equipT < equipClip->duration) {
+            want = ClipKind::Equip; start = c.equipT;
         } else if (sc.pose.moving) {
             want = (c.run || sc.pose.speed > 13.5f) ? ClipKind::Run : ClipKind::Walk;
         }
-        const bool oneShot = want == ClipKind::Attack || want == ClipKind::Hit || want == ClipKind::Death;
-        const bool changed = want != a.cur || (oneShot && std::fabs(start - a.curStart) > 0.01);
+        const bool oneShot = want == ClipKind::Attack || want == ClipKind::Hit || want == ClipKind::Death || want == ClipKind::Equip;
+        const int setKey = wa.key() * 2 + (combat ? 1 : 0);
+        const bool changed = want != a.cur || setKey != a.setKey || (oneShot && std::fabs(start - a.curStart) > 0.01);
         if (changed) {
-            a.prev = a.cur; a.prevStart = a.curStart;
-            a.cur = want;
+            a.prev = a.cur; a.prevStart = a.curStart; a.prevClip = a.curClip;
+            a.cur = want; a.setKey = setKey;
             a.curStart = oneShot ? start : now - (static_cast<double>(c.id % 7)) * 0.13;
             a.blendStart = now;
         }
-        auto timeOf = [&](ClipKind k, double st) -> float {
-            const Clip* cl = clipOf(k);
+        auto timeOf = [&](const Clip* cl, ClipKind k, double st) -> float {
             if (!cl) return 0;
             float rate = 1.0f;
             if (k == ClipKind::Walk) rate = std::clamp(sc.pose.speed / 9.6f, 0.5f, 1.8f);   // clip stride ~4.8 units/s = 9.6 cells/s
             else if (k == ClipKind::Run) rate = std::clamp(sc.pose.speed / 19.5f, 0.6f, 1.6f);   // ~9.8 units/s
+            else if (k == ClipKind::Attack) rate = attackRate(cl);
             float t = static_cast<float>((now - st)) * rate;
             const bool loop = k == ClipKind::Idle || k == ClipKind::Walk || k == ClipKind::Run;
             if (loop) t = std::fmod(std::max(0.0f, t), cl->duration);
@@ -519,10 +533,11 @@ private:
             return t;
         };
         const Clip* ca = clipOf(a.cur);
-        const Clip* cb = a.blendStart > -5 ? clipOf(a.prev) : nullptr;
+        const Clip* cb = a.blendStart > -5 ? a.prevClip : nullptr;
         if (!ca) ca = clipOf(ClipKind::Idle);
+        a.curClip = ca;
         const float k = static_cast<float>(std::clamp((now - a.blendStart) / 0.18, 0.0, 1.0));
-        v.inst->Pose(ca, timeOf(a.cur, a.curStart), k < 1.0f ? cb : nullptr, timeOf(a.prev, a.prevStart), k);
+        v.inst->Pose(ca, timeOf(ca, a.cur, a.curStart), k < 1.0f ? cb : nullptr, timeOf(cb, a.prev, a.prevStart), k);
 
         // facing
         float target;
@@ -695,6 +710,7 @@ private:
         if (v.inst) MapView::DrawModel(*assets_, v.inst->asset(), m, tint, v.skin, dopt_, true);
         else if (v.staticModel) MapView::DrawModel(*assets_, *v.staticModel, m, tint, v.skin, dopt_, true);
         else DrawCylinder(w, 1.0f, 1.0f, 6.0f, 10, Unpack(c.color));
+        if (v.inst && !c.dead) DrawHeldWeapon(s, c, v, m);
 
         const bool hovered = hoverCrit_ == c.id;
         if (hovered || sc.isSelf) {
@@ -706,6 +722,29 @@ private:
                            c.kind == CritterKind::Npc ? Color{255, 220, 140, 255} : RAYWHITE, c.id, c.hp, c.maxHp, c.dead});
         critterWorld_[c.id] = Vector3{w.x, w.y + height * 0.8f, w.z};
     }
+
+    // The active weapon (appearance block) is drawn on the "R Handle_1" bone of the right hand. The bone matrix is in Granny space
+    // (row vectors, left-handed, skeleton units); the renderer flips z, so the basis is reflected like the skinned vertices
+    // (see SkinnedInstance::Pose). kHeldScale / kHeldRot are tuned by eye against the weapon b3d (docs/formats/models.md).
+    void DrawHeldWeapon(const SceneView& s, const ClientCritter& c, Visual& v, const Matrix& body) {
+        if (!c.hasApp || c.appWeapon == 0xFFFF || !s.protos) return;
+        const ProtoInfo* wp = s.protos->ByPid(c.appWeapon);
+        const ModelAsset* wm = wp && !wp->model.empty() ? assets_->Model(wp->model) : nullptr;
+        float h[16];
+        if (!wm || !v.inst->BoneWorld("R Handle_1", h)) return;
+        const float ss = v.inst->model()->skelScale;
+        Matrix g{};
+        g.m0 = h[0];  g.m4 = h[4];  g.m8 = -h[8];   g.m12 = h[12] * ss;
+        g.m1 = h[1];  g.m5 = h[5];  g.m9 = -h[9];   g.m13 = h[13] * ss;
+        g.m2 = -h[2]; g.m6 = -h[6]; g.m10 = h[10];  g.m14 = -h[14] * ss;
+        g.m15 = 1.0f;
+        const float ks = kHeldScale * wm->unitScale;
+        Matrix local = MatrixMultiply(MatrixScale(ks, ks, ks), MatrixRotateXYZ(Vector3{kHeldRotX * DEG2RAD, kHeldRotY * DEG2RAD, kHeldRotZ * DEG2RAD}));
+        local = MatrixMultiply(local, MatrixTranslate(kHeldOffX, kHeldOffY, kHeldOffZ));
+        const Matrix wmat = MatrixMultiply(MatrixMultiply(local, g), body);
+        MapView::DrawModel(*assets_, *wm, wmat, WHITE, nullptr, dopt_, true);
+    }
+    float kHeldScale = 0.5f, kHeldRotX = 0, kHeldRotY = 0, kHeldRotZ = 0, kHeldOffX = 0, kHeldOffY = 0, kHeldOffZ = 0;
 
     void DrawItem(const SceneView& s, const ClientItem& it, int tw, int th) {
         const ProtoInfo* proto = s.protos ? s.protos->ByPid(it.pid) : nullptr;

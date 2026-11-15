@@ -201,8 +201,9 @@ struct CombatEvent {
     uint32_t attacker = 0, target = 0;
     HitResult result = HitResult::Miss;
     int16_t damage = 0, targetHp = 0;
-    void Write(ByteBuffer& b) const { b.WriteU32(attacker); b.WriteU32(target); b.WriteU8(static_cast<uint8_t>(result)); b.WriteI16(damage); b.WriteI16(targetHp); }
-    bool Read(ByteBuffer& b) { attacker = b.ReadU32(); target = b.ReadU32(); result = static_cast<HitResult>(b.ReadU8()); damage = b.ReadI16(); targetHp = b.ReadI16(); return b.Ok(); }
+    uint16_t durMs = 0;   // appearance block: duration of the attack action (the animation is stretched to it); 0 = unknown
+    void Write(ByteBuffer& b) const { b.WriteU32(attacker); b.WriteU32(target); b.WriteU8(static_cast<uint8_t>(result)); b.WriteI16(damage); b.WriteI16(targetHp); b.WriteU16(durMs); }
+    bool Read(ByteBuffer& b) { attacker = b.ReadU32(); target = b.ReadU32(); result = static_cast<HitResult>(b.ReadU8()); damage = b.ReadI16(); targetHp = b.ReadI16(); durMs = b.Remaining() >= 2 ? b.ReadU16() : 0; return b.Ok(); }
 };
 
 // Cells whose blocked flag changed (door opened/closed).

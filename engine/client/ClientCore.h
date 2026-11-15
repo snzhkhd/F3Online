@@ -41,6 +41,8 @@ struct ClientCritter {
     double attackT = -1, hitT = -1, deathT = -1;
     CritterId attackTarget = 0;
     // appearance block (S2C_Appearance): prototype indices of worn armor / helmet / hand-1 weapon, 0xFFFF = none
+    double attackDur = 0;   // seconds the attack action lasts (CombatEvent.durMs), 0 unknown
+    double equipT = -1;     // client clock of the last weapon change (draw / holster animation)
     bool hasApp = false;
     uint16_t appBody = 0xFFFF, appHead = 0xFFFF, appWeapon = 0xFFFF;
 };

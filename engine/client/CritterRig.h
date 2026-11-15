@@ -12,10 +12,11 @@
 #include <raylib.h>
 #include "GameAssets.h"
 #include "gr2/gr2.h"
+#include "WeaponAnim.h"
 
 namespace f3 {
 
-enum class ClipKind { Idle, Walk, Run, Attack, Hit, Death, Count };
+enum class ClipKind { Idle, Walk, Run, Attack, Hit, Death, Equip, Count };
 
 struct Clip {
     gr2::TrackGroup tg;
@@ -76,11 +77,15 @@ public:
     void Pose(const Clip* a, float ta, const Clip* b, float tb, float blendToA);
     const ModelAsset& asset() const { return inst_; }
     const SkinModel* model() const { return model_; }
+    // World matrix (16 floats, Granny layout, skeleton units, left-handed) of the named bone after the last Pose();
+    // false if the skeleton has no such bone or Pose() has not run.
+    bool BoneWorld(const char* name, float* out16) const;
 
 private:
     const SkinModel* model_;
     ModelAsset inst_;
     std::vector<float> palette_;  // 16 per skeleton bone + one identity matrix
+    std::vector<float> world_;    // bone world matrices of the last Pose()
 };
 
 class RigLibrary {
@@ -93,6 +98,8 @@ public:
     // Loads (once) the clip of the given kind for this model; returns nullptr if the game has none.
     const Clip* Get(SkinModel& m, ClipKind k);
     const Clip* GetNamed(SkinModel& m, const std::string& animName);   // nullptr if the game has no such clip
+    // Clip for the critter's weapon class and stance (humans: HumM_/HumF_ weapon sets, see WeaponAnim.h; other models: Get()).
+    const Clip* GetFor(SkinModel& m, ClipKind k, const WeaponAnim& w, bool combat);
     static const char* ClipKey(ClipKind k);
 
 private:

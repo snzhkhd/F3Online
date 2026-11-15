@@ -847,6 +847,7 @@ void Server::TickCombat(Critter& c) {
     gnet::CombatEvent ev;
     ev.attacker = c.id;
     ev.target = t->id;
+    ev.durMs = static_cast<uint16_t>(std::clamp(durMs, 0, 65535));
     bool hit = RandRange(1, 100) <= chance;
     int dmg = 0;
     if (hit) {

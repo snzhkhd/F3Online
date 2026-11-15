@@ -328,13 +328,14 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
             auto it = critters_.find(m.id);
             if (it == critters_.end()) return;
             ClientCritter& c = it->second;
+            if (c.hasApp && c.appWeapon != m.weapon) c.equipT = now;   // not on the first message (appearing)
             c.hasApp = true; c.appBody = m.body; c.appHead = m.head; c.appWeapon = m.weapon;
             break;
         }
         case static_cast<uint8_t>(GMsg::S2C_CombatEvent): {
             gnet::CombatEvent m;
             if (!m.Read(b)) return;
-            if (auto a = critters_.find(m.attacker); a != critters_.end()) { a->second.attackT = now; a->second.attackTarget = m.target; }
+            if (auto a = critters_.find(m.attacker); a != critters_.end()) { a->second.attackT = now; a->second.attackTarget = m.target; a->second.attackDur = m.durMs / 1000.0; }
             auto t = critters_.find(m.target);
             Floater f;
             f.target = m.target; f.time = now;

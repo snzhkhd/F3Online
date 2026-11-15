@@ -200,3 +200,37 @@ summaries, animations with per-track `{t, p, q, s}` samples at `fps` (default `1
 * Vertex data is exposed for the layouts seen (`Position`, `Normal`, `BoneWeights`, `BoneIndices`, `TextureCoordinates0`); other vertex
   members are only reachable through the generic `Walker`.
 * The `.b3d` <-> `.gr2` bone matching (names) is only checked implicitly through the DLL pose comparison.
+
+## Human animation set and weapon mapping (client: `WeaponAnim.h`, `RigLibrary::GetFor`)
+
+`HumM_` / `HumF_` ship 93 clips each. Name = `<prefix>_<stance>_<set>_<action>_<nn>.anim.gr2`:
+
+* stance: `Com` (combat) / `Def` (relaxed, out of combat) / `ProneB`, `ProneF` (lying down);
+* set: `Una` unarmed, `1H` one-handed weapon (pistols, clubs, knives), `2HH` two-handed (rifles, heavy), `2HC` (only `Melee_Slash`);
+* actions: `Idle`, `Walk` (`Com_*_Walk`; **`Run` exists only as `Com_Una_Run`**), `Gun_Shoot`, `Gun_Burst`, `Gun_NoRecoil`, `Gun_Sweep`, `Gun_Butt`,
+  `Melee_Slash`, `Melee_Thrust`, `Throw` (1H only), `DmgFr` / `DmgFrMult` (hit reactions), `Dodge`, `Equip` / `Unequip`, `Switch_Weapons`, `Stunned`,
+  `Knock_ProneB`, `Laydown_ProneB` (death fall), `ProneB_Una_Death`, `Fidget` (Def idles), `to_Def` / `to_Com`, `Pickup`, armor / helmet equip.
+
+Weapon prototypes do not name their animation set (and 35 of 51 have no decoded attack data), so the client derives it from the prototype key:
+
+| weapon | kind / set | attack clip |
+|---|---|---|
+| grenades, dynamite, rock, flare, throwing knife | Throw / 1H | `Com_1H_Throw` |
+| knives, shiv, switchblade | Melee / 1H | `Com_1H_Melee_Thrust` |
+| bat, crowbar, hatchet, wrench, pipe, nightstick, table leg, prod, machete | Melee / 1H | `Com_1H_Melee_Slash` |
+| minigun, flamethrower, railgun, array gun, rifles, shotguns | Gun / 2HH | `Com_2HH_Gun_Shoot` (`Gun_Burst` when the first attack mode is a burst) |
+| everything else (pistols, revolvers, SMGs, lasers, welder, hand flamer) | Gun / 1H | `Com_1H_Gun_Shoot` (`Gun_Burst` for bursts) |
+| nothing in hand | Una | `Com_Una_Punch_Jab`, fallback `Kick_Snap` |
+
+Other clips: idle `Def_<set>_Idle` (relaxed) or `Com_<set>_Idle` for 8 s after a hit / attack; walk `Com_<set>_Walk`; run `Com_Una_Run` for everyone (no weapon run
+clips); hit `Com_<set>_DmgFr`; death `Com_<set>_Laydown_ProneB`; draw / holster one-shot `Com_<set>_Equip` / `Com_Una_Unequip` when the hand-1 weapon changes. Every
+lookup falls back to the unarmed clip and finally to the old fixed list, so a missing clip never breaks a critter. Non-human models keep the `Una` list.
+Attack timing: `CombatEvent.durMs` (the server's attack action length, `clamp(cost * AttackMsPerCost, min, max)`) is sent with every shot and the attack clip is
+played at `clip duration / durMs` (clamped 0.5..2.5) so the animation spans the action.
+
+## Weapon in hand
+
+The active (hand-1) weapon's `GD_WP_*.b3d` (the prototype `model`, same file as the ground model, preconverted, ~1.9 units for a 9mm) is drawn on the skeleton bone
+`R Handle_1` (child of `R Hand`) with the bone's animated world matrix (Granny row-vector matrix; the renderer reflects z like the skinned vertices), scale 0.5 and no extra
+rotation (verified with the 9mm autoloader: the muzzle follows the forearm in the shoot clip). The transform can be tweaked without rebuilding with the env var
+`F3_HELD="scale,rx,ry,rz,ox,oy,oz"`. Melee / thrown weapon models are drawn the same way and were not individually checked.
