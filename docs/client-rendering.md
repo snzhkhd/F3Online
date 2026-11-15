@@ -19,11 +19,11 @@ unusable gamedir / map missing from the game data) and how to fix it.
 Test options: `--shot FILE.png`, `--shots PREFIX --shot-times 5,8,11` (timed series, logged with frame timestamps),
 `--cam AZ,EL,FOV`, `--target X,Z`, `--clipy Y`, `--noentities`, `--modelscale S`, `--size W,H`, `--protos FILE`,
 `--no-assets`, `--legacy` (do not announce the timing capability; tests per-cell CritterMove), `--say TEXT` (repeatable),
-`--grid` (start with the G walk-grid overlay, drawn around the player, on top of the terrain), `--autowalk`, `--autoattack`, `--autopickup`, `--trace` (movement smoothness summary), `--run-seconds N`.
+`--grid` (start with the G walk-grid overlay, drawn around the player, on top of the terrain), `--autocreate` (create the character with a fixed allocation: S7 P5 E5 C5 I8 A6 L4, tags Firearms / Medic / Science, traits Bruiser / Fast Shot), `--draft S,P,E,C,I,A,L:tagMask:traitMask` (preset the creation screen for screenshots), `--open-char` (open the character window once the character exists), `--autowalk`, `--autoattack`, `--autopickup`, `--trace` (movement smoothness summary), `--run-seconds N`.
 Note: under MSYS bash set `MSYS_NO_PATHCONV=1` or `/tp ...` is rewritten into a Windows path.
 
 Controls (network): LMB acts according to the cursor mode, RMB click cycles the mode (Move/Attack/Use/Talk/Pickup, or
-keys 1-5), Shift = walk instead of run, Tab stops attacking, I inventory, C character, X examine, B switches the active hand, Enter chat (mouse wheel over the chat or PgUp/PgDn scrolls it).
+keys 1-5), Shift = walk instead of run, Tab stops attacking, I inventory, C character window, X examine, B switches the active hand, S skill cursor (see below), Enter chat (mouse wheel over the chat or PgUp/PgDn scrolls it).
 The camera follows the player; wheel zooms; RMB drag orbits; Q/E rotate.
 
 ## Movement and timing
@@ -149,7 +149,7 @@ tunes the transform. The old code drew the ground model at 0.5, i.e. too small f
 `Inventory.gui`, `f3_*.tga`, item icons `*_INV.tga` / `*_ACT.tga`, fonts `Fonts\r_fallouty.ttf` + `TT0807M_.TTF`); layout format in
 `docs/formats/gui.md`. Nothing is copied into the repo. If any of it is missing, `Load()` fails, a warning is logged and the old
 raylib HUD is used; `--no-origui` forces the raylib HUD, `--open-inv` starts with the inventory open (screenshots).
-Everything else (chat, dialogue, container, character sheet, labels) is still raylib.
+The character creation screen and the character window (C) come from `Interface\CharacterGeneration.gui` (`OrigUiChar.cpp`, next section). Everything else (dialogue, container, labels, login) is still raylib; docs/formats/gui.md lists every layout and its status.
 
 * The layout is 1024 wide (bar 1024x164 anchored bottom centre, inventory 1024x604 centred above it); both scale down uniformly
   on small windows. Background textures are stretched (800 -> 1024), buttons are 1:1.
@@ -180,3 +180,35 @@ Everything else (chat, dialogue, container, character sheet, labels) is still ra
 
 * With the original-art bar the chat log and input line live in the bar's left dark message screen (`OrigUi::DrawActionBar`): lines are word-wrapped to the screen width (gothic font), newest at the bottom just above the input row; the input row shows the typed text while Enter-chat is active and a faint "Enter: chat" hint otherwise. The floating chat panel above the bar is not drawn in this mode (the raylib fallback HUD keeps it). The Move / Examine / Attack buttons are gone: RMB toggles Move / Examine, key A selects Attack; the mode is shown next to the cursor and as a small label in the top-right corner of the message screen. The break-time bar stays at the bottom of the screen; the "busy" message appears on the input row.
 * The inventory window no longer shows a floating item tooltip (hovering fills the description box). Tooltips remain on the weapon slots of the bar.
+
+## Character creation screen, character window and skill cursor (`OrigUiChar.cpp`)
+
+Both windows are `Interface\CharacterGeneration.gui` (1024x768, background `f3_chargen.tga`, exact tree from `ParseGuiTree`, texts from
+`English.stf`, digits `f3_digit_N.tga`), drawn full screen scaled uniformly and centred (`OrigUi::DrawCharScreen`). The layout
+details (widget names, string ids) are in docs/formats/gui.md. Without the layout, `English.stf` or the art the old raylib window is
+used (`DrawCharSheet`; it has the same functions, plain).
+
+* **Creation (before the world).** After login the server holds a new account (or a legacy uncreated save) in a "creating" session:
+  no map, no critter in the world, no ticks (docs/server-data.md section 11). The client gets `LoginOk` + `Stats` + `CharSheet` with
+  `created = 0`; `main.cpp` sees `core.hasSheet() && !sheet.created` and the renderer draws only the creation screen (no scene, no
+  action bar, no chat); world input is off. `-` / `+` next to each SPECIAL (1..10, the points left are the "CHAR POINTS" digits), the radio
+  next to a skill tags it (exactly three, `TAG SKILLS` digits count what is left), the 16 traits are radios (two at most), the right
+  panel shows the derived statistics (Stats tab; preview of the server formulas, `CharPreview.h`) or the damage thresholds (Thresholds
+  tab), the hit points under the model window. Hovering anything shows its heading, description and picture on the parchment
+  (the layout's own tooltip ids). **Done** sends `CharCreate` (special, tags, traits) when 0 points are left and 3 tags are chosen,
+  otherwise the parchment says what is missing; **Cancel** leaves the game; Options does nothing (hint). When the server accepts it
+  the session enters the world (`MapInfo`, ...), `CharSheet.created = 1`, the screen disappears.
+* **Not built** (no data on the server / no model rendering): the Appearance row, the character model, Age / Sex (`CharGen_NAS`), the Options
+  button, the name edit (the plate shows the account name). Values the server does not model (perception range, perk rate,
+  throwing range, resistances, thresholds in the C window) show "-".
+* **Character window (C).** The same screen with the sheet's values: SPECIAL and traits read only, base / total per skill (tagged skills
+  highlighted, the radio is down), a `+` next to a skill spends a skill point (`SpendSkill`), the right panel lists level, XP, skill and perk
+  points. **Click a skill name to use it**: the window closes and the cursor becomes the skill cursor. Done / Cancel / C / Esc close it.
+* **Skill cursor.** `CursorMode::Skill` with `UiState::skill`. Chosen by clicking a skill in the character window or with the **S** key (first press
+  enters with the last used skill, further presses cycle forward, Shift+S backward). The cursor label and the action bar show the skill
+  name. A left click sends `UseSkill(skill, kind, target)`: on yourself or empty target -> kind 0, on another critter -> kind 1, on
+  an object / door / container / loose item -> kind 2; one use, then the cursor goes back to Move. RMB or Esc cancels. Clicking the ground does
+  nothing. The server (Character.cpp `UseSkill`) refuses an unknown target or one farther than `SkillUseRange` (5) tiles before it spends AP,
+  then calls the Lua hook `use_skill` (scripts/main.lua): Medic on yourself / others, Security on locked doors, Science on a critter (hit
+  points), the other skills answer with a message.
+
