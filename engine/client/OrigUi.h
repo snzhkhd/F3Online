@@ -9,6 +9,7 @@
 #include "IRenderer.h"
 #include "gamedata/GameData.h"
 #include "gamedata/GuiFile.h"
+#include "gamedata/Stf.h"
 
 namespace f3 {
 
@@ -26,6 +27,10 @@ public:
     void DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects);
     void DrawInventory(const UiView& ui, std::vector<Rectangle>& rects);
     void DrawOverlay();   // tooltip, after all windows
+    // CharacterGeneration.gui (1024x768 layout, drawn full screen): `creating` = the creation screen shown before the world
+    // (UiState::draft), otherwise the character window opened with C (sheet values, skill points, skill cursor selection).
+    bool HasCharScreen() const { return ok_ && haveChar_; }
+    void DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectangle>& rects);
     // True while an item is being dragged (the world must not react to the mouse).
     bool Dragging() const { return drag_.active; }
     // True while the action bar is on screen: PageUp / PageDown scroll its chat (the viewer's roof-cut keys must stand back).
@@ -45,6 +50,14 @@ private:
     gd::GameData* data_ = nullptr;
     std::unordered_map<std::string, Tex> tex_;
     gd::GuiFile bar_, inv_;
+    gd::GuiTree char_;                                            // CharacterGeneration.gui, exact tree
+    std::unordered_map<std::string, const gd::GuiNode*> charIdx_;   // widget name -> node (first one)
+    std::vector<const gd::GuiNode*> charFlat_;                     // all nodes, file order
+    gd::Stf stf_;                                                  // English.stf (label / tooltip ids of the layouts)
+    bool haveChar_ = false;
+    int charTab_ = 0;                                              // 0 derived stats, 1 damage thresholds
+    std::string charHint_;
+    double charHintUntil_ = 0;
     Font fallouty_{}, gothic_{};
     bool haveFonts_ = false;
     bool ok_ = false;

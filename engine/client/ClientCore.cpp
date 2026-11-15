@@ -556,7 +556,7 @@ void ClientCore::Talk(uint32_t critter) { gnet::Talk m; m.critter = critter; Sen
 void ClientCore::DialogChoose(int index) { gnet::DialogChoose m; m.index = static_cast<uint8_t>(index); SendG(m); }
 void ClientCore::DialogClose() { if (!dialog_.open) return; gnet::DialogCloseReq m; SendG(m); dialog_ = DialogState{}; }
 void ClientCore::Examine(uint32_t id, bool isCritter) { gnet::Examine m; m.id = id; m.isCritter = isCritter ? 1 : 0; SendG(m); }
-void ClientCore::CharCreate(const uint8_t special[7], uint16_t tagMask) { gnet::CharCreate m; for (int i = 0; i < 7; i++) m.special[i] = special[i]; m.tagMask = tagMask; SendG(m); }
+void ClientCore::CharCreate(const uint8_t special[7], uint16_t tagMask, uint16_t traitMask) { gnet::CharCreate m; for (int i = 0; i < 7; i++) m.special[i] = special[i]; m.tagMask = tagMask; m.traitMask = traitMask; SendG(m); }
 void ClientCore::SpendSkill(int skill, int points) { gnet::SpendSkill m; m.skill = static_cast<uint8_t>(skill); m.points = static_cast<uint8_t>(points); SendG(m); }
 void ClientCore::UseSkill(int skill, int kind, uint32_t target) { gnet::UseSkill m; m.skill = static_cast<uint8_t>(skill); m.kind = static_cast<uint8_t>(kind); m.target = target; SendG(m); }
 void ClientCore::RequestState() { SendG(gnet::ReqState{}); }

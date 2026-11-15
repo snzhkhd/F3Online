@@ -85,6 +85,23 @@ bool OrigUi::Load(gd::GameData& data, const std::string& gameDir, std::string* e
     if (!haveFonts_) return fail("fonts missing (Fonts\\r_fallouty.ttf, TT0807M_.TTF)");
     SetTextureFilter(fallouty_.texture, TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(gothic_.texture, TEXTURE_FILTER_BILINEAR);
+    // the character screen is optional: without it the renderer keeps its raylib character window
+    haveChar_ = false;
+    charIdx_.clear(); charFlat_.clear(); char_ = gd::GuiTree();
+    if (data.Read("CharacterGeneration", gd::kResGui, buf) && gd::ParseGuiTree(buf.data(), buf.size(), char_) &&
+        stf_.Load(gameDir + "/English.stf") && Texture("f3_chargen.tga")) {
+        std::vector<const gd::GuiNode*> st;
+        for (auto it = char_.roots.rbegin(); it != char_.roots.rend(); ++it) st.push_back(&*it);
+        while (!st.empty()) {   // depth first, file order
+            const gd::GuiNode* n = st.back(); st.pop_back();
+            charFlat_.push_back(n);
+            charIdx_.emplace(n->name, n);
+            for (auto it = n->children.rbegin(); it != n->children.rend(); ++it) st.push_back(&*it);
+        }
+        haveChar_ = true;
+    } else {
+        log::Warn("original UI: CharacterGeneration.gui / English.stf / f3_chargen.tga unavailable, the raylib character window stays");
+    }
     ok_ = true;
     log::Info("original UI: action bar (%zu widgets) and inventory (%zu widgets) loaded", bar_.widgets.size(), inv_.widgets.size());
     return true;
@@ -351,7 +368,7 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
         }
         // cursor mode (RMB toggles Move/Examine, A = Attack): small unobtrusive label
         {
-            const char* mn = st.mode == CursorMode::Attack ? "Attack" : st.mode == CursorMode::Examine ? "Examine" : "Move";
+            const char* mn = st.mode == CursorMode::Attack ? "Attack" : st.mode == CursorMode::Examine ? "Examine" : st.mode == CursorMode::Skill ? kSkillNames[std::clamp(st.skill, 0, kSkillCount - 1)] : "Move";
             Text(gothic_, mn, P(16, 18, 0, 0).x, P(16, 18, 0, 0).y, 12 * s, kAmberDim, 2, 262 * s);
         }
         // break time: red bar while actions are locked

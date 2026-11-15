@@ -12,11 +12,12 @@
 
 namespace f3 {
 
-// FOnline-style cursor. Only Move, Examine and Attack are chosen by the player (UiState::mode): RMB toggles
-// Move <-> Examine, key A enters Attack, RMB or Esc leaves it. Use, Talk and Pickup are never selected by hand: with the
+// FOnline-style cursor. Only Move, Examine, Attack and Skill are chosen by the player (UiState::mode): RMB toggles
+// Move <-> Examine, key A enters Attack, a skill picked in the character window (or the S key) enters Skill (UiState::skill is the
+// skill, a click on a critter / object / door / container sends UseSkill with that target), RMB or Esc leaves them. Use, Talk and Pickup are never selected by hand: with the
 // Move cursor they appear by themselves while the mouse hovers a usable object / an NPC with a dialogue / a loose item
 // (see ResolveCursor).
-enum class CursorMode : int { Move = 0, Examine, Attack, Use, Talk, Pickup, Count };
+enum class CursorMode : int { Move = 0, Examine, Attack, Use, Talk, Pickup, Skill, Count };
 inline const char* CursorModeName(CursorMode m) {
     switch (m) {
         case CursorMode::Move: return "Move";
@@ -25,6 +26,7 @@ inline const char* CursorModeName(CursorMode m) {
         case CursorMode::Use: return "Use";
         case CursorMode::Talk: return "Talk";
         case CursorMode::Pickup: return "Pickup";
+        case CursorMode::Skill: return "Skill";
         default: return "?";
     }
 }
@@ -43,6 +45,7 @@ struct FrameInput {
     bool keyExamine = false;          // X
     bool keyHand = false;             // B: switch the active hand
     bool keyStop = false;             // Tab: stop attacking
+    bool keySkill = false;            // S: next skill cursor (Shift+S: previous)
 };
 
 struct SceneCritter {
@@ -109,7 +112,7 @@ struct LoginLayout {
 
 struct UiCommand {
     enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, CloseContainer, DialogChoose, DialogClose,
-                CharCreate, SpendSkill, UseSkill, SwapHands } type = SetMode;   // SpendSkill/UseSkill: a = skill index, b = points; CharCreate sends UiState::draft
+                CharCreate, SpendSkill, UseSkill, SwapHands, Quit, SelectSkill } type = SetMode;   // SpendSkill/UseSkill: a = skill index, b = points; CharCreate sends UiState::draft; SelectSkill: a = skill (enters the skill cursor, closes the sheet); Quit: leave the game (Cancel on the creation screen)
     uint32_t a = 0, b = 0, c = 0;   // Equip: a = inventory id, b = on, c = EquipSlot (0 = automatic)
 };
 
@@ -117,11 +120,13 @@ struct CharDraft {            // character creation in progress (client side unt
     bool init = false;
     int special[7] = {5, 5, 5, 5, 5, 5, 5};
     unsigned tagMask = 0;
+    unsigned traitMask = 0;
 };
 
 struct UiState {
     CharDraft draft;
-    CursorMode mode = CursorMode::Move;   // chosen by the player: Move, Examine or Attack
+    CursorMode mode = CursorMode::Move;   // chosen by the player: Move, Examine, Attack or Skill
+    int skill = 0;                        // the skill of the Skill cursor (index into kSkillNames)
     bool inventory = false;
     bool charSheet = false;
 };
@@ -150,7 +155,7 @@ struct PickResult {
 // Attack and Examine are sticky and apply to everything; the Move cursor adapts to the target:
 // loose item -> Pickup, door / container / usable -> Use, NPC with a dialogue -> Talk, other critters -> Examine.
 inline CursorMode ResolveCursor(const ClientCore& core, CursorMode manual, const PickResult& pr) {
-    if (manual == CursorMode::Attack || manual == CursorMode::Examine) return manual;
+    if (manual == CursorMode::Attack || manual == CursorMode::Examine || manual == CursorMode::Skill) return manual;
     if (pr.kind == PickResult::Item) {
         auto it = core.items().find(pr.item);
         if (it == core.items().end()) return CursorMode::Examine;

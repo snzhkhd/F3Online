@@ -147,7 +147,8 @@ public:
     const gnet::Stats& stats() const { return stats_; }
     bool hasSheet() const { return hasSheet_; }
     const gnet::CharSheet& sheet() const { return sheet_; }   // character window data (level, xp, skills, ...)
-    void CharCreate(const uint8_t special[7], uint16_t tagMask);
+    void CharCreate(const uint8_t special[7], uint16_t tagMask, uint16_t traitMask = 0);
+    const std::string& playerName() const { return name_; }
     void SpendSkill(int skill, int points);
     void UseSkill(int skill, int kind = 0, uint32_t target = 0);
     const std::vector<gnet::InvEntry>& inventory() const { return inventory_; }

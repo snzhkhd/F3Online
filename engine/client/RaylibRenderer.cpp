@@ -14,6 +14,7 @@
 #include "GameAssets.h"
 #include "IRenderer.h"
 #include "MapView.h"
+#include "CharPreview.h"
 #include "OrigUi.h"
 #include "common/log.h"
 
@@ -146,6 +147,7 @@ public:
         in.keyExamine = IsKeyPressed(KEY_X);
         in.keyStop = IsKeyPressed(KEY_TAB);
         in.keyHand = IsKeyPressed(KEY_B);
+        in.keySkill = IsKeyPressed(KEY_S);
         // right button: a click (toggle cursor mode) unless the mouse was dragged (camera orbit)
         if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) { rmbDown_ = true; rmbTravel_ = 0; }
         if (rmbDown_) {
@@ -304,6 +306,12 @@ public:
     void DrawUi(const UiView& ui) override {
         const int sw = GetScreenWidth(), sh = GetScreenHeight();
         uiRects_.clear();
+        // character creation happens before the world: the creation screen replaces everything (no map, no HUD)
+        if (ui.core && ui.state && ui.commands && ui.core->state() == ClientCore::State::InGame && ui.core->hasSheet() && !ui.core->sheet().created &&
+            orig_.HasCharScreen()) {
+            orig_.DrawCharScreen(ui, true, uiRects_);
+            return;
+        }
         DrawText(ui.status.c_str(), 10, 8, 16, RAYWHITE);
         if (active3d_) {
             char b[320];
@@ -908,7 +916,10 @@ private:
             orig_.DrawOverlay();
             if (core.hasContainer()) DrawContainer(ui);
             if (core.dialog().open) DrawDialog(ui);
-            if (st.charSheet) DrawCharSheet(ui);
+            if (st.charSheet) {
+                if (orig_.HasCharScreen()) orig_.DrawCharScreen(ui, false, uiRects_);
+                else DrawCharSheet(ui);
+            }
             return;
         }
         Rectangle hud{sw - 566.0f, sh - 124.0f, 558, 116};
@@ -1100,7 +1111,7 @@ private:
         const ClientCore& core = *ui.core;
         UiState& st = *ui.state;
         const bool creating = core.hasSheet() && !core.sheet().created;
-        Rectangle p{10, 64, 600, 492};
+        Rectangle p{10, 64, 600, creating ? 560.0f : 492.0f};
         DrawRectangleRec(p, Color{10, 12, 16, 235});
         DrawRectangleLinesEx(p, 1, Color{80, 84, 100, 255});
         uiRects_.push_back(p);
@@ -1112,7 +1123,7 @@ private:
         static const char* spNames[7] = {"Strength", "Perception", "Endurance", "Charisma", "Intelligence", "Agility", "Luck"};
         const Color txt{220, 220, 230, 255}, dim{150, 155, 165, 255}, gold{210, 200, 120, 255};
         CharDraft& d = st.draft;
-        if (creating && !d.init) { for (int i = 0; i < 7; ++i) d.special[i] = s.special[i]; d.tagMask = 0; d.init = true; }
+        if (creating && !d.init) { for (int i = 0; i < 7; ++i) d.special[i] = s.special[i]; d.tagMask = 0; d.traitMask = 0; d.init = true; }
         if (!creating) d.init = false;
         int used = 0;
         if (creating) for (int i = 0; i < 7; ++i) used += d.special[i];
@@ -1186,18 +1197,14 @@ private:
                     else if (tags < sh.tagCount) d.tagMask |= (1u << i);
                 }
             }
+            if (!creating && Button(Rectangle{static_cast<float>(sx), static_cast<float>(sy), 196, 22}, "", st.mode == CursorMode::Skill && st.skill == i, true))
+                ui.commands->push_back(UiCommand{UiCommand::SelectSkill, static_cast<uint32_t>(i), 0});
             DrawText(tagged ? "*" : " ", sx + 6, sy + 4, 14, gold);
             DrawText(kSkillNames[i], sx + 20, sy + 4, 14, txt);
             int value = sh.skill[i];
             if (creating) {   // preview: base from the draft SPECIAL + tag bonus (server formulas, see Character.cpp)
-                const int S = d.special[0], P = d.special[1], E = d.special[2], C = d.special[3], I = d.special[4], A = d.special[5];
-                switch (i) {
-                    case 0: value = 5 + 4 * A; break;       case 1: value = 20 + 2 * (S + A); break;  case 2: value = 30 + 2 * (S + A); break;
-                    case 3: value = 4 * C; break;           case 4: value = 5 + 4 * C; break;         case 5: value = 5 + 3 * C + I; break;
-                    case 6: value = 3 * I; break;           case 7: value = 2 * (P + I); break;       case 8: value = 5 + 2 * (E + I); break;
-                    case 9: value = 4 * I; break;           case 10: value = 10 + P + A; break;       case 11: value = 5 + 3 * A; break;
-                    case 12: value = 3 + 3 * A; break;      default: value = 10 + P + A; break;
-                }
+                int spv[7]; for (int k = 0; k < 7; ++k) spv[k] = d.special[k];
+                value = PreviewSkillBase(i, spv);
                 if (tagged) value += 20;
             }
             std::snprintf(b, sizeof b, "%d%%", value);
@@ -1205,17 +1212,26 @@ private:
             if (!creating) {
                 if (Button(Rectangle{static_cast<float>(sx + 200), static_cast<float>(sy + 1), 24, 20}, "+", false, sh.skillPoints > 0 && value < 100))
                     ui.commands->push_back(UiCommand{UiCommand::SpendSkill, static_cast<uint32_t>(i), 1});
-                if (Button(Rectangle{static_cast<float>(sx + 230), static_cast<float>(sy + 1), 40, 20}, "Use", false, true))
-                    ui.commands->push_back(UiCommand{UiCommand::UseSkill, static_cast<uint32_t>(i), 0});
             }
         }
         if (creating) {
+            static const char* traitNames[16] = {"Bruiser", "Chem Reliant", "Clean Living", "Fast Shot", "Feral Kid", "Finesse", "Gifted", "Good Natured",
+                                                 "Increased Metabolism", "Kamikaze", "Night Person", "One Hander", "One In a Million", "Red Scare", "Skilled", "Small Frame"};
+            int nt = 0;
+            for (int t = 0; t < 16; ++t) if (d.traitMask & (1u << t)) ++nt;
+            std::snprintf(b, sizeof b, "Traits (up to %d)", sh.traitMax);
+            DrawText(b, px + 10, py + 408, 14, gold);
+            for (int t = 0; t < 16; ++t) {
+                const bool on = (d.traitMask & (1u << t)) != 0;
+                const Rectangle tb{static_cast<float>(px + 10 + (t % 4) * 146), static_cast<float>(py + 430 + (t / 4) * 24), 142, 22};
+                if (Button(tb, traitNames[t], on, on || nt < sh.traitMax)) { if (on) d.traitMask &= ~(1u << t); else d.traitMask |= (1u << t); }
+            }
             const bool ready = left == 0 && tags == sh.tagCount;
-            if (Button(Rectangle{static_cast<float>(sx), static_cast<float>(py + 438), 150, 28}, "Create character", ready, ready))
+            if (Button(Rectangle{static_cast<float>(px + 10), static_cast<float>(py + 528), 150, 28}, "Create character", ready, ready))
                 ui.commands->push_back(UiCommand{UiCommand::CharCreate, 0, 0});
-            DrawText(ready ? "Ready." : "Spend all points and tag the skills.", sx + 160, py + 445, 13, dim);
+            DrawText(ready ? "Ready." : "Spend all points and tag the skills.", px + 170, py + 535, 13, dim);
         } else {
-            DrawText("C closes this window.  Use applies the skill to yourself.", px + 10, py + 472, 12, dim);
+            DrawText("C closes this window.  Click a skill to use it, then click a target (S cycles skills, Esc / RMB cancels).", px + 10, py + 472, 12, dim);
         }
     }
 
@@ -1226,7 +1242,7 @@ private:
         PickResult pr;
         const bool picked = Pick(static_cast<int>(mp.x), static_cast<int>(mp.y), pr);
         const CursorMode mode = picked ? ResolveCursor(*ui.core, ui.state->mode, pr) : ui.state->mode;
-        std::string t = std::string("[") + CursorModeName(mode) + "]";
+        std::string t = mode == CursorMode::Skill ? std::string("[") + kSkillNames[std::clamp(ui.state->skill, 0, kSkillCount - 1)] + "]" : std::string("[") + CursorModeName(mode) + "]";
         if (picked) {
             if (pr.kind == PickResult::Critter) {
                 if (const ClientCritter* c = ui.core->Find(pr.critter)) {

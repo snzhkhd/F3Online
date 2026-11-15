@@ -91,7 +91,8 @@ int main(int argc, char** argv) {
     std::string viewMap, protosHint, gameDirArg, password;
     bool doRegister = false, guest = false, autoCreate = false;
     uint16_t port = cfg.count("port") ? static_cast<uint16_t>(std::atoi(cfg["port"].c_str())) : kDefaultPort;
-    bool openInv = false, toggleEquip = false;
+    bool openInv = false, openChar = false, toggleEquip = false;
+    std::string draftArg;
     int toggleStep = 0;
     double lastToggle = 0;
     bool noAssets = false, autowalk = false, hostGiven = false, legacy = false, autoattack = false, autopickup = false;
@@ -119,6 +120,8 @@ int main(int argc, char** argv) {
         else if (a == "--shot-exit") ropt.exitAfterScreenshot = true;
         else if (a == "--no-origui") ropt.noOrigUi = true;
         else if (a == "--open-inv") openInv = true;
+        else if (a == "--open-char") openChar = true;   // testing: the character window is open once the character exists
+        else if (a == "--draft") draftArg = next();     // testing: preset the creation screen, "S,P,E,C,I,A,L:tagMask:traitMask"
         else if (a == "--toggle-equip") toggleEquip = true;
         else if (a == "--shots") ropt.shotPrefix = next();
         else if (a == "--shot-times") {
@@ -211,12 +214,20 @@ int main(int argc, char** argv) {
     std::string input;
     UiState uiState;
     uiState.inventory = openInv;
+    if (!draftArg.empty()) {
+        unsigned v[7] = {5, 5, 5, 5, 5, 5, 5}, tm = 0, trm = 0;
+        std::sscanf(draftArg.c_str(), "%u,%u,%u,%u,%u,%u,%u:%u:%u", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &tm, &trm);
+        for (int i = 0; i < 7; ++i) uiState.draft.special[i] = static_cast<int>(v[i]);
+        uiState.draft.tagMask = tm;
+        uiState.draft.traitMask = trm;
+        uiState.draft.init = true;
+    }
     std::vector<UiCommand> commands;
     Trace trace;
     if (!traceFile.empty()) { trace.csv.open(traceFile); trace.csv << "t,x,y,moving,speed\n"; }
     double inGameSince = -1, lastAutoMove = -100, lastAutoAct = -100;
     int autoStep = 0, frame = 0;
-    bool quit = false;
+    bool quit = false, wasCreating = false;
 
     auto localNote = [&](const std::string& t) { (void)t; };
     (void)localNote;
@@ -276,13 +287,21 @@ int main(int argc, char** argv) {
         const double now = core.Now();
         const bool inGame = core.state() == ClientCore::State::InGame;
         if (inGame && inGameSince < 0) inGameSince = now;
-        if (inGame && core.hasSheet() && !core.sheet().created) {
-            uiState.charSheet = true;   // character creation screen
+        // character creation happens before the world: the server keeps the session out of the map until a valid CharCreate, the
+        // renderer shows the creation screen (no map, no HUD) and the world input below is off
+        const bool creating = inGame && core.hasSheet() && !core.sheet().created;
+        if (creating) {
+            uiState.charSheet = true;   // the raylib fallback draws its creation window while this is set
+            uiState.inventory = false;
+            wasCreating = true;
             if (autoCreate) {
                 static const uint8_t sp[7] = {7, 5, 5, 5, 8, 6, 4};   // sums to 40
-                core.CharCreate(sp, (1u << 0) | (1u << 7) | (1u << 9));
+                core.CharCreate(sp, (1u << 0) | (1u << 7) | (1u << 9), (1u << 0) | (1u << 3));   // tags Firearms / Medic / Science, traits Bruiser / Fast Shot
                 autoCreate = false;
             }
+        } else if (wasCreating && inGame) {
+            wasCreating = false;
+            uiState.charSheet = openChar;   // created: into the world with the window closed
         }
 
         // ---- chat input ----
@@ -295,12 +314,17 @@ int main(int argc, char** argv) {
             }
             if (in.enter) { core.SendChat(input); input.clear(); typing = false; }
             else if (in.escape) { input.clear(); typing = false; }
-        } else if (in.enter) {
+        } else if (in.enter && !creating) {
             typing = true;
         }
 
         // ---- hotkeys and mouse ----
-        if (!typing && inGame) {
+        if (!typing && inGame && !creating) {
+            if (in.keySkill) {   // S: skill cursor (the first press picks the last used skill, further presses cycle, Shift+S backwards)
+                if (uiState.mode == CursorMode::Skill) uiState.skill = (uiState.skill + (in.shift ? kSkillCount - 1 : 1)) % kSkillCount;
+                uiState.mode = CursorMode::Skill;
+                uiState.charSheet = false;
+            }
             if (in.keyAttack) uiState.mode = CursorMode::Attack;
             if (in.keyInventory) uiState.inventory = !uiState.inventory;
             if (in.keyChar) uiState.charSheet = !uiState.charSheet;
@@ -352,6 +376,12 @@ int main(int argc, char** argv) {
                         break;
                     case CursorMode::Pickup:
                         if (item) core.PickUp(item->id);
+                        break;
+                    case CursorMode::Skill:   // the skill on whatever was clicked: yourself, another critter or a map object; one use, then back to Move
+                        if (pr.kind == PickResult::Critter) core.UseSkill(uiState.skill, pr.critter == core.selfId() ? 0 : 1, pr.critter == core.selfId() ? 0 : pr.critter);
+                        else if (item) core.UseSkill(uiState.skill, 2, item->id);
+                        else break;
+                        uiState.mode = CursorMode::Move;
                         break;
                     default: break;
                 }
@@ -499,11 +529,17 @@ int main(int argc, char** argv) {
                 case UiCommand::CharCreate: {
                     uint8_t sp[7];
                     for (int i = 0; i < 7; i++) sp[i] = static_cast<uint8_t>(uiState.draft.special[i]);
-                    core.CharCreate(sp, static_cast<uint16_t>(uiState.draft.tagMask));
+                    core.CharCreate(sp, static_cast<uint16_t>(uiState.draft.tagMask), static_cast<uint16_t>(uiState.draft.traitMask));
                     break;
                 }
                 case UiCommand::SpendSkill: core.SpendSkill(static_cast<int>(c.a), static_cast<int>(c.b)); break;
                 case UiCommand::UseSkill: core.UseSkill(static_cast<int>(c.a)); break;
+                case UiCommand::SelectSkill:
+                    uiState.skill = static_cast<int>(std::min<uint32_t>(c.a, kSkillCount - 1));
+                    uiState.mode = CursorMode::Skill;
+                    uiState.charSheet = false;
+                    break;
+                case UiCommand::Quit: quit = true; break;
             }
         }
         commands.clear();
