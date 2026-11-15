@@ -5,6 +5,7 @@
 //   f3_gdtool <gamedir> guilist       all .gui layouts: parse result and widget statistics
 //   f3_gdtool <gamedir> guitree <Name> exact widget tree of one layout (full parser)
 //   f3_gdtool <gamedir> gui <Name>    widget list of one Interface\*.gui layout
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <functional>
@@ -17,6 +18,53 @@
 #include "gamedata/Tga.h"
 
 using namespace f3::gd;
+
+
+// minimal PNG writer (stored deflate blocks), for looking at the original textures: f3_gdtool <game> png <Name> <out.png>
+static uint32_t Crc32(const uint8_t* d, size_t n, uint32_t c = 0) {
+    static uint32_t t[256];
+    if (!t[1]) for (uint32_t i = 0; i < 256; ++i) { uint32_t v = i; for (int k = 0; k < 8; ++k) v = v & 1 ? 0xEDB88320u ^ (v >> 1) : v >> 1; t[i] = v; }
+    c = ~c;
+    for (size_t i = 0; i < n; ++i) c = t[(c ^ d[i]) & 255] ^ (c >> 8);
+    return ~c;
+}
+static void PngChunk(FILE* f, const char* type, const std::vector<uint8_t>& data) {
+    auto be = [](uint32_t v) { return std::vector<uint8_t>{uint8_t(v >> 24), uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)}; };
+    std::vector<uint8_t> body(type, type + 4);
+    body.insert(body.end(), data.begin(), data.end());
+    auto len = be(static_cast<uint32_t>(data.size()));
+    std::fwrite(len.data(), 1, 4, f);
+    std::fwrite(body.data(), 1, body.size(), f);
+    auto crc = be(Crc32(body.data(), body.size()));
+    std::fwrite(crc.data(), 1, 4, f);
+}
+static bool WritePng(const char* path, int w, int h, const uint8_t* rgba) {
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return false;
+    const uint8_t sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+    std::fwrite(sig, 1, 8, f);
+    auto be = [](uint32_t v) { return std::vector<uint8_t>{uint8_t(v >> 24), uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)}; };
+    std::vector<uint8_t> ihdr = be(w); auto hh = be(h); ihdr.insert(ihdr.end(), hh.begin(), hh.end());
+    ihdr.push_back(8); ihdr.push_back(6); ihdr.push_back(0); ihdr.push_back(0); ihdr.push_back(0);
+    PngChunk(f, "IHDR", ihdr);
+    std::vector<uint8_t> raw;
+    for (int y = 0; y < h; ++y) { raw.push_back(0); raw.insert(raw.end(), rgba + static_cast<size_t>(y) * w * 4, rgba + static_cast<size_t>(y + 1) * w * 4); }
+    std::vector<uint8_t> z = {0x78, 0x01};
+    uint32_t a = 1, b = 0;
+    for (uint8_t v : raw) { a = (a + v) % 65521; b = (b + a) % 65521; }
+    for (size_t pos = 0; pos < raw.size(); pos += 65535) {
+        size_t n = std::min<size_t>(65535, raw.size() - pos);
+        z.push_back(pos + n >= raw.size() ? 1 : 0);
+        z.push_back(n & 255); z.push_back(n >> 8); z.push_back(~n & 255); z.push_back((~n >> 8) & 255);
+        z.insert(z.end(), raw.begin() + pos, raw.begin() + pos + n);
+    }
+    auto ad = be((b << 16) | a);
+    z.insert(z.end(), ad.begin(), ad.end());
+    PngChunk(f, "IDAT", z);
+    PngChunk(f, "IEND", {});
+    std::fclose(f);
+    return true;
+}
 
 int main(int argc, char** argv) {
     if (argc < 3) { std::fprintf(stderr, "usage: f3_gdtool <gamedir> scan|map <Name>|b3d <Name>\n"); return 2; }
@@ -98,6 +146,13 @@ int main(int argc, char** argv) {
             }
             std::printf("dumped %s\n", r->name.c_str());
         }
+        return 0;
+    }
+    if (cmd == "png" && argc >= 5) {
+        Image img;
+        if (!gd.Read(argv[3], kResTga, buf) || !DecodeTga(buf.data(), buf.size(), img)) { std::fprintf(stderr, "png: %s not found / not decodable\n", argv[3]); return 1; }
+        if (!WritePng(argv[4], img.w, img.h, img.rgba.data())) return 1;
+        std::printf("%s: %dx%d -> %s\n", argv[3], img.w, img.h, argv[4]);
         return 0;
     }
     if (cmd == "guilist") {  // every Interface .gui: result of the heuristic reader and of the full tree reader
