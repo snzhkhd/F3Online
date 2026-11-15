@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 #include "Server.h"
@@ -55,9 +56,9 @@ void AmxHost::BindNatives() {
     };
     // Globals are per player while a conversation runs (the protagonist's quest state, persisted with the character);
     // outside a conversation (behaviour scripts) they are the shared world table.
-    auto scope = [this]() -> Critter* { return active_ ? server_.GetWorld().GetCritter(active_->pc) : nullptr; };
-    N["GetGlobal"] = [this, scope](AmxInstance& m, const AmxCell* a, int n) -> AmxCell { return n > 0 ? static_cast<AmxCell>(server_.GetGlobalFor(scope(), m.GetString(a[0]))) : 0; };
-    N["SetGlobal"] = [this, scope](AmxInstance& m, const AmxCell* a, int n) -> AmxCell { if (n > 1) server_.SetGlobalFor(scope(), m.GetString(a[0]), a[1]); return 0; };
+    // Behaviour scripts (no conversation) use the nearest player within 20 cells as the protagonist (see Protagonist()).
+    N["GetGlobal"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell { return n > 0 ? static_cast<AmxCell>(server_.GetGlobalFor(Protagonist(m), m.GetString(a[0]))) : 0; };
+    N["SetGlobal"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell { if (n > 1) server_.SetGlobalFor(Protagonist(m), m.GetString(a[0]), a[1]); return 0; };
     N["GetCurrentHP"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell { Critter* c = CritterOf(a[0]); return c ? c->hp : 0; };
     N["GetMaxHP"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell { Critter* c = CritterOf(a[0]); return c ? c->maxHp : 0; };
     N["AddHP"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {
@@ -120,8 +121,7 @@ void AmxHost::BindNatives() {
     N["UnlockDoor"] = [this, doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { if (Item* d = n > 0 ? doorOf(a[0]) : nullptr) { server_.SetDoorLocked(*d, false); return 1; } return 0; };
     N["LockDoor"] = [this, doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { if (Item* d = n > 0 ? doorOf(a[0]) : nullptr) { server_.SetDoorLocked(*d, true); return 1; } return 0; };
     N["IsLocked"] = [doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { Item* d = n > 0 ? doorOf(a[0]) : nullptr; return d && d->locked ? 1 : 0; };
-    for (const char* n : {"AddToTeam", "SetTeamAttitude", "SetTeamRank", "CreateSquad", "AddToSquad", "SetSquadAttitude", "SetSquadRank",
-                          "ClearActions", "AttachSound", "RemoveSound", "SetValue"})
+    for (const char* n : {"AddToTeam", "SetTeamAttitude", "SetSquadAttitude", "AttachSound", "RemoveSound", "SetValue"})
         N[n] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };
 
     // ---- dialogue natives (.scra). Argument order = reverse of the push order in the listing (a[0] is the last pushed value).
@@ -147,11 +147,7 @@ void AmxHost::BindNatives() {
         return 1;
     };
     N["PCSpeaker"] = [this](AmxInstance&, const AmxCell*, int) -> AmxCell { return active_ ? static_cast<AmxCell>(active_->pc) : 0; };
-    auto playerOf = [this](AmxInstance&) -> Critter* {
-        if (active_) return server_.GetWorld().GetCritter(active_->pc);
-        for (auto& [id, c] : server_.GetWorld().Critters()) if (c->IsPlayer() && c->mapId != 0) return c.get();
-        return nullptr;
-    };
+    auto playerOf = [this](AmxInstance& m) -> Critter* { return Protagonist(m); };
     // quest journal: task state lives in the globals table as "Task<id>" (1 open, 2 closed) so Lua and scripts can read it
     N["OpenTask"] = [this, playerOf](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
         if (n < 1) return 0;
@@ -181,6 +177,7 @@ void AmxHost::BindNatives() {
         Critter* npc = CritterOf(a[0]); Critter* pc = CritterOf(a[1]);
         return npc && pc && pc->IsPlayer() && StartDialog(*pc, *npc) ? 1 : 0;
     };
+    BindActionNatives();   // overrides the stubs above (squads, ranks, ClearActions) and adds the A_* queue
 }
 
 // ------------------------------------------------------------------ dialogue engine
@@ -347,7 +344,11 @@ void AmxHost::AttachObject(const Item& it) {
 }
 
 void AmxHost::Detach(uint64_t key) {
-    instances_.erase(key);
+    if (auto it = instances_.find(key); it != instances_.end()) {
+        graveyard_.push_back(std::move(it->second));
+        instances_.erase(it);
+    }
+    actions_.erase(static_cast<CritterId>(key));
     for (auto it = dialogs_.begin(); it != dialogs_.end();) {   // a critter that leaves ends its conversations
         if (it->first == key || it->second.npc == key) {
             if (it->first != key) if (Critter* p = server_.GetWorld().GetCritter(it->first)) server_.SendBuf(*p, gnet::PackG(gnet::DialogClose{}));
@@ -366,16 +367,39 @@ void AmxHost::Tick(uint64_t tick, const std::unordered_set<MapId>& active) {
         if (p) server_.SendBuf(*p, gnet::PackG(gnet::DialogClose{}));
         it = dialogs_.erase(it);
     }
-    for (auto& [key, e] : instances_) {
+    TickActions(active);
+    static const char* traceName = std::getenv("F3_AMX_TRACE");   // debugging: trace the natives of scripts whose name contains this text
+    std::vector<uint64_t> keys;   // snapshot: scripts may spawn or destroy entities while they run
+    keys.reserve(instances_.size());
+    for (auto& kv : instances_) keys.push_back(kv.first);
+    for (const uint64_t key : keys) {
+        auto found = instances_.find(key);
+        if (found == instances_.end()) continue;
+        Entry& e = found->second;
         if (!active.count(e.map)) continue;
+        AmxInstance::SetTrace(traceName && e.name.find(traceName) != std::string::npos);
         if (!e.created) {
             e.created = true;
-            e.inst->Call("OnCreate");
-            e.inst->Call("OnLoad");
+            if (!e.inst->Call("OnCreate")) log::Warn("amx: %s OnCreate failed: %s", e.name.c_str(), e.inst->LastError().c_str());
+            if (!e.inst->Call("OnLoad")) log::Warn("amx: %s OnLoad failed: %s", e.name.c_str(), e.inst->LastError().c_str());
             continue;
         }
-        if (tick % static_cast<uint64_t>(rate) == key % static_cast<uint64_t>(rate)) e.inst->Call("OnUpdate");
+        // OnUpdate(time): the scripts compare the argument (server time in ms) with their own last-update stamp (+200 ms) and return
+        // immediately otherwise; the original engine passed the game time. Called every 5th tick (250 ms at 20 Hz), staggered per entity.
+        const uint64_t period = static_cast<uint64_t>(std::max(1, rate / 4));
+        if (tick % period == key % period) {
+            AmxInstance* inst = e.inst.get();   // the entry itself may be detached by the script (kept alive in the graveyard)
+            const std::string name = e.name;
+            const bool ok = inst->Call("OnUpdate", {static_cast<AmxCell>(server_.NowMs())});
+            auto again = instances_.find(key);
+            if (!ok && again != instances_.end() && !again->second.failedLogged) {
+                again->second.failedLogged = true;
+                log::Warn("amx: %s OnUpdate failed: %s", name.c_str(), inst->LastError().c_str());
+            }
+        }
     }
+    AmxInstance::SetTrace(false);
+    graveyard_.clear();
 }
 
 void AmxHost::CallObject(ItemId id, const char* pub) {

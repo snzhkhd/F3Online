@@ -4,6 +4,7 @@
 // original natives are implemented (entity state, globals, random, time, float math, team stubs); the rest return 0
 // and are logged once. Lua remains the primary scripting layer; see docs/server-data.md.
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -27,6 +28,8 @@ public:
     void DetachCritter(CritterId id) { Detach(id); }
     void Tick(uint64_t tick, const std::unordered_set<MapId>& activeMaps);
     void OnDeath(const Critter& c);
+    void OnAttacked(Critter& victim, Critter& attacker);   // runs the script's OnAttacked(attacker, attacker) (barks etc.)
+    bool IsIdle(CritterId id) const;                        // action queue empty
     void CallObject(ItemId id, const char* pub);   // runs a public (OnOpen / OnClose) of a map object script, if it has one
     size_t Count() const { return instances_.size(); }
     // console helper: load `script` (name without extension), call public `pub`, with native tracing on
@@ -49,11 +52,13 @@ private:
         std::unique_ptr<AmxInstance> inst;
         MapId map = 0;
         bool created = false;
+        bool failedLogged = false;
         std::string name;
     };
     std::shared_ptr<AmxScript> GetScript(const std::string& name);
     std::unique_ptr<AmxInstance> NewInstance(const std::string& scriptName, uint64_t key);
     void BindNatives();
+    void BindActionNatives();   // AmxActions.cpp
     Critter* CritterOf(AmxCell handle);
 
     struct DlgReply { int flag = 0, textId = 0; std::string action, logic; };
@@ -70,12 +75,31 @@ private:
     Dlg* active_ = nullptr;                        // conversation the natives currently write to
     std::unordered_map<std::string, std::shared_ptr<AmxScript>> dlgScripts_;
 
+    // ---- action queue (AmxActions.cpp): A_Wait / A_FloatingSpeechText / A_MoveTo* / A_Attack run one after another per critter
+    enum class ActType { Wait, Speech, Move, Attack };
+    struct Act {
+        ActType type = ActType::Wait;
+        int ms = 0;
+        float x = 0, y = 0;
+        bool run = false, started = false;
+        CritterId target = 0;
+        uint64_t endMs = 0;
+        std::string text;
+    };
+    void QueueAction(CritterId id, Act a);
+    void TickActions(const std::unordered_set<MapId>& active);
+    Critter* Protagonist(AmxInstance& m);   // conversation player, else nearest player to the script owner
+    std::unordered_map<CritterId, std::deque<Act>> actions_;
+    std::unordered_map<CritterId, int> squadOf_, squadRank_, teamRank_;
+    int nextSquad_ = 1;
+
     Server& server_;
     std::filesystem::path dir_;
     bool available_ = false;
     std::unordered_map<std::string, AmxNative> natives_;
     std::unordered_map<std::string, std::shared_ptr<AmxScript>> scripts_;
     std::unordered_map<uint64_t, Entry> instances_;
+    std::vector<Entry> graveyard_;   // detached instances stay alive until the end of the tick (a script may destroy its own entity mid-call)
 };
 
 }  // namespace f3

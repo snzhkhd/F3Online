@@ -165,18 +165,39 @@ logic public (`LA..` sets globals / tasks, then `N<next>`); the node is presente
 (NPC prototype has a dialogue) sends Talk; raylib window with wrapped text and one button per reply; Esc leaves. Verified headless by
 `f3_gametest` (Armstrong: open, 8 choices, goodbye closes); the raylib window itself compiles but was not exercised visually.
 
+## Behaviour host (step 3: NPC behaviours, `AmxHost` + `AmxActions.cpp`)
+
+* `OnUpdate(time)` receives the server time in ms (the scripts compare it with their own stamp; without the argument they never ran). It is
+  called every 250 ms per instance, staggered. A script may destroy its own entity (`DestroyEntity(Myself())`): detached instances live on
+  in a graveyard until the end of the tick.
+* Per player quest globals: `GetGlobal/SetGlobal` for the "protagonist" (the conversation player, else the nearest player within 20 cells)
+  go to that player's `gvars` (saved with the character); other globals stay shared. `scripts/original/tutorial.lua` task/journal state
+  (`Task<id>`, `TaskEntry<id>`) is per player; the door/generator/life-support state is world state (shared) on purpose.
+* Action queue per critter (`A_Wait`, `A_PlayAnim`, `A_MoveToPosition/Entity`, `A_Wander`, `A_FloatingSpeechText`, `A_Kill`, `A_ReloadWeapon`,
+  `ClearActions`, `IsIdle`) executed on the 20 Hz tick; `FloatingSpeechText`/`A_FloatingSpeechText` send the STF text as chat from the NPC.
+* Also bound: `SetFacing`, `SetFacingTarget`, `GetDirectionToEntity`, `PointDistance`, squads/team ranks (`CreateSquad`, `AddToSquad`,
+  `GetSquadID`, `SetSquadRank`, `GetSquadRank`, `SetTeamRank`, `GetTeamRank`), `GetPrimaryAttribute`, `GetTotalSkill`, `DisplayStringRef`,
+  `IsEntityInArea` (the area is a map name), `HasItem`, `PartyHasItem`, `IsInParty`, `GetWayPointCount`, `GetNearestPath`.
+* Decision: `A_Attack` / `A_JustAttack` are accepted but do NOT start combat. Making AMX-driven attacks real broke the combat and walking
+  regression checks (the original attack actions assume the original AI loop); hostility stays with `scripts/npc/hostile.lua`.
+* Still unbound (logged once as "unimplemented native", return 0): `FindObjects`, `GetLOSPoint`, `GetWayPointPosition`, `AttachVEG`, `IsUnderFOW`, ...
+* Debugging: env `F3_AMX_TRACE=<script name substring>` traces every native call of matching live instances; console `amx <script> <public>`
+  runs a test instance with tracing.
+* Test: `f3_gametest --tutorial` against a `--dev-kit` server: Armstrong's dialogue closes Task3224, Frank reacts (bark or own conversation),
+  his dialogue sets `00_Talked_Frank` for this player only.
+
 ## Port status
 
 | script | status |
 |---|---|
-| `00 Corporal Armstrong.scra`, `00 Frank.scra` (all 36 `.scra` use the same natives) | running on the AMX dialogue engine (Armstrong tested; Frank not driven in a test) |
+| `00 Corporal Armstrong.scra`, `00 Frank.scra` (all 36 `.scra` use the same natives) | running on the AMX dialogue engine (Armstrong and Frank driven in `f3_gametest --tutorial`) |
 | `00_TutorialGeneratorRoomDoor01` | Lua `scripts/original/tutorial.lua` (UseSkill lockpick -> `00_Lock_Status`, unlock) |
 | `00_TutorialGenerator01` | Lua port (repair -> `00_Generator_Status`, `00_Life_Support_Status`, task 3231 closed); tested via `/usescript` |
 | `00_TutorialComputer01` | Lua (status message only; map effect `Life_SupportEffects` and message passing not ported) |
 | `00_Tutorial_Vault_Door_Console` | Lua (unlocks/opens `Outer_EntranceDS_Doors*`; the console animation `A_PlayAnim` is not ported) |
-| `00_TutorialFrank.scrb`, `CaptainArmstrong.scrb` | AMX only: starts dialogue via `StartDialogue`; walking/`A_*` actions are unimplemented natives |
+| `00_TutorialFrank.scrb`, `CaptainArmstrong.scrb` | AMX behaviour runs on the action queue: Frank barks / starts his dialogue (tested); Armstrong's OnUpdate runs (not driven further) |
 | insurgents, dogs, barrels, windows, vault dwellers, map scripts, `00_TutorialDefault_VaultDoor` | not ported (insurgent hostility still comes from `scripts/npc/hostile.lua` by team) |
 | everything else (~100 scripts) | not ported; AMX prototype runs their OnCreate/OnUpdate |
 
-Not done: skill-use UI (UseSkill identifiers), the `A_*` action queue, messages, squads/teams, stores, `A_FloatingSpeechText`.
+Not done: skill-use UI for object scripts (UseSkill identifiers), messages between scripts, stores, real AMX-driven attacks, `FindObjects`.
 The Lua hook `on_use(c, obj_id, proto_key, script)` now receives the original script name; `stf(id)`, `set_door_locked`, `set_door_open` are new Lua globals.

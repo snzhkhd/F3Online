@@ -240,7 +240,7 @@ bool AmxInstance::Run(int32_t cipStart) {
             case PUSH_S: push(Get(frm_ + arg())); ++cip; break;
             case POP_PRI: pri_ = pop(); break;
             case POP_ALT: alt_ = pop(); break;
-            case STACK: alt_ = stk_; stk_ += arg(); ++cip; if (stk_ > static_cast<AmxCell>(mem_.size())) return Fail("stack underflow"); if (stk_ < hea_) return Fail("stack overflow"); break;
+            case STACK: alt_ = stk_; stk_ += arg(); ++cip; if (stk_ > static_cast<AmxCell>(mem_.size())) { static char eb[96]; std::snprintf(eb, sizeof eb, "stack underflow (cip %d, stk %d, arg %d, mem %d)", (cip - 2) * 4, stk_, arg(-1), (int)mem_.size()); return Fail(eb); } if (stk_ < hea_) return Fail("stack overflow"); break;
             case HEAP: alt_ = hea_; hea_ += arg(); ++cip; if (hea_ < 0 || hea_ > stk_) return Fail("heap overflow"); break;
             case PROC: push(frm_); frm_ = stk_; break;
             case RET: { frm_ = pop(); AmxCell r = pop(); if (r == -1) return true; jump(r); break; }
@@ -363,7 +363,7 @@ bool AmxInstance::Run(int32_t cipStart) {
                 if (g_trace) {
                     std::string line = script_->natives_[static_cast<size_t>(idx)] + "(";
                     for (int i = 0; i < argc; ++i) line += (i ? ", " : "") + std::to_string(a[static_cast<size_t>(i)]);
-                    log::Info("amx trace: %s)%s", line.c_str(), bound_[static_cast<size_t>(idx)] ? "" : " [unbound]");
+                    log::Info("amx trace[%s]: %s)%s", script_->name_.c_str(), line.c_str(), bound_[static_cast<size_t>(idx)] ? "" : " [unbound]");
                 }
                 if (bound_[static_cast<size_t>(idx)]) {
                     pri_ = (*bound_[static_cast<size_t>(idx)])(*this, a.data(), argc);

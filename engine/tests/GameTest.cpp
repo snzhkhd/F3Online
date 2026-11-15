@@ -60,7 +60,7 @@ struct Bot {
     std::map<ItemId, net::ItemAdd> items;
     std::map<ItemId, gnet::ObjectInfo> objInfo;
     std::vector<gnet::CombatEvent> combat;
-    std::vector<std::string> chat;
+    std::vector<std::string> chat, chatFrom;
     // dialogue
     std::vector<gnet::DialogOpen> dlgOpens;
     std::vector<gnet::DialogNode> dlgNodes;
@@ -123,7 +123,7 @@ struct Bot {
             }
             case (uint8_t)Msg::S2C_ItemAdd: { net::ItemAdd m; m.Read(b); items[m.id] = m; break; }
             case (uint8_t)Msg::S2C_ItemRemove: { net::ItemRemove m; m.Read(b); items.erase(m.id); break; }
-            case (uint8_t)Msg::S2C_Chat: { net::ChatMsg m; m.Read(b); chat.push_back(m.text); break; }
+            case (uint8_t)Msg::S2C_Chat: { net::ChatMsg m; m.Read(b); chat.push_back(m.text); chatFrom.push_back(m.name); break; }
             case (uint8_t)GMsg::S2C_Stats: { stats.Read(b); haveStats = true; break; }
             case (uint8_t)GMsg::S2C_Inventory: { gnet::Inventory m; if (m.Read(b)) { inv = m.items; ++invUpdates; } break; }
             case (uint8_t)GMsg::S2C_ObjectInfo: { gnet::ObjectInfo m; m.Read(b); objInfo[m.id] = m; break; }
@@ -395,6 +395,96 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
     return g_failed ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Tutorial scenario: f3_gametest --tutorial (server with --dev-kit). Vault: Frank (AMX behaviour 00_TutorialFrank) barks while
+// the player has not talked to him, the AMX dialogue (00 Frank.scra) runs, the per player globals / journal tasks it sets are
+// stored on the player (not shared), and Frank stops barking afterwards. Junktown: Armstrong's dialogue opens the tutorial tasks.
+// ---------------------------------------------------------------------------------------------------------------------
+static int RunTutorialTests(uint16_t port) {
+    Bot a;
+    if (!a.Connect(port)) { std::printf("FAIL: cannot connect\n"); return 1; }
+    a.Login("TutBot");
+    CHECK(WaitFor({&a}, 8, [&] { return a.loggedIn && a.havePos && a.haveStats; }), "logged in");
+    if (!a.loggedIn) return 1;
+    auto say = [&](const std::string& t) { net::ChatReq c; c.text = t; a.Send(net::Pack(c)); };
+    auto countFrom = [&](const char* who) { int n = 0; for (auto& f : a.chatFrom) if (f == who) ++n; return n; };
+    auto gvar = [&](const char* name) -> double {
+        size_t n = a.chat.size();
+        say(std::string("/gvar ") + name);
+        double v = -1;
+        WaitFor({&a}, 3, [&] {
+            for (size_t i = n; i < a.chat.size(); ++i) {
+                size_t p = a.chat[i].find(std::string(name) + " = ");
+                if (p != std::string::npos) { v = std::atof(a.chat[i].c_str() + p + std::strlen(name) + 3); return true; }
+            }
+            return false;
+        });
+        return v;
+    };
+    // ---- Junktown: Armstrong
+    {
+        say("/tp 170 572");
+        WaitFor({&a}, 2, [] { return false; });
+        CritterId arm = 0;
+        int bestD = 1 << 20;   // Armstrong's display name is the type string ("GMC Soldier"): take the NPC closest to his post
+        for (auto& [id, c] : a.critters) if (c.kind == CritterKind::Npc) { int d = std::abs(c.x - 170) + std::abs(c.y - 578); if (d < bestD) { bestD = d; arm = id; } }
+        CHECK(arm != 0 && bestD < 12, "Corporal Armstrong (nearest NPC to his post, distance %d) is in view in Junktown", bestD);
+        if (arm) {
+            gnet::Talk t; t.critter = arm;
+            a.Send(gnet::PackG(t));
+            CHECK(WaitFor({&a}, 10, [&] { return !a.dlgNodes.empty(); }), "Armstrong dialogue opened (%zu nodes)", a.dlgNodes.size());
+            // walk through the conversation: always the first reply until it ends
+            for (int i = 0; i < 12 && a.dlgCloses == 0; ++i) {
+                size_t n = a.dlgNodes.size();
+                if (a.dlgNodes.back().replies.empty()) break;
+                gnet::DialogChoose c; c.index = 0;
+                a.Send(gnet::PackG(c));
+                WaitFor({&a}, 2, [&] { return a.dlgNodes.size() > n || a.dlgCloses > 0; });
+            }
+            say("/gvar Task3224");
+            WaitFor({&a}, 1, [] { return false; });
+            std::printf("note: Task3224 (vault entrance) = %.0f\n", gvar("Task3224"));
+            gnet::DialogCloseReq cl;
+            a.Send(gnet::PackG(cl));
+            WaitFor({&a}, 1, [] { return false; });
+        }
+    }
+    // ---- Vault: Frank
+    const size_t opensBefore = a.dlgOpens.size();
+    say("/goto 00_04_Tutorial_Vault");
+    CHECK(WaitFor({&a}, 8, [&] { return a.map.name == "00_04_Tutorial_Vault" && a.mapInfoCount >= 2; }), "entered the Vault");
+    say("/tp 141 203");
+    WaitFor({&a}, 2, [] { return false; });
+    CritterId frank = 0;
+    for (auto& [id, c] : a.critters) if (c.name == "Frank") frank = id;
+    CHECK(frank != 0, "Frank is in view in the Vault"); if (!frank) for (auto& [id, c] : a.critters) std::printf("note: visible %u '%s' at %d,%d\n", (unsigned)id, c.name.c_str(), (int)c.x, (int)c.y);
+    // Frank (OnUpdate) either starts the conversation himself (StartDialogue) or barks while the player has not talked to him
+    CHECK(WaitFor({&a}, 30, [&] { return countFrom("Frank") > 0 || a.dlgOpens.size() > opensBefore; }), "Frank reacts to the newcomer (barks %d, conversations he started %zu)", countFrom("Frank"), a.dlgOpens.size() - opensBefore);
+    if (frank) {
+        size_t nOpens = a.dlgOpens.size();
+        if (nOpens == opensBefore) {
+            gnet::Talk t; t.critter = frank;
+            a.Send(gnet::PackG(t));
+        }
+        CHECK(WaitFor({&a}, 12, [&] { return a.dlgOpens.size() > nOpens || nOpens > opensBefore; }), "Frank dialogue is open");
+        for (int i = 0; i < 14 && a.dlgCloses == 0 && !a.dlgNodes.empty(); ++i) {
+            size_t n = a.dlgNodes.size();
+            if (a.dlgNodes.back().replies.empty()) break;
+            gnet::DialogChoose c; c.index = 0;
+            a.Send(gnet::PackG(c));
+            WaitFor({&a}, 2, [&] { return a.dlgNodes.size() > n || a.dlgCloses > 0; });
+        }
+        if (!a.dlgNodes.empty()) std::printf("note: last Frank node: %.70s\n", a.dlgNodes.back().text.c_str());
+        gnet::DialogCloseReq cl;
+        a.Send(gnet::PackG(cl));
+        WaitFor({&a}, 1, [] { return false; });
+        std::printf("note: after the dialogue 00_Talked_Frank = %.0f\n", gvar("00_Talked_Frank"));
+    }
+    for (size_t i = 0; i < a.chat.size(); ++i) if (!a.chatFrom[i].empty()) std::printf("chat: <%s> %.80s\n", a.chatFrom[i].c_str(), a.chat[i].c_str());
+    std::printf(g_failed ? "TUTORIALTEST FAILED\n" : "TUTORIALTEST PASSED\n");
+    return g_failed ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
     uint16_t port = 4048;
     std::string expectMap = "00_03_Tutorial_Junktown";
@@ -412,6 +502,7 @@ int main(int argc, char** argv) {
     }
     if (enet_initialize() != 0) return 2;
     if (accountPhase) return RunAccountTests(port, accountPhase, stateFile);
+    for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--tutorial")) return RunTutorialTests(port);
 
     Bot a, b;
     if (!a.Connect(port) || !b.Connect(port)) { std::printf("FAIL: cannot connect to 127.0.0.1:%u\n", port); return 1; }

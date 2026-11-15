@@ -6,9 +6,9 @@
 local M = {}
 
 local function task_done(c, task, entry)      -- CloseTask(task) + AddEntry(task, entry)
-    set_global("Task" .. task, 2)
+    c:set_gvar("Task" .. task, 2)   -- journal state is per player (the world state below stays shared)
     c:tell("Task completed: " .. stf(task))
-    if entry then set_global("TaskEntry" .. task, entry); c:tell("Journal: " .. stf(entry)) end
+    if entry then c:set_gvar("TaskEntry" .. task, entry); c:tell("Journal: " .. stf(entry)) end
 end
 
 local handlers = {}

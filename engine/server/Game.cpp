@@ -897,6 +897,11 @@ void Server::OnAttacked(Critter& t, Critter& attacker) {
                 o->nextRepathTick = 0;
             }
     }
+    if (amx_) {
+        Critter* tp = world_.GetCritter(t.id);
+        Critter* ap = world_.GetCritter(aid);
+        if (tp && ap) amx_->OnAttacked(*tp, *ap);
+    }
     if (scripting_) {
         Critter* tp = world_.GetCritter(t.id);
         Critter* ap = world_.GetCritter(aid);
