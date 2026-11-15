@@ -63,8 +63,20 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
     // ---- generic pieces
     auto Digits = [&](const std::string& tens, const std::string& ones, int v) {
         v = std::clamp(v, 0, 99);
-        if (const gd::GuiNode* n = Nd(tens)) Blit(Texture("f3_digit_" + std::to_string(v / 10) + ".tga"), Rc(*n));
-        if (const gd::GuiNode* n = Nd(ones)) Blit(Texture("f3_digit_" + std::to_string(v % 10) + ".tga"), Rc(*n));
+        const Roll ro = RollOf(tens, v);
+        auto one = [&](const std::string& name, int div) {
+            const gd::GuiNode* n = Nd(name);
+            if (!n) return;
+            const Rectangle r = Rc(*n);
+            const int fd = (ro.from / div) % 10, td = (ro.to / div) % 10;
+            if (!ro.rolling() || fd == td) { Blit(Texture("f3_digit_" + std::to_string(td) + ".tga"), r); return; }
+            BeginScissorMode(static_cast<int>(r.x), static_cast<int>(r.y), static_cast<int>(std::ceil(r.width)), static_cast<int>(std::ceil(r.height)));
+            Blit(Texture("f3_digit_" + std::to_string(fd) + ".tga"), Rectangle{r.x, r.y - ro.dir * ro.p * r.height, r.width, r.height});
+            Blit(Texture("f3_digit_" + std::to_string(td) + ".tga"), Rectangle{r.x, r.y + ro.dir * (1 - ro.p) * r.height, r.width, r.height});
+            EndScissorMode();
+        };
+        one(tens, 10);
+        one(ones, 1);
     };
     // draw the BtnUp / BtnDown picture children of a button (Down while `on`)
     auto BtnPic = [&](const gd::GuiNode* b, bool on, bool enabled = true) {
@@ -152,8 +164,18 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         lab(r.name, kSkillNames[i], 0);
         int bv = PreviewSkillBase(i, sp);
         int tv = creating ? bv + (tagged ? 20 : 0) : sh.skill[i];
-        lab(r.base, std::to_string(bv), 1);
-        lab(r.total, std::to_string(tv), 1);
+        auto labRoll = [&](Rectangle q, const std::string& key, int v) {
+            const Roll ro = RollOf(key, v);
+            if (!ro.rolling()) { lab(q, std::to_string(v), 1); return; }
+            BeginScissorMode(static_cast<int>(q.x), static_cast<int>(q.y - 1), static_cast<int>(std::ceil(q.width)), static_cast<int>(std::ceil(q.height)) + 2);
+            Rectangle a = q, b = q;
+            a.y -= ro.dir * ro.p * q.height; b.y += ro.dir * (1 - ro.p) * q.height;
+            lab(a, std::to_string(ro.from), 1);
+            lab(b, std::to_string(ro.to), 1);
+            EndScissorMode();
+        };
+        labRoll(r.base, "skB" + std::to_string(i), bv);
+        labRoll(r.total, "skT" + std::to_string(i), tv);
         if (creating) {
             if (click && rowHot) {
                 if (tagged) d.tagMask &= ~(1u << i);

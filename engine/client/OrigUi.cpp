@@ -178,6 +178,17 @@ void OrigUi::Text(const Font& f, const std::string& s, float x, float y, float s
     DrawTextEx(f, s.c_str(), Vector2{std::floor(x), std::floor(y)}, size, 1, c);
 }
 
+OrigUi::Roll OrigUi::RollOf(const std::string& key, int v) {
+    const double now = GetTime();
+    RollSt& r = rollers_[key];
+    if (r.shown == INT_MIN) { r.shown = r.from = v; r.t0 = -10; }
+    if (v != r.shown) { r.dir = v > r.shown ? 1 : -1; r.from = r.shown; r.shown = v; r.t0 = now; }
+    float p = static_cast<float>(std::clamp((now - r.t0) / 0.25, 0.0, 1.0));
+    p = p * p * (3 - 2 * p);
+    if (now - r.t0 >= 0.25) p = 1;
+    return Roll{r.from, r.shown, r.dir, p};
+}
+
 float OrigUi::DrawSpeech(const std::string& text, float cx, float bottomY, Color c, float alpha, float maxW) {
     const Font& f = haveFonts_ ? gothic_ : GetFontDefault();
     const float fs = 16;

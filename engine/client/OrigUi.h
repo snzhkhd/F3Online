@@ -2,6 +2,7 @@
 // Original-art HUD: the action bar and the inventory window drawn from the original game's Interface\*.gui layouts and
 // TGA textures (read from the game install at run time, never copied into the repository). See docs/formats/gui.md.
 // When the layouts, textures or fonts are missing Load() fails and the renderer keeps its plain raylib HUD.
+#include <climits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -73,6 +74,12 @@ private:
     int charTab_ = 0;                                              // 0 derived stats, 1 damage thresholds
     std::string charHint_;
     double charHintUntil_ = 0;
+    // odometer-style number change on the character screens: the shown value of every digit window / number label is tracked by key,
+    // a change starts a ~250 ms roll (increase = the old digit leaves upwards, the new one comes from below; decrease = reverse)
+    struct RollSt { int shown = INT_MIN, from = 0; double t0 = -10; int dir = 1; };
+    struct Roll { int from = 0, to = 0, dir = 1; float p = 1; bool rolling() const { return p < 1 && from != to; } };
+    std::unordered_map<std::string, RollSt> rollers_;
+    Roll RollOf(const std::string& key, int v);
     Font fallouty_{}, gothic_{};
     bool haveFonts_ = false;
     bool ok_ = false;
