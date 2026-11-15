@@ -300,16 +300,40 @@ public:
         Rectangle panel = ChatPanel();
         DrawRectangleRec(panel, Color{0, 0, 0, 140});
         if (ui.chat) {
+            // word-wrap every message to the panel width, show the newest lines that fit
             const int lineH = 16, maxLines = static_cast<int>(panel.height / lineH);
-            int count = static_cast<int>(ui.chat->size());
-            int start = std::max(0, count - maxLines);
-            int y = static_cast<int>(panel.y) + 2;
-            for (int i = start; i < count; ++i, y += lineH) {
+            const int maxW = static_cast<int>(panel.width) - 12;
+            std::vector<std::pair<std::string, Color>> wrapped;
+            const int count = static_cast<int>(ui.chat->size());
+            for (int i = std::max(0, count - 40); i < count; ++i) {
                 const ChatLine& l = (*ui.chat)[i];
                 std::string line = l.name.empty() ? l.text : l.name + ": " + l.text;
                 Color c = l.channel == ChatChannel::System ? Color{140, 220, 255, 255} : RAYWHITE;
-                DrawText(line.c_str(), static_cast<int>(panel.x) + 6, y, 14, c);
+                std::string cur;
+                size_t pos = 0;
+                while (pos < line.size()) {
+                    size_t sp = line.find(' ', pos);
+                    std::string word = line.substr(pos, sp == std::string::npos ? std::string::npos : sp - pos + 1);
+                    pos = sp == std::string::npos ? line.size() : sp + 1;
+                    while (MeasureText(word.c_str(), 14) > maxW && word.size() > 1) {  // very long word: hard split
+                        size_t n = word.size();
+                        while (n > 1 && MeasureText(word.substr(0, n).c_str(), 14) > maxW) --n;
+                        if (!cur.empty()) { wrapped.emplace_back(cur, c); cur.clear(); }
+                        wrapped.emplace_back(word.substr(0, n), c);
+                        word = word.substr(n);
+                    }
+                    if (!cur.empty() && MeasureText((cur + word).c_str(), 14) > maxW) {
+                        wrapped.emplace_back(cur, c);
+                        cur.clear();
+                    }
+                    cur += word;
+                }
+                if (!cur.empty()) wrapped.emplace_back(cur, c);
             }
+            int first = std::max(0, static_cast<int>(wrapped.size()) - maxLines);
+            int y = static_cast<int>(panel.y) + 2;
+            for (size_t i = first; i < wrapped.size(); ++i, y += lineH)
+                DrawText(wrapped[i].first.c_str(), static_cast<int>(panel.x) + 6, y, 14, wrapped[i].second);
         }
         Rectangle in{panel.x, panel.y + panel.height + 4, panel.width, 24};
         DrawRectangleRec(in, ui.chatInputActive ? Color{30, 30, 60, 220} : Color{0, 0, 0, 90});
