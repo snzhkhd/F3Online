@@ -342,9 +342,9 @@ public:
         };
         if (mode == CursorMode::Attack && curAttack_) { drawCentred(curAttack_); return; }
         if (mode == CursorMode::Skill && curTarget_) { drawCentred(curTarget_); return; }
-        DrawTexture(*curDefault_, static_cast<int>(mp.x), static_cast<int>(mp.y), WHITE);
-        const Texture2D* icon = mode == CursorMode::Talk ? curTalk_ : (mode == CursorMode::Use || mode == CursorMode::Pickup) ? curUse_ : nullptr;
-        if (icon) DrawTexture(*icon, static_cast<int>(mp.x) + curDefault_->width / 2, static_cast<int>(mp.y) + curDefault_->height / 2, WHITE);   // native size
+        // Talk / Use cursor images already contain the arrow (the default cursor is cut from TalkCursor): draw them in place of the default
+        const Texture2D* img = mode == CursorMode::Talk && curTalk_ ? curTalk_ : (mode == CursorMode::Use || mode == CursorMode::Pickup) && curUse_ ? curUse_ : curDefault_;
+        DrawTexture(*img, static_cast<int>(mp.x), static_cast<int>(mp.y), WHITE);
     }
 
     void DrawUiInner(const UiView& ui) {

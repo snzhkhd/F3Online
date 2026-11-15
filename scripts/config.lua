@@ -25,7 +25,7 @@ config = {
     ApBase                    = 5,     -- max AP = ApBase + Agility / ApAgilityDiv
     ApAgilityDiv              = 2,
     WalkSpeed                 = 9.0,   -- cells per second (1 cell = 0.5 world unit): 4.5 units/s, the stride of the Walk clip
-    RunSpeed                  = 18.0,  -- 9 units/s, the stride of the Run clip
+    RunSpeed                  = 20.0,  -- 9 units/s, the stride of the Run clip		18.0
     MoveClearance             = 0.3,   -- cells kept from walls by smoothed (string pulled) path segments
     AttackMinMs               = 400,   -- attack duration = clamp(weapon cost word * AttackMsPerCost, min, max): 9mm 800 ms,
     AttackMaxMs               = 1000,  -- heavy weapons are capped (a long action must never lock walking for seconds)
