@@ -15,6 +15,21 @@ Completeness labels: **full** = logic is in the native/its direct callee; **engi
 * Vectors are `float[3]` passed by reference; floats are IEEE bits in cells; `Distance`, `PointDistance`, `GetFacing`, `GetDirectionToEntity` return **truncated integers**.
 * Units are world units (1 world unit = 2 of our 0.5 cells).
 
+## Implementation status (our server, `engine/server/Amx*.cpp`)
+
+Done and tested in `f3_gametest` (`/amxnative`, dev-kit servers): the mismatches of this document are fixed. **Done:** `Distance`, `PointDistance`, `GetFacing`,
+`GetDirectionToEntity` (truncated ints), `SetFacing`, `SetFacingTarget`, `A_MoveToPosition` / `A_Wander` / `FindObjects` / `GetPosition` / `GetWayPointPosition`
+(float[3], world units), `A_MoveToEntity` (stop distance, reachability), `HasDied` (`_DEAD_<name>` counter), `IsDead` (unresolved = 1), `HasItem` / `PartyHasItem`
+(counts by resource name), `floatdiv` / `floatround` / `floatcmp` / `floatfract`, `AddToSquad(entity, squad)` (the argument order in the old table was wrong; AddToTeam is
+(entity, team) too), `Set/GetTeamAttitude`, `Set/GetSquadAttitude`, exact argument counts via `Argc` (warn once, return 0), `FindObjects` + `GetObject` + `GetType`,
+`GetWayPointCount`, `GetNearestPath`, `GetNavPointCount/Position` (always empty), `AttachVEG` / `RemoveVEG` / `GetVEGID` (ids only), `A_Attack` / `A_JustAttack`
+(through `Server::TickCombat`), `GetLOS` / `GetLOSPoint` (grid approximation), `IsUnderFOW` (server model).
+Findings from the source while implementing: the `FindObjects` order is farthest first (`dist(a) >= dist(b)`), `RecordDeath` has no caller in any demo script or engine path
+(our `_DEAD_` counter is an addition so that scripts can observe deaths), `GetNavPoint*` are empty because the demo maps have no EMNP.
+**Still unbound:** `MessageGetArg`, `MessageArgCount`, `SendMessage`, `SendMessageToTeam`, `A_SendMessage`, `FloatingDamageText`, `FindEntity`, `MatchEntity`, `FindTeamMembers`,
+`MapEffectSetActive`, `MapEffectResetElapsedTime`, `GiveNewItem`, `IsItemEquipped`, `EquipItem`, `SetModel`, `ActivateEntity`, `DeactivateEntity`. **Stubs:** `AddToTeam`, `AttachSound`,
+`RemoveSound`, `SetValue`, `IsInParty`, `A_ReloadWeapon`, `StartStore` (original no-op), `A_PlayAnim` (queue slot only). See `docs/amx-scripts.md` for the approximations.
+
 ## Table
 
 | Native | Where (file : function) | Completeness | Semantics to replicate |
@@ -25,11 +40,11 @@ Completeness labels: **full** = logic is in the native/its direct callee; **engi
 | GetGender / GetRace | GameScriptCreatureNatives.cpp | full | `baseValues[5]` / `baseValues[3]` from the GCRE chunk (also GetEthnicity `[6]`, GetSubRace `valueD8`, GetLevel `[0]`) |
 | GetType | GameScriptQueryNatives.cpp | full | `entityClass`: 1 critter, 2 usable, 3 door, 4 container, 5 item, 6 weapon, 7 armor, 9 ammo |
 | GetObject | GameScriptQueryNatives.cpp + startup/FrameLookupCaches.cpp | full | entity id from a frame list handle, 0 when index out of range. Lists live one frame |
-| FindObjects | GameScriptObjectSearch.cpp (`FindObjects`) + openje graphics `OctreeShape.cpp` | **full** | `(out handle, float pos[3], float radius) -> count`. Owner's map, owner excluded, only `renderEnabled` objects. Circle in the XZ plane against each object's AABB (height ignored). Sorted with `dist(a) >= dist(b)` (farthest first, needs a runtime check). Output cell written only when count>0; handles are per frame |
+| FindObjects | GameScriptObjectSearch.cpp (`FindObjects`) + openje graphics `OctreeShape.cpp` | **full** | `(out handle, float pos[3], float radius) -> count`. Owner's map, owner excluded, only `renderEnabled` objects. Circle in the XZ plane against each object's AABB (height ignored). Sorted with `dist(a) >= dist(b)` (farthest first, verified in the source; implemented). Output cell written only when count>0; handles are per frame |
 | FindEntity | GameScriptNatives.cpp (`FindEntityByName`) | full | exact instance-name lookup, 0 if absent |
 | MatchEntity | GameScriptQueryNatives.cpp | full | glob (`*`, `?`, `\`), case-insensitive over `displayName` of all live entities; returns count + list handle |
 | IsDead | GameScriptQueryNatives.cpp | engine | `state==7 \|\| currentHealth<=0`; unresolved entity -> 1 |
-| HasDied | GameScriptDeathRecords.cpp @5C8750 | full | reads global `_DEAD_<name>` (a **counter**, not `IsDead`); `RecordDeath` increments `_DEAD_<displayName>`. Our alias `HasDied=IsDead` is wrong |
+| HasDied | GameScriptDeathRecords.cpp @5C8750 | full | reads global `_DEAD_<name>` (a **counter**, not `IsDead`); `RecordDeath` increments `_DEAD_<displayName>`. Our old alias `HasDied=IsDead` was wrong (fixed). Takes a NAME string. `RecordDeath` has no caller in the demo |
 | IsIdle | GameScriptQueryNatives.cpp | engine | action queue idle |
 | IsInParty | GameScriptQueryNatives.cpp | full | party membership |
 | IsInDialogue | GameScriptDialogueNatives.cpp @5C39D0 | full | entity is speaker or listener of any active dialogue |
@@ -71,7 +86,7 @@ Completeness labels: **full** = logic is in the native/its direct callee; **engi
 | SetTeamAttitude / SetSquadAttitude | same | engine | directed A->B value; engine itself never reads attitudes for combat |
 | GetTeamAttitude / GetSquadAttitude | GameScriptAttitudeNatives.cpp | full | equal ids -> 1; unset -> 0 |
 | FindTeamMembers | GameScriptTeamNatives.cpp | full | `(out handle, team) -> count`, list per frame |
-| GetSquadID / GetSquadRank / SetSquadRank / AddToSquad | GameScriptTeamNatives.cpp | full | parallel to teams; check argument order of AddToSquad in source before binding |
+| GetSquadID / GetSquadRank / SetSquadRank / AddToSquad | GameScriptTeamNatives.cpp | full | parallel to teams; `AddToSquad(entity, squad)` (checked, implemented) |
 | SendMessage | GameScriptMessageNatives.cpp | full | enqueues `[from,msg,args...]` on target; one message per entity update, delivered to `OnMessage(from,msg)` before `OnUpdate` |
 | SendMessageToTeam | GameScriptMessageGroups.cpp | full | all members; squad variant returns delivered count |
 | A_SendMessage | GameScriptMessageGroups.cpp | full | queued as an action on the caller |
@@ -107,13 +122,13 @@ Completeness labels: **full** = logic is in the native/its direct callee; **engi
 
 | Native | Verdict | Implementation notes |
 |---|---|---|
-| FindObjects | implementable now | circle(XZ) vs object AABB over renderEnabled objects on the owner's map; we already have positions, use radius + AABB half extents (about 1 world unit for critters) |
-| GetLOS / GetLOSPoint | implementable, needs data | needs the EMAP height grid (not exported yet) or a simplified blocked-cells Bresenham on our walkability grid (acceptable approximation, scripts only use it as boolean) |
-| GetWayPointCount/Position, GetNearestPath, nav points | implementable now | EPTH/EMNP chunks, already in the map format docs |
-| AttachVEG/RemoveVEG/GetVEGID, AttachSound | trivial | server only allocates ids and broadcasts; return the id |
-| IsUnderFOW | needs design | no server-side model; recommended: true when no player in the party can see the cell |
-| A_Attack / A_JustAttack | implementable | native is trivial, behaviour = combat model (findings section 2), which our `Game.cpp` combat only approximates |
-| StartStore | nothing to do | original no-op |
+| FindObjects | **done** | circle(XZ) vs object AABB over renderEnabled objects on the owner's map; we already have positions, use radius + AABB half extents (about 1 world unit for critters) |
+| GetLOS / GetLOSPoint | **done (grid approximation)** | needs the EMAP height grid (not exported yet) or a simplified blocked-cells Bresenham on our walkability grid (acceptable approximation, scripts only use it as boolean) |
+| GetWayPointCount/Position, GetNearestPath, nav points | **done** | EPTH/EMNP chunks, already in the map format docs |
+| AttachVEG/RemoveVEG/GetVEGID, AttachSound | VEG **done** (ids), AttachSound stub | server only allocates ids and broadcasts; return the id |
+| IsUnderFOW | **done (server model)** | no server-side model; recommended: true when no player in the party can see the cell |
+| A_Attack / A_JustAttack | **done** | native is trivial, behaviour = combat model (findings section 2), which our `Game.cpp` combat only approximates |
+| StartStore | stub bound | original no-op |
 | Skill use, lockpick, repair | **not natives** | `GameActionUseSkill.cpp`, `GameSkillMenu.cpp`, `GameEntityUseSkill.cpp`: engine calls the script public `UseSkill(actor, selector)` and `ShowSkills()/GetUsableSkills()`; the work is in the `.scrb` scripts |
 
 ## Verdict
