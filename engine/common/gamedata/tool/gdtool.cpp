@@ -2,9 +2,12 @@
 //   f3_gdtool <gamedir> scan          parse every b3d / tga / tre / emap / mapdata, print failures + totals
 //   f3_gdtool <gamedir> map <Name>    stats for one map (tre base name)
 //   f3_gdtool <gamedir> b3d <Name>    bounds / groups of one model
+//   f3_gdtool <gamedir> guilist       all .gui layouts: parse result and widget statistics
+//   f3_gdtool <gamedir> guitree <Name> exact widget tree of one layout (full parser)
 //   f3_gdtool <gamedir> gui <Name>    widget list of one Interface\*.gui layout
 #include <chrono>
 #include <cstdio>
+#include <functional>
 #include <cstring>
 #include <string>
 #include "gamedata/B3d.h"
@@ -95,6 +98,41 @@ int main(int argc, char** argv) {
             }
             std::printf("dumped %s\n", r->name.c_str());
         }
+        return 0;
+    }
+    if (cmd == "guilist") {  // every Interface .gui: result of the heuristic reader and of the full tree reader
+        for (const ResourceInfo* r : gd.List(kResGui)) {
+            GuiFile g;
+            GuiTree t;
+            std::string err;
+            const bool have = gd.Read(r->name, kResGui, buf);
+            const bool okOld = have && ParseGui(buf.data(), buf.size(), g);
+            const bool okTree = have && ParseGuiTree(buf.data(), buf.size(), t, &err);
+            size_t kinds[5] = {0, 0, 0, 0, 0};
+            std::function<void(const std::vector<GuiNode>&)> walk = [&](const std::vector<GuiNode>& v) { for (auto& n : v) { if (n.type < 5) ++kinds[n.type]; walk(n.children); } };
+            if (okTree) walk(t.roots);
+            std::printf("%-22s v%u %-6s tree=%4zu (win %zu btn %zu pic %zu lbl %zu edit %zu) heuristic=%-4s %s %zu bytes\n", r->name.c_str(), t.version,
+                        okTree ? "OK" : "FAIL", okTree ? t.Count() : 0, kinds[0], kinds[1], kinds[2], kinds[3], kinds[4], okOld ? std::to_string(g.widgets.size()).c_str() : "FAIL",
+                        err.c_str(), buf.size());
+        }
+        return 0;
+    }
+    if (cmd == "guitree" && argc >= 4) {  // exact widget tree of one layout: name, type, rect, texture, text id, tooltip ids
+        std::string nm = argv[3];
+        GuiTree t;
+        std::string err;
+        if (!gd.Read(nm, kResGui, buf) || !ParseGuiTree(buf.data(), buf.size(), t, &err)) { std::fprintf(stderr, "guitree %s: %s\n", nm.c_str(), err.c_str()); return 1; }
+        static const char* tn[] = {"win", "btn", "pic", "lbl", "edt"};
+        std::function<void(const GuiNode&, int)> dump = [&](const GuiNode& n, int d) {
+            std::printf("%*s%s %s (%d,%d,%d,%d)%s%s tex=%s", d * 2, "", tn[n.type < 5 ? n.type : 0], n.name.c_str(), n.rect[0], n.rect[1], n.rect[2], n.rect[3], n.hidden ? " hidden" : "", n.skin.empty() ? "" : (" skin=" + n.skin).c_str(), n.picture().c_str());
+            if (n.type >= 3) std::printf(" str=%u font=%s/%u col=%08X al=%u", n.strRef, n.fontName.c_str(), n.fontSize, n.textColor, n.alignment);
+            if (n.tipTitleRef || n.tipTextRef) std::printf(" tip=%u/%u", n.tipTitleRef, n.tipTextRef);
+            if (!n.tipImage.empty()) std::printf(" tipimg=%s", n.tipImage.c_str());
+            std::printf("\n");
+            for (auto& c : n.children) dump(c, d + 1);
+        };
+        std::printf("%s v%u hidden=%d roots=%zu total=%zu %s\n", t.name.c_str(), t.version, t.hidden, t.roots.size(), t.Count(), err.c_str());
+        for (auto& n : t.roots) dump(n, 0);
         return 0;
     }
     if (argc < 4) return 2;

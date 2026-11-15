@@ -87,4 +87,117 @@ bool ParseGui(const uint8_t* d, size_t size, GuiFile& out) {
     return !out.widgets.empty();
 }
 
+// ------------------------------------------------------------------------------------------------ full tree parser
+
+namespace {
+struct Rd {
+    const uint8_t* d; size_t n, p = 0; bool ok = true;
+    bool Raw(void* out, size_t k) {
+        if (!ok || p + k > n) return ok = false;
+        std::memcpy(out, d + p, k); p += k; return true;
+    }
+    uint32_t U32() { uint32_t v = 0; Raw(&v, 4); return v; }
+    uint8_t U8() { uint8_t v = 0; Raw(&v, 1); return v; }
+    std::string Str() {
+        uint32_t k = U32();
+        if (!ok || k > 4096 || p + k > n) { ok = false; return {}; }
+        std::string s(reinterpret_cast<const char*>(d) + p, k); p += k;
+        size_t z = s.find('\0'); if (z != std::string::npos) s.resize(z);
+        return s;
+    }
+};
+
+bool ReadNode(Rd& r, uint32_t type, int version, GuiNode& w, int depth) {
+    if (depth > 32 || type > 4) return false;
+    w.type = type;
+    if (type == GuiNode::Button) {
+        w.state = r.U32();
+        if (version >= 4) { w.keyboard = r.U8() != 0; w.soundDown = r.Str(); w.soundUp = r.Str(); w.soundEnter = r.Str(); }
+    }
+    r.Raw(w.rect, 16);
+    w.name = r.Str();
+    w.hidden = r.U8() != 0; w.frameVisible = r.U8() != 0; w.centerVisible = r.U8() != 0;
+    w.skin = r.Str();
+    w.color = r.U32();
+    r.Raw(w.clientRect, 16);
+    if (version >= 2) { w.value60 = r.U8(); w.materialModes = r.U32(); }
+    if (version >= 3) {
+        w.str0 = r.Str(); w.tipTextRef = r.U32(); w.str1 = r.Str(); w.tipTitleRef = r.U32(); w.tipImage = r.Str();
+    }
+    for (auto& f : w.frag) {
+        f.tileMode = r.U32(); f.frameW = r.U32(); f.frameH = r.U32(); f.frameRate = r.U32(); f.curFrame = r.U32(); f.frameCount = r.U32();
+        f.texture = r.Str();
+        r.Raw(&f.z, 4); f.color = r.U32(); r.Raw(f.rect, 16);
+    }
+    for (;;) {
+        uint32_t idx = r.U32();
+        if (!r.ok) return false;
+        if (idx == 0xFFFFFFFFu) break;
+        if (idx > 100000) return false;
+        w.strings.emplace_back(idx, r.Str());
+    }
+    uint32_t count = r.U32();
+    if (!r.ok || count > 5000) return false;
+    w.children.resize(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t t = r.U32();
+        if (!r.ok || !ReadNode(r, t, version, w.children[i], depth + 1)) return false;
+    }
+    if (type == GuiNode::Label || type == GuiNode::Edit) {
+        w.strRef = r.U32(); w.fontName = r.Str(); w.fontFlags = r.U32(); w.fontSize = r.U32(); w.fontCharset = r.U32(); w.textColor = r.U32();
+        w.textFrame = r.U8(); w.wrap = r.U8(); w.alignment = r.U32();
+        for (auto& v : w.pad) v = r.U32();
+        if (version >= 1) w.valign = r.U32();
+    }
+    return r.ok;
+}
+const GuiNode* FindIn(const std::vector<GuiNode>& v, const std::string& n) {
+    for (const auto& c : v) {
+        if (c.name == n) return &c;
+        if (const GuiNode* f = FindIn(c.children, n)) return f;
+    }
+    return nullptr;
+}
+size_t CountIn(const std::vector<GuiNode>& v) { size_t k = v.size(); for (const auto& c : v) k += CountIn(c.children); return k; }
+}  // namespace
+
+const GuiNode* GuiNode::Child(const std::string& n) const {
+    for (const auto& c : children) if (c.name == n) return &c;
+    return nullptr;
+}
+const GuiNode* GuiNode::Find(const std::string& n) const { return FindIn(children, n); }
+const GuiNode* GuiTree::Find(const std::string& n) const { return FindIn(roots, n); }
+size_t GuiTree::Count() const { return CountIn(roots); }
+
+bool ParseGuiTree(const uint8_t* data, size_t size, GuiTree& out, std::string* err) {
+    out = GuiTree{};
+    auto fail = [&](const char* m) { if (err) *err = m; return false; };
+    Rd r{data, size};
+    uint32_t head = 0;
+    r.Raw(&head, 4);
+    if (head == 0x20495547u) {   // "GUI "
+        uint32_t t = r.U32();
+        switch (t) {
+            case 0x302E3156u: out.version = 1; break;
+            case 0x312E3156u: out.version = 2; break;
+            case 0x322E3156u: out.version = 3; break;
+            case 0x332E3156u: out.version = 4; break;
+            default: return fail("unknown GUI version");
+        }
+    } else {
+        r.p = 0;   // headerless (version 0) file
+    }
+    out.name = r.Str();
+    out.hidden = r.U8() != 0;
+    uint32_t count = r.U32();
+    if (!r.ok || count > 5000) return fail("bad header");
+    out.roots.resize(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t type = r.U32();
+        if (!r.ok || !ReadNode(r, type, static_cast<int>(out.version), out.roots[i], 0)) return fail("bad widget record");
+    }
+    if (r.p != size && err) *err = "trailing bytes: " + std::to_string(size - r.p);
+    return true;
+}
+
 }  // namespace f3::gd
