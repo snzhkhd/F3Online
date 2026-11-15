@@ -312,6 +312,31 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
             CHECK(WaitFor({&a}, 3, [&] { return a.sheet.level == 2; }), "1000 xp -> level 2 (level %d, xp %u)", a.sheet.level, a.sheet.xp);
             WaitFor({&a}, 1, [] { return false; });
             CHECK(a.sheet.skillPoints == 21 && a.sheet.xpNext == 3000 && a.stats.maxHp == 37, "level up: +21 skill points (%u), next level at %u xp (3000), maxHp %d (37)", a.sheet.skillPoints, a.sheet.xpNext, a.stats.maxHp);
+            {   // skill cursor: UseSkill target validation (before AP is spent) and self / critter targets
+                auto said = [&](Bot& b, const char* needle) { for (auto& t : b.chat) if (t.find(needle) != std::string::npos) return true; return false; };
+                a.chat.clear();
+                gnet::UseSkill us; us.skill = 7; us.kind = 1; us.target = 999999;   // Medic on a critter that does not exist
+                a.Send(gnet::PackG(us));
+                CHECK(WaitFor({&a}, 3, [&] { return said(a, "not here"); }), "UseSkill on a missing critter is refused");
+                a.chat.clear();
+                us.kind = 2;                                                         // ... and on a missing object
+                a.Send(gnet::PackG(us));
+                CHECK(WaitFor({&a}, 3, [&] { return said(a, "not here"); }), "UseSkill on a missing object is refused");
+                a.chat.clear();
+                us.kind = 0; us.target = 0;                                          // Medic on yourself: full health
+                a.Send(gnet::PackG(us));
+                CHECK(WaitFor({&a}, 3, [&] { return said(a, "not hurt"); }), "UseSkill on yourself reaches the script (Medic: not hurt)");
+                a.chat.clear();
+                WaitFor({&a}, 1.5, [] { return false; });   // break time of the previous use
+                us.kind = 1; us.target = obs.myId;                                   // Medic on another critter: in range -> script answer, else refused
+                a.Send(gnet::PackG(us));
+                CHECK(WaitFor({&a}, 3, [&] { return said(a, "not hurt") || said(a, "too far"); }), "UseSkill on another critter is range-checked and reaches the script");
+                a.chat.clear();
+                us.skill = 14; us.kind = 0;                                          // skill index out of range: ignored
+                a.Send(gnet::PackG(us));
+                WaitFor({&a}, 1, [] { return false; });
+                CHECK(a.chat.empty(), "UseSkill with an invalid skill index is ignored");
+            }
         }
         enet_peer_disconnect(obs.peer, 0);
         {   // name taken (case insensitive)
@@ -444,6 +469,7 @@ static int RunTutorialTests(uint16_t port) {
     CHECK(WaitFor({&a}, 8, [&] { return a.loggedIn && a.havePos && a.haveStats; }), "logged in");
     if (!a.loggedIn) return 1;
     auto say = [&](const std::string& t) { net::ChatReq c; c.text = t; a.Send(net::Pack(c)); };
+    if (!std::getenv("F3_AMX_ATTACKS")) { say("/amxattacks off"); WaitFor({&a}, 0.3, [] { return false; }); }   // scripted NPCs would otherwise hunt the bot (A_Attack is real)
     auto countFrom = [&](const char* who) { int n = 0; for (auto& f : a.chatFrom) if (f == who) ++n; return n; };
     auto gvar = [&](const char* name) -> double {
         size_t n = a.chat.size();
@@ -563,6 +589,7 @@ int main(int argc, char** argv) {
     b.Login("GameBotB");
     CHECK(WaitFor({&a, &b}, 8, [&] { return b.loggedIn && b.havePos && b.haveStats; }), "bot B logged in");
     if (a.failed || b.failed || !a.loggedIn || !b.loggedIn) return 1;
+    { net::ChatReq aa; aa.text = "/amxattacks off"; a.Send(net::Pack(aa)); WaitFor({&a, &b}, 0.3, [] { return false; }); }   // scripted NPC aggression (A_Attack is real) must not disturb the bots
 
     // --- real map
     CHECK(a.map.name == expectMap, "start map is '%s' (got '%s')", expectMap.c_str(), a.map.name.c_str());
@@ -796,7 +823,7 @@ int main(int argc, char** argv) {
         size_t combat0 = a.combat.size();
         gnet::Attack at; at.id = bid;
         a.Send(gnet::PackG(at));
-        bool shot = WaitFor({&a, &b}, 8, [&] { return a.combat.size() > combat0; });
+        bool shot = WaitFor({&a, &b}, 8, [&] { for (size_t i = combat0; i < a.combat.size(); ++i) if (a.combat[i].attacker == a.myId) return true; return false; });
         CHECK(shot, "attack started (first shot)");
         const double tShot = Bot::LocalMs();
         const gnet::WaitState* aw = LastWait(a, (uint8_t)GMsg::C2S_Attack);
@@ -938,6 +965,241 @@ int main(int argc, char** argv) {
             gnet::DialogCloseReq cl;
             a.Send(gnet::PackG(cl));
             WaitFor({&a, &b}, 0.3, [] { return false; });
+        }
+    }
+
+    // --- AMX natives vs. the original (docs/research/vbdecomp-script-natives.md). `/amxnative <program>` runs natives by name on a --dev-kit server
+    // (AmxHost::NativeTest): int 12 | f1.5 float | v1,2,3 vector | p<critter> entity position | s<text> string | n<critter> instance name |
+    // &buf output buffer | @buf its first cell | `name=Native ...` stores the result in buf `name`; calls are separated by ';'.
+    {
+        auto parts = [](const std::string& r) {
+            std::vector<std::string> v;
+            std::string s = r.rfind("amx: ", 0) == 0 ? r.substr(5) : r;
+            size_t p = 0;
+            while (true) {
+                size_t q = s.find(" | ", p);
+                v.push_back(s.substr(p, q == std::string::npos ? std::string::npos : q - p));
+                if (q == std::string::npos) break;
+                p = q + 3;
+            }
+            return v;
+        };
+        auto amx = [&](const std::string& prog) {
+            WaitFor({&a, &b}, 0.28, [] { return false; });   // chat rate limit: 10 requests, +1 per 250 ms
+            size_t n = a.chat.size();
+            net::ChatReq c; c.text = "/amxnative " + prog;
+            a.Send(net::Pack(c));
+            std::string res;
+            WaitFor({&a, &b}, 4, [&] { for (size_t i = n; i < a.chat.size(); ++i) if (a.chat[i].rfind("amx: ", 0) == 0) { res = a.chat[i]; return true; } return false; });
+            return parts(res);
+        };
+        auto ret = [](const std::vector<std::string>& v, size_t i) -> long long {   // "Native=<int>[<float>]"
+            if (i >= v.size()) return -999999;
+            size_t e = v[i].find('=');
+            return e == std::string::npos ? -999999 : std::atoll(v[i].c_str() + e + 1);
+        };
+        auto buf = [](const std::vector<std::string>& v, size_t i, float f[3]) -> bool {   // " name:i=.. f=(x,y,z) s='..'"
+            if (i >= v.size()) return false;
+            size_t p = v[i].find("f=(");
+            return p != std::string::npos && std::sscanf(v[i].c_str() + p, "f=(%f,%f,%f)", &f[0], &f[1], &f[2]) == 3;
+        };
+        auto bufStr = [](const std::vector<std::string>& v, size_t i) -> std::string {
+            if (i >= v.size()) return "";
+            size_t p = v[i].find("s='");
+            return p == std::string::npos ? "" : v[i].substr(p + 3, v[i].size() - p - 4);
+        };
+        auto say = [&](const std::string& t) { net::ChatReq c; c.text = t; a.Send(net::Pack(c)); WaitFor({&a, &b}, 0.28, [] { return false; }); };
+        const std::string A = std::to_string(a.myId), B = std::to_string(b.myId);
+        WaitFor({&a, &b}, 1.0, [] { return false; });
+        auto stand = [&](const Bot& x, float& fx, float& fy) { fx = (&x == &a) ? a.fx : x.pos.x + 0.5f; fy = (&x == &a) ? a.fy : x.pos.y + 0.5f; };
+
+        // integer returns: Distance / PointDistance / GetDirectionToEntity are truncated ints in world units (2 cells), not float bits
+        {
+            float ax, ay, bx, by;
+            stand(a, ax, ay); stand(b, bx, by);
+            const double dist = std::hypot(ax - bx, ay - by) / 2.0;
+            auto r = amx("Distance " + A + " " + B + ";Distance " + A + ";Distance " + A + " " + B + " " + A + ";PointDistance v0,0,0 v3,0,4;PointDistance v0,0,0 v1,0,1;PointDistance v1,5,1 v1,5,1");
+            CHECK(r.size() == 6 && std::fabs(static_cast<double>(ret(r, 0)) - dist) <= 1.0 && ret(r, 0) <= dist + 0.001 && ret(r, 0) >= 0,
+                  "Distance(A,B) is the truncated world-unit distance: %lld (exact %.2f)", ret(r, 0), dist);
+            CHECK(r.size() == 6 && ret(r, 1) == 0 && ret(r, 2) == 0, "Distance with 1 or 3 arguments returns 0 (exact argument count like VerifyScriptParameters)");
+            CHECK(r.size() == 6 && ret(r, 3) == 5 && ret(r, 4) == 1 && ret(r, 5) == 0, "PointDistance (float[3] vectors) is a truncated int: 5, 1 (1.41), 0");
+            // direction A -> B: acos(z) in degrees, negative for x < 0, truncated (0 = +Z = cell +y)
+            const double ex = (bx - ax), ez = (by - ay), len = std::hypot(ex, ez);
+            double yaw = len > 0 ? std::acos(ez / len) * 57.295776 : 0;
+            if (ex < 0) yaw = -yaw;
+            auto d = amx("GetDirectionToEntity " + A + " " + B);
+            CHECK(d.size() == 1 && std::fabs(static_cast<double>(ret(d, 0)) - yaw) <= 1.0 && (yaw >= 0) == (ret(d, 0) >= 0 || std::fabs(yaw) < 1.0),
+                  "GetDirectionToEntity(A,B) = %lld degrees (exact %.2f)", ret(d, 0), yaw);
+        }
+        // facing: integer degrees, 0 = +Z, 90 = +X, +-180 = -Z; 8 directions stored, so 37 reads back 45
+        {
+            auto r = amx("SetFacing " + A + " 90;GetFacing " + A + ";SetFacing " + A + " 180;GetFacing " + A + ";SetFacing " + A + " -90;GetFacing " + A + ";SetFacing " + A + " 0;GetFacing " + A + ";SetFacing " + A + " 37;GetFacing " + A);
+            CHECK(r.size() == 10 && ret(r, 1) == 90 && ret(r, 3) == 180 && ret(r, 5) == -90 && ret(r, 7) == 0 && ret(r, 9) == 45,
+                  "SetFacing/GetFacing round trip in integer degrees: %lld %lld %lld %lld %lld", ret(r, 1), ret(r, 3), ret(r, 5), ret(r, 7), ret(r, 9));
+        }
+        // Pawn float module
+        {
+            auto r = amx("floatdiv f1 f0;floatdiv f-1 f0;floatdiv f1 f2;x=floatdiv f0 f0;floatcmp @x f1;floatfract f-1.25");
+            CHECK(r.size() == 6 && ret(r, 0) == 0x7F800000 && ret(r, 1) == static_cast<int>(0xFF800000u) && ret(r, 2) == 0x3F000000, "floatdiv by zero is +-infinity (IEEE), 1/2 = 0.5");
+            CHECK(r.size() == 6 && ret(r, 4) == -1, "floatcmp with NaN is -1 (not equal, not greater)");
+            CHECK(r.size() == 6 && ret(r, 5) == 0x3E800000, "floatfract(-1.25) = 0.75: bits %lld", ret(r, 5));
+            auto q = amx("floatround f2.5 0;floatround f-2.5 0;floatround f-1.5 1;floatround f1.2 2;floatround f-1.7 3;floatround f1.7 3;floatround f2.5");
+            CHECK(q.size() == 7 && ret(q, 0) == 3 && ret(q, 1) == -2 && ret(q, 2) == -2 && ret(q, 3) == 2 && ret(q, 4) == -1 && ret(q, 5) == 1 && ret(q, 6) == 3,
+                  "floatround modes: round(2.5)=3, round(-2.5)=-2 (floor(x+.5)), floor(-1.5)=-2, ceil(1.2)=2, trunc(-1.7)=-1, trunc(1.7)=1, no mode = round: %lld %lld %lld %lld %lld %lld %lld",
+                  ret(q, 0), ret(q, 1), ret(q, 2), ret(q, 3), ret(q, 4), ret(q, 5), ret(q, 6));
+        }
+        // AddToSquad(entity, squad): entity first
+        {
+            auto r = amx("sq=CreateSquad;AddToSquad " + A + " @sq;GetSquadID " + A + ";AddToSquad " + B + " @sq;GetSquadID " + B);
+            CHECK(r.size() == 5 && ret(r, 0) >= 1 && ret(r, 1) == 1 && ret(r, 2) == ret(r, 0) && ret(r, 4) == ret(r, 0),
+                  "AddToSquad(entity, squad) assigns the squad (squad %lld, A in %lld, B in %lld)", ret(r, 0), ret(r, 2), ret(r, 4));
+        }
+        // HasItem is a COUNT (resource name, case-insensitive)
+        {
+            auto r = amx("HasItem " + A + " sArmorLeather_Outfit.ARM;HasItem " + A + " sarmorleather_outfit.arm;HasItem " + A + " sKitsTool_Kit.ITM;HasItem " + A + " sAmmo9mm.AMO;HasItem " + A);
+            int ammo = 0, ammoEntries = 0;
+            for (auto& e : a.inv) if (e.name.find("Ammo") != std::string::npos || e.name.find("ammo") != std::string::npos) { ammo += e.count; ++ammoEntries; }
+            CHECK(r.size() == 5 && ret(r, 0) == 1 && ret(r, 1) == 1 && ret(r, 2) == 0 && ret(r, 4) == 0, "HasItem returns the count: leather outfit %lld, any case %lld, absent %lld, wrong argument count %lld", ret(r, 0), ret(r, 1), ret(r, 2), ret(r, 4));
+            CHECK(r.size() == 5 && ret(r, 3) >= 1 && (ammoEntries == 0 || ret(r, 3) <= ammo), "HasItem(Ammo9mm.AMO) is a count (%lld of %d ammo in the inventory)", ret(r, 3), ammo);
+        }
+        // line of sight on the walkability grid (approximation, see docs/amx-scripts.md): compare with a client side Bresenham
+        {
+            auto los = [&](TilePos p, TilePos q) {   // endpoints excluded, same walk as AmxHost::LineClear
+                int x0 = p.x, y0 = p.y, x1 = q.x, y1 = q.y;
+                const int sx0 = x0, sy0 = y0;
+                int dx = std::abs(x1 - x0), dy = -std::abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
+                for (int g = 0; g < 4096; ++g) {
+                    if (!(x0 == sx0 && y0 == sy0) && !(x0 == x1 && y0 == y1) && !Walkable(a, x0, y0)) return false;
+                    if (x0 == x1 && y0 == y1) break;
+                    int e2 = 2 * err;
+                    if (e2 >= dy) { err += dy; x0 += sx; }
+                    if (e2 <= dx) { err += dx; y0 += sy; }
+                }
+                return true;
+            };
+            auto pr = amx("GetPosition " + A + " &p;GetLOS " + A + " " + B + ";GetLOS " + A + " 0;GetLOS " + A);
+            float p[3] = {0, 0, 0};
+            CHECK(pr.size() == 4 && buf(pr, 0, p), "GetPosition writes a float[3] in world units (%.2f, %.2f, %.2f)", p[0], p[1], p[2]);
+            CHECK(pr.size() == 4 && ret(pr, 1) == (los(a.pos, b.pos) ? 2 : 0), "GetLOS(A,B) = %lld matches the grid line (%d)", ret(pr, 1), los(a.pos, b.pos) ? 2 : 0);
+            CHECK(pr.size() == 4 && ret(pr, 2) == 0 && ret(pr, 3) == 0, "GetLOS with an unknown entity or a wrong argument count returns 0");
+            const float ox = p[0] - a.fx * 0.5f, oz = p[2] - a.fy * 0.5f;   // world = cell / 2 + map origin
+            int clear = 0, blocked = 0, bad = 0;
+            std::string prog;
+            std::vector<int> expect;
+            for (int k = 0; k < 6; ++k) {
+                int ang = k * 60;
+                for (int r = 8; r <= 40; r += 8) {
+                    TilePos t{static_cast<int16_t>(a.pos.x + std::lround(std::cos(ang * 3.14159 / 180) * r)), static_cast<int16_t>(a.pos.y + std::lround(std::sin(ang * 3.14159 / 180) * r))};
+                    if (!Walkable(a, t.x, t.y)) continue;
+                    char tmp[96];
+                    std::snprintf(tmp, sizeof tmp, "%sGetLOSPoint %s v%.4f,0,%.4f", prog.empty() ? "" : ";", A.c_str(), ox + (t.x + 0.5f) * 0.5f, oz + (t.y + 0.5f) * 0.5f);
+                    if (prog.size() + std::strlen(tmp) > 150) break;
+                    prog += tmp;
+                    expect.push_back(los(a.pos, t) ? 2 : 0);
+                }
+            }
+            auto lr = amx(prog);
+            for (size_t i = 0; i < expect.size() && i < lr.size(); ++i) { if (ret(lr, i) == expect[i]) (expect[i] ? ++clear : ++blocked); else ++bad; }
+            CHECK(lr.size() == expect.size() && bad == 0 && clear + blocked > 3, "GetLOSPoint agrees with the grid line for %zu points (%d clear, %d blocked, %d mismatches)", expect.size(), clear, blocked, bad);
+        }
+        // IsUnderFOW: players see themselves; a critter far from every player is under fog
+        {
+            auto r = amx("IsUnderFOW " + A + ";IsUnderFOW " + B + ";IsUnderFOW 0;IsUnderFOW 2;Distance " + A + " 2");
+            CHECK(r.size() == 5 && ret(r, 0) == 0 && ret(r, 1) == 0 && ret(r, 2) == 0, "IsUnderFOW is 0 for players (and for an unknown entity)");
+            if (r.size() == 5 && ret(r, 4) * 2 > 60) CHECK(ret(r, 3) == 1, "IsUnderFOW is 1 for the far insurgent (%lld units from every player)", ret(r, 4));
+            else std::printf("note: critter 2 is %lld units away, skipped the under-fog check\n", r.size() == 5 ? ret(r, 4) : -1);
+        }
+        // FindObjects (farthest first, owner excluded, output cell untouched when nothing is found) + GetObject + GetType
+        {
+            auto r = amx("n=FindObjects &h p" + A + " f30;x0=GetObject @h 0;x1=GetObject @h 1;d0=Distance " + A + " @x0;d1=Distance " + A + " @x1;GetType @x0;n2=FindObjects &g p" + A + " f0.1");
+            const long long n = ret(r, 0), x0 = ret(r, 1), x1 = ret(r, 2), d0 = ret(r, 3), d1 = ret(r, 4);
+            CHECK(r.size() == 7 && n >= 2 && x0 > 0 && x1 > 0 && x0 != a.myId && x1 != a.myId, "FindObjects finds %lld entities within 30 units, the owner is not among them (%lld, %lld)", n, x0, x1);
+            CHECK(r.size() == 7 && d0 >= d1 && d0 <= 31, "FindObjects sorts farthest first (distances %lld >= %lld)", d0, d1);
+            CHECK(r.size() == 7 && ret(r, 5) >= 1 && ret(r, 5) <= 9, "GetType of a found entity is an entity class (%lld)", ret(r, 5));
+            CHECK(r.size() == 7 && ret(r, 6) == 0 && r[6].find("g:i=0") != std::string::npos, "FindObjects with nothing in range returns 0 and leaves the output cell unchanged");
+        }
+        // waypoints (EPTH) and nav points (EMNP): map data of the owner's map
+        {
+            auto r = amx("GetWayPointCount sWaypoint01;GetWayPointCount sWaypoint04;GetWayPointCount sNoSuchPath;GetWayPointPosition sWaypoint01 1 &w;GetWayPointPosition sWaypoint01 4 &w2;GetWayPointPosition sNoSuchPath 0 &w3;GetNearestPath " + A + " &nm;GetNavPointCount;GetNavPointPosition 0 &np");
+            float w[3] = {0, 0, 0};
+            CHECK(r.size() == 9 && ret(r, 0) == 4 && ret(r, 1) == 5 && ret(r, 2) == 0, "GetWayPointCount: Waypoint01 has %lld, Waypoint04 %lld, unknown 0 (%lld)", ret(r, 0), ret(r, 1), ret(r, 2));
+            CHECK(r.size() == 9 && ret(r, 3) == 1 && buf(r, 3, w) && std::fabs(w[0] - 91.9215f) < 0.01f && std::fabs(w[2] - 182.1852f) < 0.01f && w[1] == 0.f,
+                  "GetWayPointPosition(Waypoint01, 1) = (%.3f, %.3f, %.3f) world units", w[0], w[1], w[2]);
+            CHECK(r.size() == 9 && ret(r, 4) == 0 && ret(r, 5) == 0, "GetWayPointPosition: index past the end and unknown path return 0");
+            CHECK(r.size() == 9 && ret(r, 6) == 1 && bufStr(r, 6).rfind("Waypoint0", 0) == 0, "GetNearestPath writes the name of the nearest path ('%s')", bufStr(r, 6).c_str());
+            CHECK(r.size() == 9 && ret(r, 7) == 0 && ret(r, 8) == 0, "no nav points on the demo maps (count %lld)", ret(r, 7));
+        }
+        // visual effects: the server only allocates ids
+        {
+            auto r = amx("v=AttachVEG " + A + " sFX_Test.veg;GetVEGID " + A + " sFX_Test.veg;GetVEGID " + A + " sother.veg;RemoveVEG " + A + " @v;GetVEGID " + A + " sFX_Test.veg;AttachVEG 0 sFX_Test.veg");
+            CHECK(r.size() == 6 && ret(r, 0) >= 1 && ret(r, 1) == ret(r, 0) && ret(r, 2) == 0 && ret(r, 3) == 1 && ret(r, 4) == 0 && ret(r, 5) == 0,
+                  "AttachVEG/GetVEGID/RemoveVEG track an effect id (%lld), unknown entity returns 0", ret(r, 0));
+        }
+        // HasDied reads the _DEAD_<instance name> counter; a dying NPC bumps it; IsDead of an unknown entity is 1
+        {
+            CritterId victim = 0;
+            for (auto& [id, cr] : a.critters)
+                if (cr.kind == CritterKind::Npc && id != a.myId && id != b.myId && cr.name.find("GMC Soldier") == std::string::npos && cr.name.find("Insurgent") == std::string::npos) { victim = id; break; }
+            if (victim) {
+                const std::string V = std::to_string(victim);
+                auto r = amx("HasDied n" + V + ";IsDead " + V + ";IsDead 0;A_Kill " + V);
+                CHECK(r.size() == 4 && ret(r, 0) == 0 && ret(r, 1) == 0 && ret(r, 2) == 1 && ret(r, 3) == 1, "before its death: HasDied 0, IsDead 0 (unknown entity: IsDead 1)");
+                WaitFor({&a, &b}, 0.4, [] { return false; });
+                auto r2 = amx("HasDied n" + V + ";IsDead " + V + ";HasDied sNoSuchName;HasDied");
+                CHECK(r2.size() == 4 && ret(r2, 0) == 1 && ret(r2, 1) == 1 && ret(r2, 2) == 0 && ret(r2, 3) == 0, "after A_Kill: HasDied(name) = %lld (the _DEAD_<name> counter), IsDead 1", ret(r2, 0));
+            } else CHECK(false, "found an NPC to kill for the HasDied check");
+        }
+        // A_MoveToPosition takes a float[3] (world units) and A_Wander two rectangle vectors: use bot B as the walker
+        {
+            TilePos goal = b.pos;
+            bool found = false;
+            for (int r = 6; r >= 3 && !found; --r)
+                for (int dx = -r; dx <= r && !found; ++dx)
+                    for (int dy = -r; dy <= r && !found; ++dy)
+                        if (std::max(std::abs(dx), std::abs(dy)) == r && Walkable(b, b.pos.x + dx, b.pos.y + dy) &&
+                            SegmentWalkable(b, b.pos.x + 0.5f, b.pos.y + 0.5f, b.pos.x + dx + 0.5f, b.pos.y + dy + 0.5f)) { goal = {static_cast<int16_t>(b.pos.x + dx), static_cast<int16_t>(b.pos.y + dy)}; found = true; }
+            CHECK(found, "found a walk goal for A_MoveToPosition (%d,%d)", goal.x, goal.y);
+            if (found) {
+                char prog[200];
+                std::snprintf(prog, sizeof prog, "A_MoveToPosition %s p%s,%.3f,%.3f 5 0;IsIdle %s;A_MoveToPosition %s p%s,1,1", B.c_str(), B.c_str(),
+                              (goal.x - b.pos.x) * 0.5, (goal.y - b.pos.y) * 0.5, B.c_str(), B.c_str(), B.c_str());
+                auto r = amx(prog);
+                CHECK(r.size() == 3 && ret(r, 0) == 1 && ret(r, 1) == 0 && ret(r, 2) == 0, "A_MoveToPosition(entity, vector, stop, 0) queues a move (IsIdle 0 afterwards); with 3 arguments it returns 0");
+                CHECK(WaitFor({&a, &b}, 10, [&] { return b.pos == goal; }), "bot B walked to the vector's cell %d,%d (at %d,%d)", goal.x, goal.y, b.pos.x, b.pos.y);
+                auto r3 = amx("IsIdle " + B);
+                WaitFor({&a, &b}, 1.0, [] { return false; });
+                r3 = amx("IsIdle " + B);
+                CHECK(r3.size() == 1 && ret(r3, 0) == 1, "the move action finished (IsIdle %lld)", ret(r3, 0));
+                // A_Wander(entity, upperLeft, lowerRight, 1): rectangle around B (upperLeft.z >= lowerRight.z like the original), one repetition
+                auto w = amx("A_Wander " + B + " p" + B + ",-3,3 p" + B + ",3,-3 1;IsIdle " + B);
+                CHECK(w.size() == 2 && ret(w, 0) == 1 && ret(w, 1) == 0, "A_Wander queues wait + move (IsIdle 0)");
+                CHECK(WaitFor({&a, &b}, 14, [&] { auto q = amx("IsIdle " + B); return q.size() == 1 && ret(q, 0) == 1; }), "the wander repetition finishes (wait 1..6 s, then one move)");
+                CHECK(TileDist(b.pos, goal) <= 7, "bot B stayed inside the wander rectangle (at %d,%d, started %d,%d)", b.pos.x, b.pos.y, goal.x, goal.y);
+            }
+        }
+        // A_Attack / A_JustAttack: a real attack through the server combat (weapon, AP, breaktime); one attack per action
+        {
+            say("/forcemiss on");
+            WaitFor({&a, &b}, 2.0, [] { return false; });   // earlier actions' breaktime / AP
+            size_t c0 = a.combat.size();
+            auto ownShots = [&](size_t from) { size_t n = 0; for (size_t i = from; i < a.combat.size(); ++i) if (a.combat[i].attacker == a.myId && a.combat[i].target == b.myId) ++n; return n; };
+            say("/amxattacks on");
+            auto r = amx("A_Attack " + A + " " + B + ";IsIdle " + A + ";A_Attack " + A + ";A_Attack " + A + " 0");
+            CHECK(r.size() == 4 && ret(r, 0) == 1 && ret(r, 1) == 0 && ret(r, 2) == 0 && ret(r, 3) == 0, "A_Attack(entity, target) queues an attack (IsIdle 0), wrong argument count / target 0 return 0");
+            CHECK(WaitFor({&a, &b}, 10, [&] { return ownShots(c0) >= 1; }), "A_Attack makes bot A attack bot B through the server combat (%zu shot(s))", ownShots(c0));
+            WaitFor({&a, &b}, 3.0, [] { return false; });
+            CHECK(ownShots(c0) == 1, "the attack action ends after ONE attack (%zu shots)", ownShots(c0));
+            auto idle = amx("IsIdle " + A);
+            CHECK(idle.size() == 1 && ret(idle, 0) == 1, "bot A is idle again after the attack action");
+            // JustAttack neither walks nor turns: bot A attacks only when B is already in range
+            c0 = a.combat.size();
+            auto j = amx("A_JustAttack " + A + " " + B);
+            WaitFor({&a, &b}, 5.0, [&] { return ownShots(c0) >= 1; });
+            std::printf("note: A_JustAttack on a target %d cells away fired %zu shot(s)\n", TileDist(a.pos, b.pos), ownShots(c0));
+            CHECK(j.size() == 1 && ret(j, 0) == 1, "A_JustAttack(entity, target) is accepted");
+            say("/amxattacks off");
+            say("/forcemiss off");
+            WaitFor({&a, &b}, 1.0, [] { return false; });
         }
     }
 

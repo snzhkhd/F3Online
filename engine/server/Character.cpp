@@ -140,6 +140,26 @@ bool Server::SpendSkillPoints(Critter& c, int skill, int points) {
 
 bool Server::UseSkill(Critter& c, int skill, int kind, uint32_t target) {
     if (!c.created || c.dead || skill < 0 || skill >= kSkillCount) return false;
+    // the target is checked before anything is spent: kind 0 = self, 1 = another critter, 2 = map object (door, container, item);
+    // it must be on the same map and within SkillUseRange tiles
+    if (kind < 0 || kind > 2) { Tell(c, "Invalid skill target."); return false; }
+    if (kind == 1 && (target == 0 || target == c.id)) kind = 0;
+    if (kind == 0) target = 0;
+    if (kind != 0) {
+        TilePos at{};
+        if (kind == 1) {
+            const Critter* t = world_.GetCritter(static_cast<CritterId>(target));
+            if (!t || t->mapId != c.mapId || t->mapId == 0) { Tell(c, "That target is not here."); return false; }
+            at = t->pos;
+        } else {
+            Map* m = world_.GetMap(c.mapId);
+            if (!m) return false;
+            auto it = m->items.find(static_cast<ItemId>(target));
+            if (it == m->items.end()) { Tell(c, "That object is not here."); return false; }
+            at = it->second.pos;
+        }
+        if (TileDist(at, c.pos) > rt_.SkillUseRange) { Tell(c, "You are too far away."); return false; }
+    }
     const int cost = rt_.RtApCostUseSkill * 100;   // whole AP like FOnline (the other RtApCost* keys are 1/100 AP)
     const uint8_t action = static_cast<uint8_t>(GMsgChar::C2S_UseSkill);
     if (CheckAction(c, action, cost) != gnet::ActionResult::Ok) return false;

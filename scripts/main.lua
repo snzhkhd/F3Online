@@ -63,11 +63,21 @@ function on_login(c)
     return true
 end
 
--- Skill use hook (C2S_UseSkill, server checks AP / breaktime first): use_skill(cr, skill_name, value, kind, target_id)
--- kind 0 = no target, 1 = critter, 2 = map object. Return true when the skill did something.
+-- Skill use hook (C2S_UseSkill: the client picks a skill, then clicks a target; the server has already checked that the target
+-- exists on this map and is within SkillUseRange tiles, and checked / spent the AP): use_skill(cr, skill_name, value, kind, target_id)
+-- kind 0 = yourself, 1 = another critter, 2 = map object (door / container / item / usable). Return true when the skill did something.
 function use_skill(c, skill, value, kind, target)
     local t = (kind == 1 and target ~= 0) and get_critter(target) or c
+    local obj = nil
+    if kind == 2 then
+        for _, o in ipairs(get_map(c.map_id):objects()) do
+            if o.id == target then obj = o; break end
+        end
+        if not obj then c:tell("That object is not here."); return true end
+    end
+    local who = (t == c) and "yourself" or t.name
     if skill == "Medic" then
+        if obj then c:tell("First aid does nothing for " .. obj.name .. "."); return true end
         if t.dead then c:tell("It is too late for first aid."); return true end
         if t.hp >= t.max_hp then c:tell((t == c and "You are" or t.name .. " is") .. " not hurt."); return true end
         if t ~= c and c:distance_to(t) > 4 then c:tell("You are too far away."); return true end
@@ -78,8 +88,18 @@ function use_skill(c, skill, value, kind, target)
         c:tell(string.format("You treat %s for %d hit points.", t == c and "yourself" or t.name, heal))
         c:give_xp(5)
         return true
+    elseif skill == "Security" and obj and obj.kind == "door" then
+        if not obj.locked then c:tell("The " .. obj.name .. " is not locked."); return true end
+        if math.random(1, 100) > math.max(value, 10) then c:tell("You fail to pick the lock."); return true end
+        set_door_locked(obj.id, false)
+        c:tell("You pick the lock of the " .. obj.name .. ".")
+        c:give_xp(10)
+        return true
+    elseif skill == "Science" and kind == 1 and t ~= c then
+        c:tell(string.format("%s: %d / %d hit points%s.", t.name, t.hp, t.max_hp, t.dead and " (dead)" or ""))
+        return true
     elseif skill == "Outdoorsman" or skill == "Science" or skill == "Mechanics" or skill == "Security" or skill == "Traps" then
-        c:tell(skill .. " (" .. value .. "%): nothing here that needs it yet.")
+        c:tell(string.format("%s (%d%%) on %s: nothing here that needs it yet.", skill, value, obj and ("the " .. obj.name) or who))
         return true
     end
     return false
