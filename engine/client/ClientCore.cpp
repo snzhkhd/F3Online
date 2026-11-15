@@ -18,7 +18,7 @@ double ClientCore::Now() const {
     return std::chrono::duration<double>(clock::now() - t0).count();
 }
 
-bool ClientCore::Connect(const std::string& host, uint16_t port, const std::string& name) {
+bool ClientCore::Connect(const std::string& host, uint16_t port, const std::string& name, const std::string& password, bool registerAccount) {
     Disconnect();
     if (enet_initialize() != 0) { failReason_ = "enet_initialize failed"; state_ = State::Failed; return false; }
     host_ = enet_host_create(nullptr, 1, 2, 0, 0);
@@ -29,6 +29,8 @@ bool ClientCore::Connect(const std::string& host, uint16_t port, const std::stri
     peer_ = enet_host_connect(host_, &addr, 2, 0);
     if (!peer_) { failReason_ = "no free peer slot"; state_ = State::Failed; return false; }
     name_ = name;
+    password_ = password;
+    register_ = registerAccount;
     state_ = State::Connecting;
     failReason_.clear();
     return true;
@@ -72,9 +74,18 @@ void ClientCore::Poll() {
     while (enet_host_service(host_, &ev, 0) > 0) {
         switch (ev.type) {
             case ENET_EVENT_TYPE_CONNECT: {
-                net::LoginReq req;
-                req.name = name_;
-                Send(net::Pack(req));
+                if (password_.empty()) {
+                    net::LoginReq req;
+                    req.name = name_;
+                    Send(net::Pack(req));
+                } else {
+                    gnet::Auth a;
+                    a.mode = static_cast<uint8_t>(register_ ? gnet::AuthMode::Register : gnet::AuthMode::Login);
+                    a.name = name_;
+                    a.password = password_;
+                    Send(gnet::PackG(a));
+                    password_.assign(password_.size(), '\0'); password_.clear();   // not kept longer than needed
+                }
                 state_ = State::LoggingIn;
                 break;
             }
@@ -266,6 +277,12 @@ void ClientCore::Handle(const uint8_t* data, size_t len) {
 void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
     const double now = Now();
     switch (static_cast<uint8_t>(id)) {
+        case static_cast<uint8_t>(GMsgAuth::S2C_AuthResult): {
+            gnet::AuthResult m;
+            if (!m.Read(b)) return;
+            if (m.code != 0) { failReason_ = m.text; state_ = State::Failed; }
+            break;
+        }
         case static_cast<uint8_t>(GMsg::S2C_Stats): {
             gnet::Stats m;
             if (!m.Read(b)) return;

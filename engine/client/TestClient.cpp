@@ -23,7 +23,8 @@ void Check(bool ok, const char* what) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string host = "127.0.0.1", name = "Bot";
+    std::string host = "127.0.0.1", name = "Bot", password;
+    bool reg = false;
     uint16_t port = kDefaultPort;
     double timeout = 10.0;
     for (int i = 1; i < argc; ++i) {
@@ -32,6 +33,8 @@ int main(int argc, char** argv) {
         if (a == "--host") host = next();
         else if (a == "--port") port = static_cast<uint16_t>(std::atoi(next()));
         else if (a == "--name") name = next();
+        else if (a == "--password") password = next();
+        else if (a == "--register") reg = true;
         else if (a == "--timeout") timeout = std::atof(next());
     }
 
@@ -46,7 +49,7 @@ int main(int argc, char** argv) {
         return pred();
     };
 
-    if (!c.Connect(host, port, name)) { Check(false, "connect call"); return 1; }
+    if (!c.Connect(host, port, name, password, reg)) { Check(false, "connect call"); return 1; }
     bool in = waitFor([&] { return c.state() == ClientCore::State::InGame || c.state() == ClientCore::State::Failed; }, timeout);
     Check(in && c.state() == ClientCore::State::InGame, "login accepted");
     if (c.state() != ClientCore::State::InGame) { std::printf("reason: %s\n", c.failReason().c_str()); return 1; }

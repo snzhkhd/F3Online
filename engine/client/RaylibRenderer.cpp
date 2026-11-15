@@ -163,6 +163,36 @@ public:
     }
 
     void BeginFrame() override { BeginDrawing(); ClearBackground(Color{18, 20, 24, 255}); }
+    void WindowSize(int& w, int& h) const override { w = GetScreenWidth(); h = GetScreenHeight(); }
+    void DrawLogin(const LoginView& v) override {
+        const LoginLayout L(GetScreenWidth(), GetScreenHeight());
+        const Color panel{30, 34, 40, 255}, edge{90, 100, 110, 255}, txt{225, 225, 220, 255}, dim{150, 155, 160, 255}, hot{70, 110, 60, 255}, norm{50, 58, 66, 255};
+        DrawRectangle(L.px, L.py, L.pw, L.ph, panel);
+        DrawRectangleLines(L.px, L.py, L.pw, L.ph, edge);
+        DrawText("F3Online", L.px + 40, L.py + 24, 34, txt);
+        DrawText(v.server.c_str(), L.px + 40, L.py + 66, 14, dim);
+        auto field = [&](const char* label, int x, int y, const std::string& text, bool masked, bool focus) {
+            DrawText(label, x, y - 18, 14, dim);
+            DrawRectangle(x, y, L.fieldW, L.fieldH, Color{16, 18, 22, 255});
+            DrawRectangleLines(x, y, L.fieldW, L.fieldH, focus ? Color{140, 200, 120, 255} : edge);
+            std::string shown = masked ? std::string(text.size(), '*') : text;
+            if (focus && std::fmod(GetTime(), 1.0) < 0.5) shown += "_";
+            DrawText(shown.c_str(), x + 8, y + 8, 20, txt);
+        };
+        field("Name", L.nameX, L.nameY, v.name, false, v.focus == 0);
+        field("Password", L.passX, L.passY, v.password, true, v.focus == 1);
+        auto button = [&](const char* label, int x, int idx) {
+            DrawRectangle(x, L.btnY, L.btnW, L.btnH, v.hover == idx && !v.busy ? hot : norm);
+            DrawRectangleLines(x, L.btnY, L.btnW, L.btnH, edge);
+            const int tw = MeasureText(label, 20);
+            DrawText(label, x + (L.btnW - tw) / 2, L.btnY + 10, 20, v.busy ? dim : txt);
+        };
+        button("Login", L.loginX, 0);
+        button("Register", L.regX, 1);
+        if (!v.error.empty()) DrawText(v.error.c_str(), L.px + 40, L.btnY + L.btnH + 14, 16, Color{240, 110, 90, 255});
+        else if (!v.status.empty()) DrawText(v.status.c_str(), L.px + 40, L.btnY + L.btnH + 14, 16, dim);
+        DrawText("Tab: next field   Enter: log in   (password never stored locally)", L.px + 40, L.py + L.ph - 24, 11, dim);
+    }
     void EndFrame() override {
         ++frame_;
         const double el = GetTime() - startTime_;

@@ -96,7 +96,8 @@ public:
     ~ClientCore();
 
     // Starts connecting; call Poll() until state() leaves Connecting/LoggingIn.
-    bool Connect(const std::string& host, uint16_t port, const std::string& name);
+    // password empty = legacy name-only (guest) login; else password login, or account registration when `registerAccount`.
+    bool Connect(const std::string& host, uint16_t port, const std::string& name, const std::string& password = std::string(), bool registerAccount = false);
     void Disconnect();
     void Poll();  // pumps the network, never blocks
 
@@ -183,7 +184,8 @@ private:
     _ENetPeer* peer_ = nullptr;
     State state_ = State::Disconnected;
     std::string failReason_;
-    std::string name_;
+    std::string name_, password_;
+    bool register_ = false;
     CritterId selfId_ = 0;
     double stepDur_ = 0.2;
     ClientMap map_;

@@ -1,11 +1,13 @@
 // f3_client: raylib game client.
-//   f3_client [--host H] [--port N] [--name NAME] [--gamedir DIR]
+//   f3_client [--host H] [--port N] [--name NAME] [--password PW [--register]] [--guest] [--gamedir DIR]
+// Without --password / --guest a login screen (name, password, Login / Register) is shown first; --name only prefills it.
 //   f3_client --viewmap MAP [--gamedir DIR]   (map viewer without a server)
 // The game directory is auto-detected (see Settings.h); the game loop talks to IRenderer only (see IRenderer.h).
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -21,7 +23,7 @@
 using namespace f3;
 
 static const char* kUsage =
-    "usage: f3_client [--host H] [--port N] [--name NAME] [--gamedir DIR] [--protos FILE|DIR]\n"
+    "usage: f3_client [--host H] [--port N] [--name NAME] [--password PW [--register]] [--guest] [--gamedir DIR] [--protos FILE|DIR]\n"
     "       f3_client --viewmap MAP [--gamedir DIR]     map viewer, no server needed\n"
     "game data: --gamedir, env F3_GAMEDIR, client.cfg (gamedir=...), else auto-detected (F:\\_work\\F3_Demo, ..\\F3_Demo)\n"
     "options:   --no-assets (flat placeholder view)  --size W,H\n"
@@ -85,7 +87,8 @@ int main(int argc, char** argv) {
     Config cfg = LoadConfig();
     std::string host = cfg.count("host") ? cfg["host"] : "127.0.0.1";
     std::string name = cfg.count("name") ? cfg["name"] : "Player";
-    std::string viewMap, protosHint, gameDirArg;
+    std::string viewMap, protosHint, gameDirArg, password;
+    bool doRegister = false, guest = false;
     uint16_t port = cfg.count("port") ? static_cast<uint16_t>(std::atoi(cfg["port"].c_str())) : kDefaultPort;
     bool openInv = false, toggleEquip = false;
     int toggleStep = 0;
@@ -102,6 +105,9 @@ int main(int argc, char** argv) {
         if (a == "--host") { host = next(); hostGiven = true; }
         else if (a == "--port") port = static_cast<uint16_t>(std::atoi(next()));
         else if (a == "--name") name = next();
+        else if (a == "--password") password = next();
+        else if (a == "--register") doRegister = true;
+        else if (a == "--guest") guest = true;
         else if (a == "--gamedir") gameDirArg = next();
         else if (a == "--protos") protosHint = next();
         else if (a == "--no-assets") noAssets = true;
@@ -192,7 +198,12 @@ int main(int argc, char** argv) {
         SaveConfig(c);
     }
     core.SetLegacyOnly(legacy);
-    if (!core.Connect(host, port, name)) log::Error("connect: %s", core.failReason().c_str());
+    // login screen unless the command line already says who to be (--password, or --guest for the legacy name-only login)
+    bool loginPhase = !guest && password.empty();
+    LoginView lv;
+    lv.name = name;
+    lv.server = "server " + host + ":" + std::to_string(port);
+    if (!loginPhase && !core.Connect(host, port, name, guest ? std::string() : password, doRegister)) log::Error("connect: %s", core.failReason().c_str());
 
     bool typing = false;
     std::string input;
@@ -209,6 +220,55 @@ int main(int argc, char** argv) {
     (void)localNote;
 
     while (!renderer->ShouldClose() && !quit) {
+        if (loginPhase) {
+            core.Poll();
+            FrameInput li = renderer->PollInput();
+            if (core.state() == ClientCore::State::InGame) { loginPhase = false; lv.password.clear(); }
+            else {
+                int sw = 1280, sh = 720;
+                renderer->WindowSize(sw, sh);
+                const LoginLayout L(sw, sh);
+                lv.busy = core.state() == ClientCore::State::Connecting || core.state() == ClientCore::State::LoggingIn;
+                if (core.state() == ClientCore::State::Failed && !lv.busy) { lv.error = core.failReason(); lv.status.clear(); }
+                lv.hover = -1;
+                if (LoginLayout::In(li.mouseX, li.mouseY, L.loginX, L.btnY, L.btnW, L.btnH)) lv.hover = 0;
+                else if (LoginLayout::In(li.mouseX, li.mouseY, L.regX, L.btnY, L.btnW, L.btnH)) lv.hover = 1;
+                auto submit = [&](bool reg) {
+                    if (lv.busy) return;
+                    if (lv.name.size() < 2) { lv.error = "enter a name (2-16 letters, digits or _)"; return; }
+                    if (lv.password.size() < 4) { lv.error = "enter a password (at least 4 characters)"; return; }
+                    lv.error.clear();
+                    lv.status = reg ? "Creating the account..." : "Logging in...";
+                    Config c = LoadConfig();   // the name is remembered, the password never
+                    c["host"] = host; c["port"] = std::to_string(port); c["name"] = lv.name;
+                    SaveConfig(c);
+                    if (!core.Connect(host, port, lv.name, lv.password, reg)) lv.error = core.failReason();
+                };
+                if (!lv.busy) {
+                    std::string& f = lv.focus == 0 ? lv.name : lv.password;
+                    for (char ch : li.typed) {
+                        if (lv.focus == 0 ? (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_') && lv.name.size() < kMaxNameLen
+                                          : static_cast<unsigned char>(ch) >= 32 && ch != 127 && lv.password.size() < 64)
+                            f += ch;
+                    }
+                    if (li.backspace && !f.empty()) f.pop_back();
+                    if (li.keyStop) lv.focus ^= 1;
+                    if (li.mouseLeftPressed) {
+                        if (LoginLayout::In(li.mouseX, li.mouseY, L.nameX, L.nameY, L.fieldW, L.fieldH)) lv.focus = 0;
+                        else if (LoginLayout::In(li.mouseX, li.mouseY, L.passX, L.passY, L.fieldW, L.fieldH)) lv.focus = 1;
+                        else if (lv.hover == 0) submit(false);
+                        else if (lv.hover == 1) submit(true);
+                    }
+                    if (li.enter) { if (lv.focus == 0 && !lv.name.empty() && lv.password.empty()) lv.focus = 1; else submit(false); }
+                }
+                renderer->BeginFrame();
+                renderer->DrawLogin(lv);
+                renderer->EndFrame();
+                ++frame;
+                if (runSeconds > 0 && core.Now() > runSeconds + 8) quit = true;
+                continue;
+            }
+        }
         core.Poll();
         FrameInput in = renderer->PollInput();
         const double now = core.Now();

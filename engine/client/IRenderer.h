@@ -85,6 +85,27 @@ struct RendererOptions {
     const ProtoDb* protos = nullptr;
 };
 
+// Login screen (shown before connecting). Layout is shared by the renderer (drawing) and main (hit tests).
+struct LoginView {
+    std::string name, password, error, status, server;
+    int focus = 0;           // 0 name, 1 password
+    bool busy = false;       // connecting / waiting for the server
+    int hover = -1;          // 0 login button, 1 register button
+};
+struct LoginLayout {
+    int px, py, pw, ph;      // panel
+    int nameX, nameY, passX, passY, fieldW, fieldH;
+    int loginX, regX, btnY, btnW, btnH;
+    LoginLayout(int sw, int sh) {
+        pw = 440; ph = 345; px = (sw - pw) / 2; py = (sh - ph) / 2;
+        fieldW = pw - 80; fieldH = 36;
+        nameX = passX = px + 40; nameY = py + 108; passY = py + 173;
+        btnW = (fieldW - 16) / 2; btnH = 40; btnY = py + 238;
+        loginX = px + 40; regX = loginX + btnW + 16;
+    }
+    static bool In(int x, int y, int rx, int ry, int rw, int rh) { return x >= rx && y >= ry && x < rx + rw && y < ry + rh; }
+};
+
 struct UiCommand {
     enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, CloseContainer, DialogChoose, DialogClose } type = SetMode;
     uint32_t a = 0, b = 0, c = 0;   // Equip: a = inventory id, b = on, c = EquipSlot (0 = automatic)
@@ -150,6 +171,8 @@ public:
     virtual void DrawScene(const SceneView& scene) = 0;
     virtual void DrawUi(const UiView& ui) = 0;
     virtual void EndFrame() = 0;
+    virtual void DrawLogin(const LoginView& /*v*/) {}
+    virtual void WindowSize(int& w, int& h) const { w = 1280; h = 720; }
     // Maps a screen position to the tile under it for the last drawn scene.
     virtual bool ScreenToTile(int sx, int sy, TilePos& out) const = 0;
     // What is under the cursor (critter, item or ground) in the last drawn scene.
