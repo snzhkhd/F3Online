@@ -86,6 +86,12 @@ bool Server::Init() {
             if (!LoadWorldData()) { log::Error("data: no maps could be loaded"); return false; }
         }
     }
+    if (cfg_.savesDir.empty()) cfg_.savesDir = cfg_.scriptsDir.parent_path() / "saves";
+    accounts_.Init(cfg_.savesDir, cfg_.pbkdf2Iterations);
+    accounts_.ConfigureLimit(cfg_.maxLoginFails, 300, 30);
+    if (cfg_.devKit) cfg_.allowGuest = true;
+    nextSaveTick_ = static_cast<uint64_t>(std::max(0, cfg_.saveIntervalSec)) * cfg_.tickRate;
+    log::Info("accounts: %s (guest login %s, autosave %ds)", cfg_.savesDir.string().c_str(), cfg_.allowGuest ? "ALLOWED" : "off", cfg_.saveIntervalSec);
     scripting_ = std::make_unique<Scripting>(*this, cfg_.scriptsDir);
     if (!scripting_->Load()) { log::Error("scripts failed to load from %s", cfg_.scriptsDir.string().c_str()); return false; }
     if (!world_.FirstMap()) { log::Error("scripts created no map (call create_map in on_init)"); return false; }
@@ -113,6 +119,7 @@ void Server::Run() {
         if (now >= next) next = now;  // fell too far behind: drop the backlog
         if (cfg_.maxRunSeconds > 0 && now - start > std::chrono::seconds(cfg_.maxRunSeconds)) break;
     }
+    SaveAllPlayers();
     log::Info("server stopping");
 }
 
@@ -182,7 +189,11 @@ void Server::HandlePacket(ENetPeer* peer, const uint8_t* data, size_t len) {
             break;
         }
         default:
-            if (static_cast<uint8_t>(id) >= 20 && static_cast<uint8_t>(id) < 40) {
+            if (static_cast<uint8_t>(id) == static_cast<uint8_t>(GMsgAuth::C2S_Auth)) {
+                gnet::Auth m;
+                ok = m.Read(b);
+                if (ok && !c) OnAuth(peer, m);
+            } else if (static_cast<uint8_t>(id) >= 20 && static_cast<uint8_t>(id) < 40) {
                 if (c) HandleGamePacket(peer, c, static_cast<GMsg>(id), b, ok);
             } else {
                 ok = false;
@@ -202,15 +213,31 @@ void Server::OnLogin(ENetPeer* peer, const net::LoginReq& req) {
         enet_peer_disconnect_later(peer, 0);
     };
     if (req.version != kProtocolVersion) return fail("protocol version mismatch");
+    if (!cfg_.allowGuest) return fail(gnet::AuthCodeText(gnet::AuthCode::GuestDisabled));
     if (!ValidName(req.name)) return fail("invalid name (2-16 chars, letters/digits/_)");
     if (world_.FindPlayerByName(req.name)) return fail("name already in use");
-    Map* m = data_.Loaded() ? world_.FindMapByName(data_.StartMap()) : nullptr;
+    if (accounts_.Exists(req.name)) return fail("that name belongs to a registered account");
+    if (!StartSession(peer, req.name, nullptr, std::string())) enet_peer_disconnect_later(peer, 0);
+}
+
+bool Server::StartSession(ENetPeer* peer, const std::string& name, const nlohmann::json* saved, const std::string& account) {
+    auto fail = [&](const char* why) {
+        log::Info("login rejected: %s", why);
+        SendRaw(peer, net::Pack(net::LoginFail{why}));
+        return false;
+    };
+    if (world_.FindPlayerByName(name)) return fail("name already in use");
+    const bool restore = saved && saved->is_object() && saved->contains("map");
+    Map* m = nullptr;
+    if (restore) m = world_.FindMapByName(saved->value("map", std::string()));
+    if (!m) m = data_.Loaded() ? world_.FindMapByName(data_.StartMap()) : nullptr;
     if (!m) m = world_.FirstMap();
     if (!m) return fail("server has no map");
 
-    Critter* c = world_.CreateCritter(req.name, CritterKind::Player);
+    Critter* c = world_.CreateCritter(name, CritterKind::Player);
     c->peer = peer;
-    c->color = ColorFromName(req.name);
+    c->account = account;
+    c->color = ColorFromName(name);
     peer->data = reinterpret_cast<void*>(static_cast<uintptr_t>(c->id));
     if (data_.Loaded()) {
         if (const Proto* pc = data_.FindProto("Default_PC.CRT")) InitCritterStats(*c, *pc);
@@ -218,9 +245,22 @@ void Server::OnLogin(ENetPeer* peer, const net::LoginReq& req) {
         c->script.clear();
         c->dialog.clear();
     }
+    if (restore) ApplyCharacter(*c, *saved);
     TilePos spot = m->spawn;
     Dir dir = c->dir;
-    if (!PickEntryPos(*m, data_.Loaded() ? data_.StartEntry() : 0, spot, dir)) m->FindFreeNear(m->spawn, 10, spot);
+    bool placed = false;
+    if (restore && m->InBounds(saved->value("x", -1), saved->value("y", -1))) {
+        TilePos want{static_cast<int16_t>(saved->value("x", 0)), static_cast<int16_t>(saved->value("y", 0))};
+        if (!m->IsBlocked(want.x, want.y) && m->IsFree(want)) {
+            spot = want;
+            dir = static_cast<Dir>(saved->value("dir", 0) & 7);
+            placed = true;
+        }
+    }
+    if (!placed) {
+        spot = m->spawn;
+        if (!PickEntryPos(*m, data_.Loaded() ? data_.StartEntry() : 0, spot, dir)) m->FindFreeNear(m->spawn, 10, spot);
+    }
     c->dir = dir;
     PlaceCritter(*c, *m, spot);
 
@@ -232,19 +272,23 @@ void Server::OnLogin(ENetPeer* peer, const net::LoginReq& req) {
     SendMapInfo(*c, *m);
     SendStats(*c);
     SendInventory(*c);
+    if (c->dead) SendCritterState(*c);
 
     CritterId cid = c->id;
     if (!scripting_->OnLogin(*c)) {
-        log::Info("login of '%s' vetoed by script", req.name.c_str());
+        log::Info("login of '%s' vetoed by script", name.c_str());
         Tell(*c, "Login refused.");
+        c->account.clear();   // never overwrite a saved character with a vetoed session
         OnDisconnect(peer);
         enet_peer_disconnect_later(peer, 0);
-        return;
+        return true;
     }
     if (Critter* cc = world_.GetCritter(cid)) {
-        log::Info("player '%s' (id %u) entered map %u at %d,%d", cc->name.c_str(), cc->id, cc->mapId, cc->pos.x, cc->pos.y);
+        log::Info("player '%s' (id %u%s) entered map %u at %d,%d", cc->name.c_str(), cc->id, account.empty() ? ", guest" : restore ? ", restored" : ", new", cc->mapId, cc->pos.x, cc->pos.y);
         if (Map* mm = world_.GetMap(cc->mapId)) UpdateVisibility(*mm);
+        SavePlayer(*cc);
     }
+    return true;
 }
 
 void Server::OnDisconnect(ENetPeer* peer) {
@@ -255,6 +299,7 @@ void Server::OnDisconnect(ENetPeer* peer) {
     CritterId id = c->id;
     c->peer = nullptr;
     scripting_->OnLogout(*c);
+    SavePlayer(*c);
     RemoveCritter(id);
 }
 
@@ -544,6 +589,10 @@ void Server::UpdateVisibility(Map& m) {
 
 void Server::DoTick() {
     ++tick_;
+    if (cfg_.saveIntervalSec > 0 && tick_ >= nextSaveTick_) {
+        nextSaveTick_ = tick_ + static_cast<uint64_t>(cfg_.saveIntervalSec) * cfg_.tickRate;
+        SaveAllPlayers();
+    }
     std::vector<CritterId> ids;
     ids.reserve(world_.Critters().size());
     for (auto& [id, c] : world_.Critters()) ids.push_back(id);

@@ -61,10 +61,14 @@ int main(int argc, char** argv) {
         else if (a == "--no-data") cfg.noData = true;
         else if (a == "--tickrate") cfg.tickRate = std::max(1, std::atoi(next("--tickrate")));
         else if (a == "--dev-kit") cfg.devKit = true;
+        else if (a == "--allow-guest") cfg.allowGuest = true;
+        else if (a == "--saves") cfg.savesDir = next("--saves");
+        else if (a == "--save-interval") cfg.saveIntervalSec = std::atoi(next("--save-interval"));
+        else if (a == "--pbkdf2-iterations") cfg.pbkdf2Iterations = std::atoi(next("--pbkdf2-iterations"));
         else if (a == "--run-seconds") cfg.maxRunSeconds = std::atoi(next("--run-seconds"));
         else if (a == "--bind") cfg.bindHost = next("--bind");
         else if (a == "--local") cfg.bindHost = "127.0.0.1";
-        else { std::cerr << "usage: f3_server [--port N] [--bind ADDR | --local] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit]\n"; return 2; }
+        else { std::cerr << "usage: f3_server [--port N] [--bind ADDR | --local] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit] [--allow-guest] [--saves DIR] [--save-interval SEC]\n"; return 2; }
     }
     if (!scriptsGiven) cfg.scriptsDir = FindScripts(argv[0]);
     if (!dataGiven && !cfg.noData) cfg.dataDir = FindData(argv[0]);

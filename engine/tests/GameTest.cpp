@@ -43,6 +43,7 @@ struct Bot {
     ENetPeer* peer = nullptr;
     std::string name;
     bool loggedIn = false, failed = false;
+    int authCode = -1, authNew = 0;   // account block
     CritterId myId = 0;
     net::MapInfo map;
     int mapInfoCount = 0;
@@ -93,6 +94,11 @@ struct Bot {
         r.name = n;
         Send(net::Pack(r));
     }
+    void AuthMsg(gnet::AuthMode mode, const std::string& n, const std::string& pw) {
+        name = n;
+        gnet::Auth a; a.mode = (uint8_t)mode; a.name = n; a.password = pw;
+        Send(gnet::PackG(a));
+    }
     void Handle(const uint8_t* d, size_t len) {
         ByteBuffer b(d, len);
         uint8_t id = b.ReadU8();
@@ -132,6 +138,7 @@ struct Bot {
                 break;
             }
             case (uint8_t)GMsgRt::S2C_WaitState: { gnet::WaitState m; if (m.Read(b)) waits.push_back({m, LocalMs()}); break; }
+            case (uint8_t)GMsgAuth::S2C_AuthResult: { gnet::AuthResult m; if (m.Read(b)) { authCode = m.code; authNew = m.isNew; } break; }
             case (uint8_t)GMsgDlg::S2C_DialogOpen: { gnet::DialogOpen m; if (m.Read(b)) dlgOpens.push_back(m); break; }
             case (uint8_t)GMsgDlg::S2C_DialogNode: { gnet::DialogNode m; if (m.Read(b)) dlgNodes.push_back(m); break; }
             case (uint8_t)GMsgDlg::S2C_DialogClose: { ++dlgCloses; break; }
@@ -181,6 +188,162 @@ static bool Walkable(const Bot& b, int x, int y) {
     return x >= 0 && y >= 0 && x < b.map.width && y < b.map.height && b.map.blocked[static_cast<size_t>(y) * b.map.width + x] == 0;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Account / persistence suite: f3_gametest --accounts 1|2 [--state FILE]. Server: --data, NO --dev-kit / --allow-guest.
+// Phase 1: guest refused, register (+ invalid / weak / taken), wrong password, walk, spawn + pick up + equip a revolver,
+//          set a per-player global, logout. Phase 2 (run against a RESTARTED server with the same --saves): login, assert the
+//          position, inventory with the equipped slot, vars and globals were restored; wrong password; duplicate login kicks the first session.
+// ---------------------------------------------------------------------------------------------------------------------
+static int RunAccountTests(uint16_t port, int phase, const std::string& stateFile) {
+    const char* kName = "AcctBot";
+    const char* kPass = "secret1";
+    auto auth = [&](Bot& b, gnet::AuthMode mode, const std::string& n, const std::string& pw) {
+        b.name = n;
+        gnet::Auth a; a.mode = (uint8_t)mode; a.name = n; a.password = pw;
+        b.Send(gnet::PackG(a));
+    };
+    auto code = [&](Bot& b, int c) { return WaitFor({&b}, 6, [&] { return b.authCode >= 0; }) && b.authCode == c; };
+    if (phase == 1) {
+        {   // guest login is off by default
+            Bot g;
+            CHECK(g.Connect(port), "guest bot connected");
+            g.Login("GuestBot");
+            CHECK(WaitFor({&g}, 4, [&] { return g.failed; }) && !g.loggedIn, "legacy name-only login refused without --allow-guest");
+        }
+        {
+            Bot x;
+            x.Connect(port);
+            auth(x, gnet::AuthMode::Register, "bad name!", kPass);
+            CHECK(code(x, (int)gnet::AuthCode::InvalidName), "register with an invalid name rejected");
+        }
+        {
+            Bot x;
+            x.Connect(port);
+            auth(x, gnet::AuthMode::Register, "WeakBot", "abc");
+            CHECK(code(x, (int)gnet::AuthCode::WeakPassword), "register with a short password rejected");
+        }
+        {
+            Bot x;
+            x.Connect(port);
+            auth(x, gnet::AuthMode::Login, "NoSuchBot", kPass);
+            CHECK(code(x, (int)gnet::AuthCode::BadCredentials), "login of an unknown account rejected");
+        }
+    }
+    Bot a;
+    if (!a.Connect(port)) { std::printf("FAIL: cannot connect\n"); return 1; }
+    if (phase == 1) {
+        auth(a, gnet::AuthMode::Register, kName, kPass);
+        CHECK(WaitFor({&a}, 10, [&] { return a.loggedIn && a.mapInfoCount > 0 && a.havePos && a.haveStats && a.invUpdates > 0; }) && a.authCode == 0 && a.authNew == 1,
+              "register + login (code %d, new %d)", a.authCode, a.authNew);
+        if (!a.loggedIn) return 1;
+        CHECK(a.inv.empty(), "new account character owns nothing");
+        {   // name taken (case insensitive)
+            Bot x;
+            x.Connect(port);
+            auth(x, gnet::AuthMode::Register, "acctbot", "other1234");
+            CHECK(code(x, (int)gnet::AuthCode::NameTaken), "registering the same name again rejected");
+        }
+        {   // wrong password
+            Bot x;
+            x.Connect(port);
+            auth(x, gnet::AuthMode::Login, kName, "wrongpass");
+            CHECK(code(x, (int)gnet::AuthCode::BadCredentials), "login with a wrong password rejected");
+        }
+        // walk somewhere
+        TilePos target = a.pos;
+        bool found = false;
+        for (int r = 8; r >= 4 && !found; --r)
+            for (int dy = -r; dy <= r && !found; ++dy)
+                for (int dx = -r; dx <= r && !found; ++dx)
+                    if (std::max(std::abs(dx), std::abs(dy)) == r && Walkable(a, a.pos.x + dx, a.pos.y + dy)) { target = {(int16_t)(a.pos.x + dx), (int16_t)(a.pos.y + dy)}; found = true; }
+        net::MoveToReq mv; mv.x = target.x; mv.y = target.y;
+        a.Send(net::Pack(mv));
+        CHECK(WaitFor({&a}, 12, [&] { return a.pos == target; }), "walked to %d,%d", target.x, target.y);
+        // spawn + pick up + equip a revolver
+        std::vector<ItemId> before;
+        for (auto& [id, it] : a.items) before.push_back(id);
+        net::ChatReq c; c.text = "/spawn Weapons44_Revolver.WEA";
+        a.Send(net::Pack(c));
+        ItemId ground = 0;
+        WaitFor({&a}, 4, [&] { for (auto& [id, it] : a.items) if (std::find(before.begin(), before.end(), id) == before.end()) ground = id; return ground != 0; });
+        CHECK(ground != 0, "dev spawn produced a ground item");
+        int upd = a.invUpdates;
+        gnet::PickUp pu; pu.id = ground;
+        a.Send(gnet::PackG(pu));
+        CHECK(WaitFor({&a}, 15, [&] { return a.invUpdates > upd && !a.inv.empty(); }), "picked up (inventory %zu)", a.inv.size());
+        if (!a.inv.empty()) {
+            WaitFor({&a}, 1, [] { return false; });   // breaktime
+            gnet::Equip e; e.id = a.inv[0].id; e.on = 1;
+            a.Send(gnet::PackG(e));
+            CHECK(WaitFor({&a}, 6, [&] { return !a.inv.empty() && a.inv[0].equipped == gnet::SlotHand1; }), "revolver equipped in hand 1");
+        }
+        net::ChatReq g; g.text = "/gvar Task7 2";
+        a.Send(net::Pack(g));
+        WaitFor({&a}, 1, [] { return false; });
+        // remember the expected state, then log out (save on logout)
+        if (!a.havePos) return 1;
+        FILE* f = std::fopen(stateFile.c_str(), "w");
+        if (f) { std::fprintf(f, "%d %d %zu %d %s\n", a.pos.x, a.pos.y, a.inv.size(), a.inv.empty() ? 0 : a.inv[0].equipped, a.map.name.c_str()); std::fclose(f); }
+        enet_peer_disconnect(a.peer, 0);
+        WaitFor({&a}, 1, [] { return false; });
+        std::printf(g_failed ? "ACCOUNTTEST 1 FAILED\n" : "ACCOUNTTEST 1 PASSED\n");
+        return g_failed ? 1 : 0;
+    }
+    // ---- phase 2: restarted server
+    int ex = 0, ey = 0, eInv = 0, eEq = 0;
+    char emap[128] = {0};
+    if (FILE* f = std::fopen(stateFile.c_str(), "r")) { std::fscanf(f, "%d %d %d %d %127s", &ex, &ey, &eInv, &eEq, emap); std::fclose(f); }
+    else { std::printf("FAIL: no state file\n"); return 1; }
+    {
+        Bot x;
+        x.Connect(port);
+        auth(x, gnet::AuthMode::Login, kName, "wrongpass");
+        CHECK(code(x, (int)gnet::AuthCode::BadCredentials), "wrong password rejected after restart");
+    }
+    auth(a, gnet::AuthMode::Login, "ACCTBOT", kPass);   // case-insensitive account name
+    CHECK(WaitFor({&a}, 10, [&] { return a.loggedIn && a.mapInfoCount > 0 && a.havePos && a.haveStats && a.invUpdates > 0; }) && a.authCode == 0 && a.authNew == 0, "login after server restart");
+    if (!a.loggedIn) return 1;
+    WaitFor({&a}, 1, [] { return false; });
+    CHECK(a.map.name == emap, "map restored: %s", a.map.name.c_str());
+    CHECK(a.pos.x == ex && a.pos.y == ey, "position restored %d,%d (expected %d,%d)", a.pos.x, a.pos.y, ex, ey);
+    CHECK((int)a.inv.size() == eInv && !a.inv.empty() && a.inv[0].equipped == eEq && a.inv[0].name.find("44") != std::string::npos,
+          "inventory restored: %zu entries, equipped slot %d (expected %d)", a.inv.size(), a.inv.empty() ? -1 : a.inv[0].equipped, eEq);
+    {
+        size_t n = a.chat.size();
+        net::ChatReq g; g.text = "/gvar Task7";
+        a.Send(net::Pack(g));
+        bool ok = WaitFor({&a}, 4, [&] { for (size_t i = n; i < a.chat.size(); ++i) if (a.chat[i].find("Task7 = 2") != std::string::npos) return true; return false; });
+        CHECK(ok, "per-player global Task7 restored (= 2)");
+    }
+    {   // duplicate login: a second session of the same account takes over, the first is kicked
+        Bot d;
+        d.Connect(port);
+        auth(d, gnet::AuthMode::Login, kName, kPass);
+        CHECK(WaitFor({&a, &d}, 10, [&] { return d.loggedIn && d.havePos; }), "second session logged in");
+        CHECK(WaitFor({&a, &d}, 6, [&] { return a.failed; }), "first session was kicked");
+        CHECK(d.pos.x == ex && d.pos.y == ey, "second session starts where the first one stood");
+        enet_peer_disconnect(d.peer, 0);
+        WaitFor({&d}, 1, [] { return false; });
+    }
+    {   // rate limit: repeated wrong passwords lock the account out, even for the right password
+        bool limited = false;
+        for (int i = 0; i < 8 && !limited; ++i) {
+            Bot x;
+            x.Connect(port);
+            auth(x, gnet::AuthMode::Login, kName, "wrong" + std::to_string(i));
+            WaitFor({&x}, 4, [&] { return x.authCode >= 0; });
+            limited = x.authCode == (int)gnet::AuthCode::RateLimited;
+        }
+        CHECK(limited, "failed logins are rate limited");
+        Bot y;
+        y.Connect(port);
+        auth(y, gnet::AuthMode::Login, kName, kPass);
+        CHECK(code(y, (int)gnet::AuthCode::RateLimited), "correct password is refused during the lockout");
+    }
+    std::printf(g_failed ? "ACCOUNTTEST 2 FAILED\n" : "ACCOUNTTEST 2 PASSED\n");
+    return g_failed ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
     uint16_t port = 4048;
     std::string expectMap = "00_03_Tutorial_Junktown";
@@ -190,7 +353,14 @@ int main(int argc, char** argv) {
     }
     bool expectEmpty = false;   // server without --dev-kit: a new character owns and wears nothing
     for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--expect-empty")) expectEmpty = true;
+    int accountPhase = 0;
+    std::string stateFile = "f3_acct_state.txt";
+    for (int i = 1; i + 1 < argc; i++) {
+        if (!std::strcmp(argv[i], "--accounts")) accountPhase = std::atoi(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--state")) stateFile = argv[i + 1];
+    }
     if (enet_initialize() != 0) return 2;
+    if (accountPhase) return RunAccountTests(port, accountPhase, stateFile);
 
     Bot a, b;
     if (!a.Connect(port) || !b.Connect(port)) { std::printf("FAIL: cannot connect to 127.0.0.1:%u\n", port); return 1; }

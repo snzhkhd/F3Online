@@ -144,12 +144,25 @@ void Server::InitCritterStats(Critter& c, const Proto& p) {
     c.protoPid = p.pid;
     for (int i = 0; i < 7; i++) c.special[i] = p.special[i];
     c.level = 1;
-    c.maxHp = std::max(1, 15 + c.special[0] + 2 * c.special[2]);
+    RecalcDerived(c);
     c.hp = c.maxHp;
     c.team = p.team;
     c.isStatic = p.isStatic;
     c.script = p.script;
     c.dialog = p.dialog;
+}
+
+void Server::RecalcDerived(Critter& c) {
+    c.maxHp = std::max(1, 15 + c.special[0] + 2 * c.special[2]);
+}
+
+double Server::GetGlobalFor(const Critter* pc, const std::string& k) const {
+    if (pc) { auto it = pc->gvars.find(k); if (it != pc->gvars.end()) return it->second; }
+    return GetGlobal(k);
+}
+
+void Server::SetGlobalFor(Critter* pc, const std::string& k, double v) {
+    if (pc && pc->IsPlayer()) pc->gvars[k] = v; else globals_[k] = v;
 }
 
 Critter* Server::SpawnCritterProto(MapId mapId, const Proto& p, TilePos pos, const EntityDef* inst) {
@@ -687,7 +700,7 @@ bool Server::EnterMap(Critter& c, Map& dst, int entryId) {
         c.regionLockUntilMs = NowMs() + static_cast<uint64_t>(std::max(0, rt_.TransferLock) + std::max(0, rt_.TimeoutTransfer));
         c.waitEndMs = 0;  // a transfer resets the wait (FOnline: player.Wait(0) after transfers)
         c.inRegion = -1;
-        if (c.IsPlayer()) { SendStats(c); SendInventory(c); }
+        if (c.IsPlayer()) { SendStats(c); SendInventory(c); SavePlayer(c); }
     }
     return ok;
 }

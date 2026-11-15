@@ -1,6 +1,7 @@
 #pragma once
 // Server-side data model: Item, Critter, Map, World. No networking, no scripting.
 #include <deque>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -111,7 +112,16 @@ struct Critter {
     std::unordered_set<CritterId> visCritters;
     std::unordered_set<ItemId> visItems;
 
-    std::unordered_map<std::string, double> vars;  // script-visible numeric state
+    std::unordered_map<std::string, double> vars;  // script-visible numeric state (persisted for accounts)
+    std::unordered_map<std::string, double> gvars; // per player quest / journal / script globals (persisted; overlay on the shared globals table)
+
+    // ---- account / character progression (Persist.cpp, Character.cpp)
+    std::string account;        // account name when logged in with an account (empty = guest, nothing is saved)
+    int xp = 0;
+    int skillPoints = 0;        // unspent skill points
+    int unspentSpecial = 0;     // SPECIAL points still to allocate (character creation)
+    bool created = true;        // false while the character still has to go through character creation
+    std::map<std::string, int> skillRanks;  // points invested per skill (on top of the SPECIAL based base value)
 
     bool IsNpc() const { return kind == CritterKind::Npc; }
     bool IsPlayer() const { return kind == CritterKind::Player; }

@@ -48,7 +48,8 @@ end
 function on_login(c)
     -- A new character has NOTHING equipped and an empty inventory (it looks like the base body). The test kit below is
     -- only given when the server runs with --dev-kit.
-    if data_loaded() and dev_kit() and #c:inventory() == 0 then
+    if data_loaded() and dev_kit() and c:get_var("kit_given") == 0 and #c:inventory() == 0 then
+        c:set_var("kit_given", 1)
         -- dev starter kit (real prototypes from the original data)
         local gun = c:give("Weapons9mm_Autoloader.WEA")
         c:give("Ammo9mm.AMO", 30)
@@ -130,6 +131,13 @@ function commands.near(c, arg)
 end
 
 function commands.heal(c) c:heal(c.max_hp) end
+-- dev helper: /gvar name [value]  reads / sets a per player (persisted) quest / script global
+function commands.gvar(c, arg)
+    local k, v = (arg or ""):match("^(%S+)%s*(%S*)$")
+    if not k then c:tell("usage: /gvar name [value]"); return end
+    if v ~= "" and tonumber(v) then c:set_gvar(k, tonumber(v)) end
+    c:tell(k .. " = " .. tostring(c:get_gvar(k)))
+end
 -- dev helper: /battle [ms]  sets the battle flag for ms (default TimeoutBattle); walking must still work while it is set
 function commands.battle(c, arg)
     local ms = tonumber(arg or "")

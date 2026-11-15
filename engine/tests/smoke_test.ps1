@@ -14,8 +14,11 @@ $bot = Join-Path $BinDir "f3_testclient.exe"
 $gametest = Join-Path $BinDir "f3_gametest.exe"
 $empty = New-Item -Force "$env:TEMP\f3_empty_stdin.txt"
 
+$saves = Join-Path $env:TEMP ("f3_smoke_saves_" + $PID)   # throw-away account directory, never the real saves/
+if (Test-Path $saves) { Remove-Item -Recurse -Force $saves }
+
 function Run-Server([string]$extra, [string]$log, [int]$port) {
-    Start-Process -FilePath $server -ArgumentList "--local --port $port --scripts `"$ScriptsDir`" $extra --run-seconds 90" `
+    Start-Process -FilePath $server -ArgumentList "--local --port $port --scripts `"$ScriptsDir`" --saves `"$saves`" $extra --run-seconds 90" `
         -RedirectStandardOutput $log -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
 }
 
@@ -23,7 +26,7 @@ $exit = 0
 
 # ---- 1. test map
 $log1 = Join-Path $env:TEMP "f3_server_smoke.log"
-$p = Run-Server "--no-data" $log1 $Port
+$p = Run-Server "--no-data --allow-guest" $log1 $Port
 try {
     Start-Sleep -Milliseconds 800
     & $bot --port $Port --name SmokeBot
@@ -49,7 +52,25 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
     Write-Host "---- server log (game data) ----"
     Get-Content $log2
     if ($code -ne 0) { $exit = $code }
+
+    # ---- 3. accounts + persistence: register, play, quit; RESTART the server; login and check everything came back
+    $state = Join-Path $env:TEMP "f3_acct_state.txt"
+    foreach ($phase in 1, 2) {
+        $log3 = Join-Path $env:TEMP "f3_server_smoke_acct$phase.log"
+        $p = Run-Server "--data `"$DataDir`"" $log3 ($Port + 2)
+        try {
+            Start-Sleep -Milliseconds 2500
+            & $gametest --port ($Port + 2) --accounts $phase --state $state
+            $code = $LASTEXITCODE
+        } finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+        }
+        Write-Host "---- server log (accounts, phase $phase) ----"
+        Get-Content $log3 | Select-Object -Last 12
+        if ($code -ne 0) { $exit = $code; break }
+    }
 } else {
     Write-Host "gamedata/server not found: real-data test skipped (see docs/server-data.md)"
 }
+if (Test-Path $saves) { Remove-Item -Recurse -Force $saves }
 exit $exit

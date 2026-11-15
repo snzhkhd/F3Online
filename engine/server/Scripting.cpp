@@ -121,7 +121,9 @@ void Scripting::BindApi(sol::state& L) {
         "tell", [&S](Critter& c, const std::string& t) { S.Tell(c, t); },
         "distance_to", [](Critter& c, Critter& o) { return c.mapId == o.mapId ? TileDist(c.pos, o.pos) : 9999; },
         "get_var", [](Critter& c, const std::string& k) { auto it = c.vars.find(k); return it == c.vars.end() ? 0.0 : it->second; },
-        "set_var", [](Critter& c, const std::string& k, double v) { c.vars[k] = v; });
+        "set_var", [](Critter& c, const std::string& k, double v) { c.vars[k] = v; },
+        "get_gvar", [&S](Critter& c, const std::string& k) { return S.GetGlobalFor(&c, k); },
+        "set_gvar", [&S](Critter& c, const std::string& k, double v) { S.SetGlobalFor(&c, k, v); });
 
     L.new_usertype<Map>(
         "Map", sol::no_constructor,

@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "Account.h"
 #include "AmxHost.h"
 #include "DataStore.h"
 #include "GameConfig.h"
@@ -34,6 +35,11 @@ public:
         bool devKit = false;            // --dev-kit: new players get a few test items (gun, ammo, armor, revolver); default: nothing
         bool noData = false;            // --no-data: never load gamedata even if present
         int maxRunSeconds = 0;  // 0 = run until stopped; used by smoke tests
+        std::filesystem::path savesDir;  // account + character files (default: <repo>/saves, gitignored)
+        bool allowGuest = false;        // --allow-guest (implied by --dev-kit): legacy name-only login, nothing is saved
+        int saveIntervalSec = 60;       // periodic save of all logged in players (0 = only on logout / transfer / shutdown)
+        int pbkdf2Iterations = 10000;
+        int maxLoginFails = 5;          // failed logins per account / ip within 5 minutes before a 30 s lockout
         std::string bindHost;   // empty = all interfaces; "127.0.0.1" = loopback only (no Windows Firewall prompt)
     };
 
@@ -78,6 +84,15 @@ public:
     bool EnterMapByName(Critter& c, const std::string& name, int entryId);
     void SendStats(Critter& c);
     void SendInventory(Critter& c);
+    void RecalcDerived(Critter& c);   // maxHp etc. from SPECIAL / level (Character.cpp)
+    // ---- accounts + persistence (Persist.cpp)
+    bool SavePlayer(Critter& c);
+    void SaveAllPlayers();
+    nlohmann::json CharacterToJson(const Critter& c) const;
+    void ApplyCharacter(Critter& c, const nlohmann::json& j);
+    // quest / script globals: per player overlay (Critter::gvars) over the shared table (originals from globals.ini)
+    double GetGlobalFor(const Critter* pc, const std::string& k) const;
+    void SetGlobalFor(Critter* pc, const std::string& k, double v);
     int Weight(const Critter& c) const;
     int ProtoWeight(const Proto& p) const;   // unit weight (config class table / per-prototype override)
     int CarryLimit(const Critter& c) const;  // CarryBase + CarryPerStrength * ST
@@ -122,6 +137,9 @@ private:
     void HandlePacket(struct _ENetPeer* peer, const uint8_t* data, size_t len);
     void OnLogin(struct _ENetPeer* peer, const net::LoginReq& req);
     void OnDisconnect(struct _ENetPeer* peer);
+    void OnAuth(struct _ENetPeer* peer, const gnet::Auth& a);
+    // creates + places the player critter; saved = character json of an account (nullptr = guest / fresh)
+    bool StartSession(struct _ENetPeer* peer, const std::string& name, const nlohmann::json* saved, const std::string& account);
     void OnMoveReq(Critter& c, const net::MoveToReq& req);
     void OnMoveReqF(Critter& c, const gnet::MoveToF& req);
     void DoMoveCell(Critter& c, TilePos target);
@@ -174,6 +192,8 @@ private:
     std::atomic<bool> running_{false};
     uint64_t tick_ = 0;
     GameConfig rt_;
+    AccountStore accounts_;
+    uint64_t nextSaveTick_ = 0;
     std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
 
     std::mutex cmdMutex_;

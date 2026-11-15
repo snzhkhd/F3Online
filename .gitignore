@@ -24,3 +24,4 @@ tools/Granny Viewer/
 # local client settings and shortcuts
 client.cfg
 *.lnk
+saves/

@@ -426,3 +426,52 @@ struct DialogClose {
 };
 }  // namespace gnet
 }  // namespace f3
+
+// ===================================================================================================
+// ACCOUNT BLOCK (registration / password login). Ids: client->server 33, server->client 140.
+// Auth is the first message of a session: mode 0 = login, 1 = register (creates the account and its first character, then
+// logs in). Passwords travel in clear text inside the (unencrypted) ENet packet: run behind a VPN/TLS tunnel for real
+// deployments; the server never stores them (salted PBKDF2-HMAC-SHA256). The result is always an AuthResult; on code 0
+// LoginOk + MapInfo + ... follow exactly like the legacy name-only Login, on failure the server closes the connection.
+// The legacy C2S_Login (name only, no persistence) is accepted only when the server runs with --allow-guest (or --dev-kit).
+// ===================================================================================================
+namespace f3 {
+enum class GMsgAuth : uint8_t { C2S_Auth = 33, S2C_AuthResult = 140 };
+namespace gnet {
+enum class AuthMode : uint8_t { Login = 0, Register = 1 };
+enum class AuthCode : uint8_t {
+    Ok = 0, BadCredentials = 1, NameTaken = 2, InvalidName = 3, WeakPassword = 4, RateLimited = 5,
+    GuestDisabled = 6, VersionMismatch = 7, ServerError = 8, Full = 9
+};
+inline const char* AuthCodeText(AuthCode c) {
+    switch (c) {
+        case AuthCode::Ok: return "ok";
+        case AuthCode::BadCredentials: return "wrong name or password";
+        case AuthCode::NameTaken: return "that name is already registered";
+        case AuthCode::InvalidName: return "invalid name (2-16 letters, digits or _)";
+        case AuthCode::WeakPassword: return "password must be 4-64 characters";
+        case AuthCode::RateLimited: return "too many failed attempts, try again later";
+        case AuthCode::GuestDisabled: return "this server requires an account (name + password)";
+        case AuthCode::VersionMismatch: return "protocol version mismatch";
+        case AuthCode::Full: return "server is full";
+        default: return "server error";
+    }
+}
+struct Auth {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgAuth::C2S_Auth);
+    uint32_t version = kProtocolVersion;
+    uint8_t mode = 0;
+    std::string name, password;
+    void Write(ByteBuffer& b) const { b.WriteU32(version); b.WriteU8(mode); b.WriteString(name); b.WriteString(password); }
+    bool Read(ByteBuffer& b) { version = b.ReadU32(); mode = b.ReadU8(); name = b.ReadString(64); password = b.ReadString(128); return b.Ok(); }
+};
+struct AuthResult {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgAuth::S2C_AuthResult);
+    uint8_t code = 0;
+    uint8_t isNew = 0;   // 1 = the character was just created (register)
+    std::string text;
+    void Write(ByteBuffer& b) const { b.WriteU8(code); b.WriteU8(isNew); b.WriteString(text); }
+    bool Read(ByteBuffer& b) { code = b.ReadU8(); isNew = b.ReadU8(); text = b.ReadString(256); return b.Ok(); }
+};
+}  // namespace gnet
+}  // namespace f3

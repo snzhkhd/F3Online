@@ -53,8 +53,11 @@ void AmxHost::BindNatives() {
         if (hi < lo) std::swap(lo, hi);
         return std::uniform_int_distribution<AmxCell>(lo, hi)(Rng());
     };
-    N["GetGlobal"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell { return n > 0 ? static_cast<AmxCell>(server_.GetGlobal(m.GetString(a[0]))) : 0; };
-    N["SetGlobal"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell { if (n > 1) server_.SetGlobal(m.GetString(a[0]), a[1]); return 0; };
+    // Globals are per player while a conversation runs (the protagonist's quest state, persisted with the character);
+    // outside a conversation (behaviour scripts) they are the shared world table.
+    auto scope = [this]() -> Critter* { return active_ ? server_.GetWorld().GetCritter(active_->pc) : nullptr; };
+    N["GetGlobal"] = [this, scope](AmxInstance& m, const AmxCell* a, int n) -> AmxCell { return n > 0 ? static_cast<AmxCell>(server_.GetGlobalFor(scope(), m.GetString(a[0]))) : 0; };
+    N["SetGlobal"] = [this, scope](AmxInstance& m, const AmxCell* a, int n) -> AmxCell { if (n > 1) server_.SetGlobalFor(scope(), m.GetString(a[0]), a[1]); return 0; };
     N["GetCurrentHP"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell { Critter* c = CritterOf(a[0]); return c ? c->hp : 0; };
     N["GetMaxHP"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell { Critter* c = CritterOf(a[0]); return c ? c->maxHp : 0; };
     N["AddHP"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {
@@ -152,19 +155,19 @@ void AmxHost::BindNatives() {
     // quest journal: task state lives in the globals table as "Task<id>" (1 open, 2 closed) so Lua and scripts can read it
     N["OpenTask"] = [this, playerOf](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
         if (n < 1) return 0;
-        server_.SetGlobal("Task" + std::to_string(a[0]), 1);
+        server_.SetGlobalFor(playerOf(m), "Task" + std::to_string(a[0]), 1);
         if (Critter* p = playerOf(m)) server_.Tell(*p, "New task: " + DlgText(a[0]));
         return 1;
     };
     N["CloseTask"] = [this, playerOf](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
         if (n < 1) return 0;
-        server_.SetGlobal("Task" + std::to_string(a[0]), 2);
+        server_.SetGlobalFor(playerOf(m), "Task" + std::to_string(a[0]), 2);
         if (Critter* p = playerOf(m)) server_.Tell(*p, "Task completed: " + DlgText(a[0]));
         return 1;
     };
     N["AddEntry"] = [this, playerOf](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
         if (n < 2) return 0;
-        server_.SetGlobal("TaskEntry" + std::to_string(a[0]), a[1]);
+        server_.SetGlobalFor(playerOf(m), "TaskEntry" + std::to_string(a[0]), a[1]);
         if (Critter* p = playerOf(m)) server_.Tell(*p, "Journal: " + DlgText(a[1]));
         return 1;
     };
