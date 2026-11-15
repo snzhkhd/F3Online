@@ -251,6 +251,9 @@ void Scripting::BindApi(sol::state& L) {
         if (!p) return 0;
         return (int)S.SpawnObjectProto((MapId)map, *p, TilePos{(int16_t)x, (int16_t)y}, (uint16_t)count.value_or(1), nullptr);
     };
+    // dev / test only (main.lua gates the /amxnative command on --dev-kit): run natives by name, see AmxHost::NativeTest
+    L["amx_native"] = [&S](int owner, const std::string& program) -> std::string { return S.Amx() ? S.Amx()->NativeTest(static_cast<CritterId>(owner), program) : std::string("amx not available"); };
+    L["amx_attacks"] = [&S](bool on) { if (S.Amx()) S.Amx()->SetAttacksEnabled(on); };   // dev / test only
     L["stf"] = [&S](int id) { return S.Data().String(id); };   // English.stf text by id
     L["set_door_locked"] = [&S](int objId, bool locked) { Item* d = S.FindObject((ItemId)objId); if (!d || d->kind != ObjKind::Door) return false; S.SetDoorLocked(*d, locked); return true; };
     L["set_door_open"] = [&S](int objId, bool open) {
@@ -359,10 +362,10 @@ void Scripting::ApplyConfig(sol::state_view L) {
     g.SpecialMin = std::clamp(g.SpecialMin, 1, 10);
     g.SpecialMax = std::clamp(g.SpecialMax, g.SpecialMin, 10);
     g.TagCount = std::clamp(g.TagCount, 0, kSkillCount);
-    g.MaxLevel = std::clamp(g.MaxLevel, 1, 99);
-    g.SkillMax = std::clamp(g.SkillMax, 1, 255);
     g.TraitMax = std::clamp(g.TraitMax, 0, 16);
     g.SkillUseRange = std::clamp(g.SkillUseRange, 1, 40);
+    g.MaxLevel = std::clamp(g.MaxLevel, 1, 99);
+    g.SkillMax = std::clamp(g.SkillMax, 1, 255);
     g.Breaktime = std::max(0, g.Breaktime);
     g.WalkSpeed = std::clamp(g.WalkSpeed, 0.1, 100.0);
     g.RunSpeed = std::clamp(g.RunSpeed, 0.1, 100.0);

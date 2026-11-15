@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include "AmxHost.h"
 #include "Server.h"
 #include "common/log.h"
@@ -45,15 +46,83 @@ void AmxHost::TickActions(const std::unordered_set<MapId>& active) {
                 a.endMs = now + static_cast<uint64_t>(std::max(0, a.ms));
                 switch (a.type) {
                     case ActType::Speech: if (!a.text.empty()) server_.Say(*c, a.text); break;
-                    case ActType::Move: if (!server_.StartMove(*c, a.x, a.y, a.run, false)) a.endMs = now; break;
-                    case ActType::Attack: if (Critter* t = server_.GetWorld().GetCritter(a.target)) { (void)t;   /* AMX-driven attacks are deliberately not executed: aggression stays in scripts/npc/hostile.lua (see docs/amx-scripts.md) */ } a.endMs = now; break;
+                    case ActType::Move: {
+                        if (a.follow) {   // A_MoveToEntity: head for the target's current position
+                            Critter* t = server_.GetWorld().GetCritter(a.target);
+                            if (!t || t->mapId != c->mapId) { a.endMs = now; break; }
+                            a.x = t->fx; a.y = t->fy; a.lastRepath = now;
+                        }
+                        if (!server_.StartMove(*c, a.x, a.y, a.run, false)) a.endMs = now;
+                        break;
+                    }
+                    case ActType::Attack: {
+                        // A_Attack / A_JustAttack: hand the target to the server combat (TickCombat: weapon range, auto-move, line of sight,
+                        // AP, breaktime, hit roll, damage). The action ends after ONE attack, when the target is gone, or after 30 s.
+                        Critter* t = server_.GetWorld().GetCritter(a.target);
+                        a.endMs = now + 30000;
+                        a.startAttacks = c->attacksDone;
+                        const bool reachable = t && t != c && !t->dead && t->mapId == c->mapId;
+                        if (!attacksEnabled_ || !reachable || ((a.noMove || c->isStatic) && !server_.InAttackRange(*c, *t))) { a.endMs = now; break; }
+                        server_.StartAttack(*c, a.target);
+                        break;
+                    }
+                    case ActType::Wander: {   // original ActionWander: pick a point in the rectangle, queue Wait(1000..5999 ms), MoveTo, then the next Wander
+                        const Act w = a;
+                        a.endMs = now;
+                        float tx = w.ulx, tz = w.ulz;
+                        auto range = [&](float first, float last) {
+                            if (first == last) return first;
+                            if (last < first) std::swap(first, last);
+                            return first + static_cast<float>(RandomRange(0, 1 << 30) % static_cast<int>(last - first + 1.f));
+                        };
+                        if (w.lrx >= w.ulx) tx = range(w.ulx, w.lrx);        // lowerRight.x < upperLeft.x: invalid rect, keeps upperLeft.x
+                        if (!(w.ulz < w.lrz)) tz = range(w.ulz, w.lrz);      // upperLeft.z < lowerRight.z: invalid rect, keeps upperLeft.z
+                        const Map* mp = server_.GetWorld().GetMap(c->mapId);
+                        Act wait; wait.type = ActType::Wait; wait.ms = RandomRange(1000, 5999);
+                        Act move; move.type = ActType::Move;
+                        move.x = (tx - (mp ? mp->originX : 0.f)) * 2.f; move.y = (tz - (mp ? mp->originZ : 0.f)) * 2.f;
+                        q.push_back(std::move(wait));
+                        q.push_back(std::move(move));
+                        if (w.reps != 1) { Act next = w; next.started = false; next.reps = w.reps ? w.reps - 1 : 0; q.push_back(std::move(next)); }
+                        break;
+                    }
                     default: break;
                 }
             }
+            Act& cur = q.front();   // (the queue may have grown, the front is still the running action)
             bool done = false;
-            switch (a.type) {
-                case ActType::Move: done = !c->IsMoving() || now >= a.endMs + 20000; break;
-                default: done = now >= a.endMs; break;
+            switch (cur.type) {
+                case ActType::Move:
+                    if (cur.follow) {
+                        Critter* t = server_.GetWorld().GetCritter(cur.target);
+                        if (!t || t->mapId != c->mapId) { if (c->IsMoving()) server_.StopMove(*c, 1); done = true; break; }
+                        const Map* mp = server_.GetWorld().GetMap(c->mapId);
+                        const float dx = (t->fx - c->fx) * 0.5f, dz = (t->fy - c->fy) * 0.5f;
+                        const float dist = std::sqrt(dx * dx + dz * dz);
+                        const float tdx = (t->fx - cur.x) * 0.5f, tdz = (t->fy - cur.y) * 0.5f;
+                        if (std::sqrt(tdx * tdx + tdz * tdz) > 20.f) {   // the target walked away: re-path every 2 s
+                            if (now - cur.lastRepath >= 2000) {
+                                cur.lastRepath = now; cur.x = t->fx; cur.y = t->fy;
+                                if (!server_.StartMove(*c, cur.x, cur.y, cur.run, false)) done = true;
+                            }
+                        } else if (dist <= cur.stopDist) {
+                            bool ok = true;
+                            if (cur.reach >= 0 && mp)
+                                ok = LineClear(*mp, c->fx * 0.5f + mp->originX, c->fy * 0.5f + mp->originZ, t->fx * 0.5f + mp->originX, t->fy * 0.5f + mp->originZ) == (cur.reach == 2);
+                            if (ok) { if (c->IsMoving()) server_.StopMove(*c, 1); done = true; }
+                        }
+                        if (!done && (!c->IsMoving() || now >= cur.endMs + 20000)) done = true;
+                    } else done = !c->IsMoving() || now >= cur.endMs + 20000;
+                    break;
+                case ActType::Attack: {
+                    Critter* t = server_.GetWorld().GetCritter(cur.target);
+                    const bool attacked = c->attacksDone > cur.startAttacks;
+                    if (attacked && c->target == cur.target) c->target = 0;   // exactly one attack: stop TickCombat before the breaktime ends
+                    done = !t || t->dead || t->mapId != c->mapId || now >= cur.endMs || (attacked && server_.IsFree(*c));
+                    if (done && c->target == cur.target) c->target = 0;
+                    break;
+                }
+                default: done = now >= cur.endMs; break;
             }
             if (done) q.pop_front();
         }
@@ -111,33 +180,55 @@ void AmxHost::BindActionNatives() {
         QueueAction(c->id, std::move(q));
         return 1;
     };
-    N["A_MoveToPosition"] = [this, cellOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell {   // (entity, x, y(height), z) world units as floats
-        Critter* c = n > 3 ? CritterOf(a[0]) : nullptr;
-        if (!c) return 0;
+    // A_MoveToPosition(entity, float dest[3], stopDist, ignored): the destination is a vector in world units; the original verifies four
+    // parameters, stores stopDist only if > 0 and only uses it when moving to an entity, so it is irrelevant here.
+    N["A_MoveToPosition"] = [this, cellOf](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
+        if (!Argc("A_MoveToPosition", n, 4)) return 0;
+        Critter* c = CritterOf(a[0]);
+        float v[3];
+        if (!c || !ReadVec(m, a[1], v)) return 0;
         Act q; q.type = ActType::Move; q.run = false;
-        cellOf(*c, FVal(a[1]), FVal(a[3]), q.x, q.y);
+        cellOf(*c, v[0], v[2], q.x, q.y);
         QueueAction(c->id, std::move(q));
         return 1;
     };
-    N["A_MoveToEntity"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {   // (entity, target, ?, ?)
-        Critter* c = n > 1 ? CritterOf(a[0]) : nullptr;
-        Critter* t = n > 1 ? CritterOf(a[1]) : nullptr;
+    // A_MoveToEntity(entity, target, stopDist, reachability): stopDist replaces the default 5 world units only when NEGATIVE (original quirk:
+    // it is an unsigned compare, so a negative value means "arrived at once"); reachability != -1 additionally requires GetLOS == value.
+    N["A_MoveToEntity"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {
+        if (!Argc("A_MoveToEntity", n, 4)) return 0;
+        Critter* c = CritterOf(a[0]);
+        Critter* t = CritterOf(a[1]);
         if (!c || !t) return 0;
-        Act q; q.type = ActType::Move; q.run = false; q.x = t->fx; q.y = t->fy;
+        Act q; q.type = ActType::Move; q.run = false; q.follow = true; q.target = t->id; q.x = t->fx; q.y = t->fy;
+        if (a[2] < 0) q.stopDist = 1e30f;
+        if (a[3] != -1) q.reach = a[3];
         QueueAction(c->id, std::move(q));
         return 1;
     };
-    auto attack = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {   // (entity, target)
-        Critter* c = n > 1 ? CritterOf(a[0]) : nullptr;
-        Critter* t = n > 1 ? CritterOf(a[1]) : nullptr;
-        if (!c || !t) return 0;
-        Act q; q.type = ActType::Attack; q.target = t->id;
+    // A_Attack(entity, target) / A_JustAttack(entity, target): queue an attack action (see TickActions). JustAttack neither walks nor turns.
+    auto attack = [this](const char* name, bool noMove) {
+        return [this, name, noMove](AmxInstance&, const AmxCell* a, int n) -> AmxCell {
+            if (!Argc(name, n, 2)) return 0;
+            Critter* c = CritterOf(a[0]);
+            Critter* t = CritterOf(a[1]);
+            if (!c || !t) return 0;
+            Act q; q.type = ActType::Attack; q.target = t->id; q.noMove = noMove;
+            QueueAction(c->id, std::move(q));
+            return 1;
+        };
+    };
+    N["A_Attack"] = attack("A_Attack", false);
+    N["A_JustAttack"] = attack("A_JustAttack", true);
+    // A_Wander(entity, float upperLeft[3], float lowerRight[3], repetitions): random points in the rectangle, 0 repetitions = forever
+    N["A_Wander"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
+        if (!Argc("A_Wander", n, 4)) return 0;
+        Critter* c = CritterOf(a[0]);
+        float ul[3], lr[3];
+        if (!c || !ReadVec(m, a[1], ul) || !ReadVec(m, a[2], lr)) return 0;
+        Act q; q.type = ActType::Wander; q.ulx = ul[0]; q.ulz = ul[2]; q.lrx = lr[0]; q.lrz = lr[2]; q.reps = a[3];
         QueueAction(c->id, std::move(q));
         return 1;
     };
-    N["A_Attack"] = attack;
-    N["A_JustAttack"] = attack;
-    N["A_Wander"] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };   // wandering is left to the Lua npc behaviours
     N["A_Kill"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {
         Critter* c = n > 0 ? CritterOf(a[0]) : nullptr;
         if (c && c->IsNpc()) { server_.KillCritter(*c, nullptr); return 1; }
@@ -153,41 +244,36 @@ void AmxHost::BindActionNatives() {
         return c ? (IsIdle(c->id) && !c->IsMoving() ? 1 : 0) : 1;
     };
 
-    // ---- facing / geometry
-    auto dirFromAngle = [](float deg) {   // original angles are degrees; the server has 8 directions (45 degrees each)
-        int d = static_cast<int>(std::lround(deg / 45.f)) & 7;
-        return static_cast<Dir>(d);
-    };
-    N["SetFacing"] = [this, dirFromAngle](AmxInstance&, const AmxCell* a, int n) -> AmxCell {   // (entity, angle float)
-        if (Critter* c = n > 1 ? CritterOf(a[0]) : nullptr) { c->dir = dirFromAngle(FVal(a[1])); return 1; }
-        return 0;
-    };
-    N["SetFacingTarget"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {   // (entity, target)
-        Critter* c = n > 1 ? CritterOf(a[0]) : nullptr;
-        Critter* t = n > 1 ? CritterOf(a[1]) : nullptr;
-        if (!c || !t) return 0;
-        c->dir = DirFromDelta(t->pos.x - c->pos.x, t->pos.y - c->pos.y);
-        return 1;
-    };
-    N["GetDirectionToEntity"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {   // (entity, target) -> angle float
-        Critter* c = n > 1 ? CritterOf(a[0]) : nullptr;
-        Critter* t = n > 1 ? CritterOf(a[1]) : nullptr;
-        if (!c || !t) return FBits(0.f);
-        return FBits(static_cast<float>(static_cast<int>(DirFromDelta(t->pos.x - c->pos.x, t->pos.y - c->pos.y)) * 45));
-    };
-    N["PointDistance"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {   // (float p1[3], float p2[3]) by reference, world units
-        if (n < 2) return FBits(0.f);
-        float d[3];
-        for (int i = 0; i < 3; i++) d[i] = FVal(m.Get(a[0] + 4 * i)) - FVal(m.Get(a[1] + 4 * i));
-        return FBits(std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]));
-    };
-
     // ---- squads / team ranks (stored per critter; the scripts compare them to decide who leads)
     N["CreateSquad"] = [this](AmxInstance&, const AmxCell*, int) -> AmxCell { return nextSquad_++; };
-    N["AddToSquad"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {   // (squad, entity)
-        if (Critter* c = n > 1 ? CritterOf(a[1]) : nullptr) { squadOf_[c->id] = a[0]; return 1; }
+    // AddToSquad(entity, squad): entity FIRST (original NativeAddToSquad -> AssignEntitySquad(entity, squad); the old (squad, entity) order was wrong)
+    N["AddToSquad"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {
+        if (!Argc("AddToSquad", n, 2)) return 0;
+        if (Critter* c = CritterOf(a[0])) { squadOf_[c->id] = a[1]; return 1; }
         return 0;
     };
+    // attitudes are directed (source -> target) integers; equal ids are always 1 (original GetTeamAttitude / GetSquadAttitude), unset 0.
+    // The engine never reads them for combat, only the scripts do (their hostility decisions).
+    auto attSet = [this](const char* name, std::map<std::pair<int, int>, int>& tab) {
+        return [this, name, &tab](AmxInstance&, const AmxCell* a, int n) -> AmxCell {
+            if (!Argc(name, n, 3)) return 0;
+            if (a[0] <= 0 || a[1] <= 0) return 0;
+            tab[{a[0], a[1]}] = a[2];
+            return 1;
+        };
+    };
+    auto attGet = [this](const char* name, std::map<std::pair<int, int>, int>& tab) {
+        return [this, name, &tab](AmxInstance&, const AmxCell* a, int n) -> AmxCell {
+            if (!Argc(name, n, 2)) return 0;
+            if (a[0] == a[1]) return 1;
+            auto it = tab.find({a[0], a[1]});
+            return it == tab.end() ? 0 : it->second;
+        };
+    };
+    N["SetTeamAttitude"] = attSet("SetTeamAttitude", teamAttitude_);
+    N["SetSquadAttitude"] = attSet("SetSquadAttitude", squadAttitude_);
+    N["GetTeamAttitude"] = attGet("GetTeamAttitude", teamAttitude_);
+    N["GetSquadAttitude"] = attGet("GetSquadAttitude", squadAttitude_);
     N["GetSquadID"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {
         Critter* c = n > 0 ? CritterOf(a[0]) : nullptr;
         auto it = c ? squadOf_.find(c->id) : squadOf_.end();
@@ -234,11 +320,7 @@ void AmxHost::BindActionNatives() {
         const Map* mp = server_.GetWorld().GetMap(c->mapId);
         return mp && DataStore::Lower(mp->name) == DataStore::Lower(m.GetString(a[1])) ? 1 : 0;
     };
-    N["HasItem"] = [this](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };   // item type ids are unresolved: nobody owns anything
-    N["PartyHasItem"] = N["HasItem"];
-    N["IsInParty"] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };
-    N["GetWayPointCount"] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };   // named paths are not exported by the importer
-    N["GetNearestPath"] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };
+    N["IsInParty"] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };   // there is no party in the multiplayer demo
     (void)self;
 }
 

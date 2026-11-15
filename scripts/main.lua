@@ -85,7 +85,7 @@ function use_skill(c, skill, value, kind, target)
         if roll > math.max(value, 15) then c:tell("Your first aid attempt fails."); return true end
         local heal = math.random(1, 4) + math.floor(value / 10)
         t:heal(heal)
-        c:tell(string.format("You treat %s for %d hit points.", t == c and "yourself" or t.name, heal))
+        c:tell(string.format("You treat %s for %d hit points.", who, heal))
         c:give_xp(5)
         return true
     elseif skill == "Security" and obj and obj.kind == "door" then
@@ -154,6 +154,17 @@ end
 -- dev: /glob <name> prints a global; /usescript <original script name> runs the Lua port of that object script's use handler
 function commands.glob(c, arg) c:tell("global " .. tostring(arg) .. " = " .. tostring(get_global(arg or ""))) end
 function commands.usescript(c, arg) original_tutorial.on_use(c, 0, "", arg) end
+-- dev (--dev-kit only): /amxnative <program> runs original AMX natives by name for tests, e.g. /amxnative Distance 12 13 (see AmxHost::NativeTest)
+-- dev (--dev-kit only): /amxattacks on|off switches the attacks queued by A_Attack / A_JustAttack (tests turn the scripted NPC aggression off)
+function commands.amxattacks(c, arg)
+    if not dev_kit() then c:tell("amxattacks needs a --dev-kit server"); return end
+    amx_attacks((arg or "") ~= "off")
+    c:tell("amx attacks " .. ((arg or "") ~= "off" and "on" or "off"))
+end
+function commands.amxnative(c, arg)
+    if not dev_kit() then c:tell("amxnative needs a --dev-kit server"); return end
+    c:tell("amx: " .. amx_native(c.id, arg or ""))
+end
 
 -- dev: /near <name or dialogue part>: teleport next to the first critter of this map whose name/dialogue contains the text (e.g. /near Armstrong)
 function commands.near(c, arg)

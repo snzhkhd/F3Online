@@ -28,26 +28,28 @@ Critter* AmxHost::CritterOf(AmxCell h) {
 
 void AmxHost::BindNatives() {
     auto& N = natives_;
-    // ---- Pawn float module (cells hold IEEE-754 bits)
-    N["float"] = [](AmxInstance&, const AmxCell* a, int) { return FBits(static_cast<float>(a[0])); };
-    N["floatadd"] = [](AmxInstance&, const AmxCell* a, int) { return FBits(FVal(a[0]) + FVal(a[1])); };
-    N["floatsub"] = [](AmxInstance&, const AmxCell* a, int) { return FBits(FVal(a[0]) - FVal(a[1])); };
-    N["floatmul"] = [](AmxInstance&, const AmxCell* a, int) { return FBits(FVal(a[0]) * FVal(a[1])); };
-    N["floatdiv"] = [](AmxInstance&, const AmxCell* a, int) { return FBits(FVal(a[1]) != 0 ? FVal(a[0]) / FVal(a[1]) : 0.f); };
-    N["floatfract"] = [](AmxInstance&, const AmxCell* a, int) { float f = FVal(a[0]); return FBits(f - std::floor(f)); };
-    N["floatround"] = [](AmxInstance&, const AmxCell* a, int n) {
-        float f = FVal(a[0]);
-        int mode = n > 1 ? a[1] : 0;  // 0 round, 1 floor, 2 ceil, 3 truncate
-        return static_cast<AmxCell>(mode == 1 ? std::floor(f) : mode == 2 ? std::ceil(f) : mode == 3 ? std::trunc(f) : std::round(f));
-    };
-    N["floatcmp"] = [](AmxInstance&, const AmxCell* a, int) { float x = FVal(a[0]), y = FVal(a[1]); return x < y ? -1 : (x > y ? 1 : 0); };
+    BindFloatNatives();   // Pawn float module (AmxSpatial.cpp)
 
     // ---- engine API (signatures inferred from usage, see docs/server-data.md)
     N["Myself"] = [](AmxInstance& m, const AmxCell*, int) { return Handle(m.userData); };
-    N["Protagonist"] = [this](AmxInstance&, const AmxCell*, int) -> AmxCell {
-        for (auto& [id, c] : server_.GetWorld().Critters())
-            if (c->IsPlayer() && c->mapId != 0) return static_cast<AmxCell>(id);
-        return 0;
+    // Protagonist(): the original has one local player. Here: the player of the running conversation, else the NEAREST living player on the owner's
+    // map (any distance), else 0 (a player on another map is never the protagonist of an NPC).
+    N["Protagonist"] = [this](AmxInstance& m, const AmxCell*, int) -> AmxCell {
+        if (active_) return static_cast<AmxCell>(active_->pc);
+        EntRef self = Resolve(Handle(m.userData));
+        Map* mp = self ? server_.GetWorld().GetMap(self.map) : nullptr;
+        if (!mp) {   // owner without a map (test instance): first player in the world
+            for (auto& [id, c] : server_.GetWorld().Critters()) if (c->IsPlayer() && c->mapId != 0 && !c->dead) return static_cast<AmxCell>(id);
+            return 0;
+        }
+        AmxCell best = 0;
+        double bd = 1e30;
+        for (Critter* o : mp->critters) {
+            if (!o->IsPlayer() || o->dead) continue;
+            const double dx = o->fx * 0.5 + mp->originX - self.x, dz = o->fy * 0.5 + mp->originZ - self.z, d = dx * dx + dz * dz;
+            if (d < bd) { bd = d; best = static_cast<AmxCell>(o->id); }
+        }
+        return best;
     };
     N["RandomNumber"] = [](AmxInstance&, const AmxCell* a, int n) -> AmxCell {
         AmxCell lo = n > 0 ? a[0] : 0, hi = n > 1 ? a[1] : 100;
@@ -67,27 +69,9 @@ void AmxHost::BindNatives() {
         if (a[1] >= 0) server_.Heal(*c, a[1]); else server_.Damage(*c, -a[1], nullptr);
         return 1;
     };
-    N["IsDead"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell { Critter* c = CritterOf(a[0]); return c ? c->dead : 0; };
-    N["HasDied"] = N["IsDead"];
     N["GetTeam"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell { Critter* c = CritterOf(a[0]); return c ? c->team : 0; };
     N["GetGender"] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };
     N["GetRace"] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };
-    N["GetLOS"] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 1; };
-    N["Distance"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell {  // world units (cells / 2) as float (guess)
-        Critter* x = CritterOf(a[0]); Critter* y = CritterOf(a[1]);
-        if (!x || !y || x->mapId != y->mapId) return FBits(9999.f);
-        float dx = static_cast<float>(x->pos.x - y->pos.x), dy = static_cast<float>(x->pos.y - y->pos.y);
-        return FBits(std::sqrt(dx * dx + dy * dy) / 2.f);
-    };
-    N["GetPosition"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {  // (entity, float[3] out) x,y(height),z in world units
-        Critter* c = CritterOf(a[0]);
-        if (!c || n < 2) return 0;
-        const Map* mp = server_.GetWorld().GetMap(c->mapId);
-        const float ox = mp ? mp->originX : 0.f, oz = mp ? mp->originZ : 0.f;   // original world coordinates = cell / 2 + grid origin
-        m.Set(a[1], FBits(c->pos.x / 2.f + ox)); m.Set(a[1] + 4, FBits(0.f)); m.Set(a[1] + 8, FBits(c->pos.y / 2.f + oz));
-        return 1;
-    };
-    N["GetFacing"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell { Critter* c = CritterOf(a[0]); return FBits(c ? static_cast<float>(static_cast<int>(c->dir) * 45) : 0.f); };
     N["DestroyEntity"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell {
         if (Critter* c = CritterOf(a[0])) { if (c->IsNpc()) server_.RemoveCritter(c->id); return 1; }
         return 0;
@@ -121,7 +105,7 @@ void AmxHost::BindNatives() {
     N["UnlockDoor"] = [this, doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { if (Item* d = n > 0 ? doorOf(a[0]) : nullptr) { server_.SetDoorLocked(*d, false); return 1; } return 0; };
     N["LockDoor"] = [this, doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { if (Item* d = n > 0 ? doorOf(a[0]) : nullptr) { server_.SetDoorLocked(*d, true); return 1; } return 0; };
     N["IsLocked"] = [doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { Item* d = n > 0 ? doorOf(a[0]) : nullptr; return d && d->locked ? 1 : 0; };
-    for (const char* n : {"AddToTeam", "SetTeamAttitude", "SetSquadAttitude", "AttachSound", "RemoveSound", "SetValue"})
+    for (const char* n : {"AddToTeam", "AttachSound", "RemoveSound", "SetValue"})
         N[n] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };
 
     // ---- dialogue natives (.scra). Argument order = reverse of the push order in the listing (a[0] is the last pushed value).
@@ -178,6 +162,7 @@ void AmxHost::BindNatives() {
         return npc && pc && pc->IsPlayer() && StartDialog(*pc, *npc) ? 1 : 0;
     };
     BindActionNatives();   // overrides the stubs above (squads, ranks, ClearActions) and adds the A_* queue
+    BindSpatialNatives();  // geometry (Distance, GetPosition, GetFacing...), LOS, FindObjects, waypoints, FOW, VEG, HasItem, IsDead / HasDied
 }
 
 // ------------------------------------------------------------------ dialogue engine
@@ -349,6 +334,7 @@ void AmxHost::Detach(uint64_t key) {
         instances_.erase(it);
     }
     actions_.erase(static_cast<CritterId>(key));
+    vegs_.erase(key);
     for (auto it = dialogs_.begin(); it != dialogs_.end();) {   // a critter that leaves ends its conversations
         if (it->first == key || it->second.npc == key) {
             if (it->first != key) if (Critter* p = server_.GetWorld().GetCritter(it->first)) server_.SendBuf(*p, gnet::PackG(gnet::DialogClose{}));
@@ -367,6 +353,7 @@ void AmxHost::Tick(uint64_t tick, const std::unordered_set<MapId>& active) {
         if (p) server_.SendBuf(*p, gnet::PackG(gnet::DialogClose{}));
         it = dialogs_.erase(it);
     }
+    objectLists_.clear();   // FindObjects lists live one tick (the original frame lookup caches)
     TickActions(active);
     static const char* traceName = std::getenv("F3_AMX_TRACE");   // debugging: trace the natives of scripts whose name contains this text
     std::vector<uint64_t> keys;   // snapshot: scripts may spawn or destroy entities while they run
@@ -408,7 +395,17 @@ void AmxHost::CallObject(ItemId id, const char* pub) {
     it->second.inst->Call(pub);
 }
 
+int AmxHost::RandomRange(int lo, int hi) {
+    if (hi < lo) std::swap(lo, hi);
+    return std::uniform_int_distribution<int>(lo, hi)(Rng());
+}
+
+// A dying NPC bumps the counter global `_DEAD_<instance name>` that HasDied reads (the original native RecordDeath: count + 1).
 void AmxHost::OnDeath(const Critter& c) {
+    if (c.IsNpc() && !c.instName.empty()) {
+        const std::string key = "_DEAD_" + c.instName;
+        server_.SetGlobal(key, server_.GetGlobal(key) + 1);
+    }
     auto it = instances_.find(c.id);
     if (it == instances_.end()) return;
     it->second.inst->Call("OnDeath");

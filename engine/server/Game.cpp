@@ -119,10 +119,14 @@ bool Server::LoadWorldData() {
             }
             m->regions.push_back(std::move(rg));
         }
+        size_t pi = 0;
         for (auto& path : def.paths) {
             std::vector<TilePos> cells;
             for (auto& p : path) cells.push_back(cellOf(p.first, p.second));
             m->paths.push_back(std::move(cells));
+            m->pathNames.push_back(pi < def.pathNames.size() ? def.pathNames[pi] : std::string());
+            m->pathsWorld.push_back(path);
+            ++pi;
         }
         size_t before = m->critters.size() + m->items.size();
         for (const EntityDef& e : def.entities) {
@@ -174,6 +178,7 @@ Critter* Server::SpawnCritterProto(MapId mapId, const Proto& p, TilePos pos, con
         if (!inst->script.empty()) c->script = inst->script;
         if (!inst->dialog.empty()) c->dialog = inst->dialog;
         c->dir = DirFromYaw(inst->yaw);
+        c->instName = inst->name;
     }
     c->color = 0xC0C0C0FF;
     PlaceCritter(*c, *m, spot);
@@ -803,6 +808,15 @@ bool Server::StartAttack(Critter& c, CritterId targetId) {
     return true;
 }
 
+// Can `c` attack `t` right now without moving (weapon range and line of sight, same test as TickCombat)? Used by A_JustAttack.
+bool Server::InAttackRange(const Critter& c, const Critter& t) {
+    Map* m = world_.GetMap(c.mapId);
+    if (!m || t.mapId != c.mapId) return false;
+    AttackPlan plan = PlanAttack(c, data_);
+    int dist = TileDist(c.pos, t.pos);
+    return dist <= plan.rangeCells && (dist <= 1 || HasLos(*m, c.pos, t.pos));
+}
+
 void Server::TickCombat(Critter& c) {
     if (c.dead || c.target == 0) return;
     Critter* t = world_.GetCritter(c.target);
@@ -834,6 +848,7 @@ void Server::TickCombat(Critter& c) {
     SetBattle(c, false);
     SetBattle(*t, true);
     CommitAction(c, static_cast<uint8_t>(GMsg::C2S_Attack), apCost, durMs);
+    ++c.attacksDone;
     int dx = t->pos.x - c.pos.x, dy = t->pos.y - c.pos.y;
     c.dir = DirFromDelta(dx, dy, c.dir);
     if (plan.ranged && plan.ammo && c.IsPlayer()) {

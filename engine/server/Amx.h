@@ -56,6 +56,8 @@ public:
     std::string GetString(AmxCell addr, size_t maxLen = 256) const;  // packed or unpacked
     AmxCell Get(AmxCell addr) const;
     void Set(AmxCell addr, AmxCell v);
+    bool SetString(AmxCell addr, const std::string& s, size_t maxCells = 256);  // unpacked (one char per cell), zero terminated; false if it does not fit
+    AmxCell Alloc(int cells);   // zeroed scratch cells from the heap (test harness / natives that need temporary memory); -1 if full
     static void SetTrace(bool on);  // log every native call (name + args)
     uint64_t userData = 0;  // owner entity id (critter or map object), set by the host
 

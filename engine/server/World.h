@@ -85,6 +85,8 @@ struct Critter {
     uint64_t nextRepathTick = 0;
     int inRegion = -1;          // index of the trigger region the player stands in
     std::string script, dialog; // original AMX script names (informational)
+    std::string instName;       // instance name from the map data (the original entity displayName): key of the _DEAD_<name> death counter
+    uint32_t attacksDone = 0;   // attacks performed by TickCombat (the AMX A_Attack action completes after one)
 
     // ---- continuous position + real-time state (Move.cpp, Timing.cpp). `pos` is always floor(fx), floor(fy).
     float fx = 0.5f, fy = 0.5f;  // position in cell units, cell (cx,cy) has its centre at (cx+0.5, cy+0.5)
@@ -120,9 +122,9 @@ struct Critter {
     int xp = 0;
     int skillPoints = 0;        // unspent skill points
     uint16_t tagMask = 0;       // tag skills (bit per kSkillNames index)
+    uint16_t traitMask = 0;     // optional traits chosen at creation (bit per trait index 0..15); stored only, no gameplay effect yet
     int perkPoints = 0;         // perk placeholder: earned every PerkRate levels, nothing to spend them on yet
     int unspentSpecial = 0;     // SPECIAL points still to allocate (character creation)
-    uint16_t traitMask = 0;     // optional traits chosen at creation (bit per trait index 0..15); stored only, no gameplay effect yet
     bool created = true;        // false while the character still has to go through character creation
     std::map<std::string, int> skillRanks;  // points invested per skill (on top of the SPECIAL based base value)
 
@@ -155,6 +157,8 @@ struct Map {
     std::vector<EntryPoint> entries;
     std::vector<Region> regions;
     std::vector<std::vector<TilePos>> paths;  // waypoint paths (cells)
+    std::vector<std::string> pathNames;       // parallel to paths: EPTH name (GetWayPointCount / GetWayPointPosition / GetNearestPath)
+    std::vector<std::vector<std::pair<float, float>>> pathsWorld;  // parallel to paths: waypoints as original world (x, z)
     const EntryPoint* FindEntry(int id) const;
     std::vector<Critter*> critters;
     std::unordered_map<ItemId, Item> items;

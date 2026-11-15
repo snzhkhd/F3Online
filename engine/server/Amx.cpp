@@ -105,6 +105,21 @@ void AmxInstance::Set(AmxCell addr, AmxCell v) {
     std::memcpy(mem_.data() + addr, &v, 4);
 }
 
+bool AmxInstance::SetString(AmxCell addr, const std::string& s, size_t maxCells) {
+    if (s.size() + 1 > maxCells || addr < 0 || static_cast<size_t>(addr) + 4 * (s.size() + 1) > mem_.size()) return false;
+    for (size_t i = 0; i < s.size(); ++i) Set(addr + static_cast<AmxCell>(4 * i), static_cast<unsigned char>(s[i]));
+    Set(addr + static_cast<AmxCell>(4 * s.size()), 0);
+    return true;
+}
+
+AmxCell AmxInstance::Alloc(int cells) {
+    if (cells <= 0 || static_cast<size_t>(hea_) + 4 * static_cast<size_t>(cells) > mem_.size() / 2) return -1;   // keep the stack half free
+    AmxCell a = hea_;
+    for (int i = 0; i < cells; ++i) Set(a + 4 * i, 0);
+    hea_ += 4 * cells;
+    return a;
+}
+
 std::string AmxInstance::GetString(AmxCell addr, size_t maxLen) const {
     std::string s;
     AmxCell first = Get(addr);

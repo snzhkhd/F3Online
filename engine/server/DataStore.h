@@ -77,6 +77,7 @@ struct MapDef {
     std::vector<RegionDef> regions;
     std::vector<EntityDef> entities;
     std::vector<std::vector<std::pair<float, float>>> paths;
+    std::vector<std::string> pathNames;  // parallel to paths (EPTH name)
 };
 
 class DataStore {

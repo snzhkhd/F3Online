@@ -227,6 +227,7 @@ bool DataStore::LoadMap(const std::string& name, MapDef& out, std::string& err) 
         std::vector<std::pair<float, float>> pts;
         for (auto& q : p["pts"]) pts.emplace_back(q[0].get<float>(), q[1].get<float>());
         out.paths.push_back(std::move(pts));
+        out.pathNames.push_back(p.value("name", std::string()));
     }
     return true;
 }
