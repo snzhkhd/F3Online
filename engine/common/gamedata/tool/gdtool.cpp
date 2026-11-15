@@ -2,12 +2,14 @@
 //   f3_gdtool <gamedir> scan          parse every b3d / tga / tre / emap / mapdata, print failures + totals
 //   f3_gdtool <gamedir> map <Name>    stats for one map (tre base name)
 //   f3_gdtool <gamedir> b3d <Name>    bounds / groups of one model
+//   f3_gdtool <gamedir> gui <Name>    widget list of one Interface\*.gui layout
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include "gamedata/B3d.h"
 #include "gamedata/GameData.h"
+#include "gamedata/GuiFile.h"
 #include "gamedata/MapFiles.h"
 #include "gamedata/Tga.h"
 
@@ -97,6 +99,14 @@ int main(int argc, char** argv) {
     }
     if (argc < 4) return 2;
     std::string name = argv[3];
+    if (cmd == "gui") {
+        GuiFile g;
+        if (!gd.Read(name, kResGui, buf) || !ParseGui(buf.data(), buf.size(), g)) { std::fprintf(stderr, "gui %s: not found / bad\n", name.c_str()); return 1; }
+        std::printf("%s: %zu widgets\n", g.name.c_str(), g.widgets.size());
+        for (auto& w : g.widgets)
+            std::printf("%-28s %d%d%d (%d,%d,%d,%d) a=%d pic=%s font=%s\n", w.name.c_str(), w.flags[0], w.flags[1], w.flags[2], w.rect[0], w.rect[1], w.rect[2], w.rect[3], w.alpha, w.picture().c_str(), w.font().c_str());
+        return 0;
+    }
     if (cmd == "emap") {  // entity list of <Name>.emap
         if (!gd.Read(name, kResEmap, buf)) { std::fprintf(stderr, "no emap %s\n", name.c_str()); return 1; }
         Emap m;
