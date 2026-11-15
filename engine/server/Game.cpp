@@ -314,6 +314,22 @@ void Server::SendCritterState(const Critter& c) {
         if (p->IsPlayer() && (p == &c || p->visCritters.count(c.id))) Send(*p, b);
 }
 
+void Server::SendAppearance(const Critter& c, Critter* onlyTo) {
+    gnet::Appearance a;
+    a.id = c.id;
+    for (auto& it : c.inventory) {
+        if (it.slot == gnet::SlotBody) a.body = it.pid;
+        else if (it.slot == gnet::SlotHead) a.head = it.pid;
+        else if (it.slot == gnet::SlotHand1) a.weapon = it.pid;
+    }
+    ByteBuffer b = gnet::PackG(a);
+    if (onlyTo) { Send(*onlyTo, b); return; }
+    Map* m = world_.GetMap(c.mapId);
+    if (!m) return;
+    for (Critter* p : m->critters)
+        if (p->IsPlayer() && (p == &c || p->visCritters.count(c.id))) Send(*p, b);
+}
+
 void Server::SendObjectInfo(Critter& to, const Item& it) {
     gnet::ObjectInfo o;
     o.id = it.id;
@@ -398,6 +414,7 @@ bool Server::EquipItem(Critter& c, ItemId invId, bool on, uint8_t slot) {
         }
         set(*target, want);
     }
+    SendAppearance(c);
     if (c.IsPlayer()) { SendInventory(c); SendStats(c); }
     return true;
 }

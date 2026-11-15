@@ -131,7 +131,7 @@ bool ProtoDb::Load(const std::string& hint, std::string* err) {
                     for (const auto& e : cj["equipment"]) equip[protos_.size()].push_back(e.is_string() ? e.get<std::string>() : "");
             }
             if (p.cls == "armor" && v.contains("item") && v["item"].contains("raw_hex") && v["item"]["raw_hex"].is_string())
-                armorParts[p.key] = ParseArmorParts(v["item"]["raw_hex"].get<std::string>());
+                armorParts[p.key] = p.armorParts = ParseArmorParts(v["item"]["raw_hex"].get<std::string>());
             protos_.push_back(std::move(p));
         }
         for (auto& [pid, keys] : equip) {

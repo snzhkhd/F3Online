@@ -500,11 +500,13 @@ void Server::UpdateVisibility(Map& m) {
         if (!p->visCritters.count(p->id)) {
             SendMsg(*p, MakeAdd(*p));
             if (p->protoPid >= 0) Send(*p, gnet::PackG(gnet::CritterProto{p->id, static_cast<uint16_t>(p->protoPid)}));
+            SendAppearance(*p, p);
         }
         for (Critter* c : m.critters)
             if (c != p && now.count(c->id) && !p->visCritters.count(c->id)) {
                 SendMsg(*p, MakeAdd(*c));
                 if (c->protoPid >= 0) Send(*p, gnet::PackG(gnet::CritterProto{c->id, static_cast<uint16_t>(c->protoPid)}));
+                SendAppearance(*c, p);
                 if (p->caps & gnet::kCapContinuousMove) {
                     SendCritterStop(*c, 3, p);  // exact float position (CritterAdd only has the cell)
                     if (c->mv.active) SendMovePath(*c, p);

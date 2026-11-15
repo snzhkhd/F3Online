@@ -40,6 +40,9 @@ struct ClientCritter {
     // combat presentation timestamps (client clock, -1 = never)
     double attackT = -1, hitT = -1, deathT = -1;
     CritterId attackTarget = 0;
+    // appearance block (S2C_Appearance): prototype indices of worn armor / helmet / hand-1 weapon, 0xFFFF = none
+    bool hasApp = false;
+    uint16_t appBody = 0xFFFF, appHead = 0xFFFF, appWeapon = 0xFFFF;
 };
 
 struct CritterPose {

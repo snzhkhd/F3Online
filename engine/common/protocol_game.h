@@ -33,6 +33,7 @@ enum class GMsg : uint8_t {
     S2C_CombatEvent = 124,
     S2C_Container = 125,
     S2C_CellsSet = 126,
+    S2C_Appearance = 139,  // appearance block: what a critter wears / wields (armor, helmet, hand-1 weapon)
 };
 
 namespace gnet {
@@ -170,6 +171,19 @@ struct ObjectInfo {
     void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU8(static_cast<uint8_t>(kind)); b.WriteU8(open); }
     bool Read(ByteBuffer& b) { id = b.ReadU32(); kind = static_cast<ObjectKind>(b.ReadU8()); open = b.ReadU8(); return b.Ok(); }
 };
+
+// --- appearance block -----------------------------------------------------------------------------------------
+// Prototype indices (ItemAdd.pid space) of the body armor, the helmet and the active (hand 1) weapon of a critter;
+// 0xFFFF = nothing. Sent to every client that sees the critter when it appears and whenever the equipment changes.
+constexpr uint16_t kNoPid = 0xFFFF;
+struct Appearance {
+    static constexpr GMsg kId = GMsg::S2C_Appearance;
+    uint32_t id = 0;
+    uint16_t body = kNoPid, head = kNoPid, weapon = kNoPid;
+    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU16(body); b.WriteU16(head); b.WriteU16(weapon); }
+    bool Read(ByteBuffer& b) { id = b.ReadU32(); body = b.ReadU16(); head = b.ReadU16(); weapon = b.ReadU16(); return b.Ok(); }
+};
+// --- end appearance block -------------------------------------------------------------------------------------
 
 struct CritterState {
     static constexpr GMsg kId = GMsg::S2C_CritterState;

@@ -87,7 +87,9 @@ int main(int argc, char** argv) {
     std::string name = cfg.count("name") ? cfg["name"] : "Player";
     std::string viewMap, protosHint, gameDirArg;
     uint16_t port = cfg.count("port") ? static_cast<uint16_t>(std::atoi(cfg["port"].c_str())) : kDefaultPort;
-    bool openInv = false;
+    bool openInv = false, toggleEquip = false;
+    int toggleStep = 0;
+    double lastToggle = 0;
     bool noAssets = false, autowalk = false, hostGiven = false, legacy = false, autoattack = false, autopickup = false;
     std::vector<std::string> sayList;
     std::string traceFile;
@@ -109,6 +111,7 @@ int main(int argc, char** argv) {
         else if (a == "--shot-exit") ropt.exitAfterScreenshot = true;
         else if (a == "--no-origui") ropt.noOrigUi = true;
         else if (a == "--open-inv") openInv = true;
+        else if (a == "--toggle-equip") toggleEquip = true;
         else if (a == "--shots") ropt.shotPrefix = next();
         else if (a == "--shot-times") {
             std::stringstream ss(next());
@@ -332,6 +335,21 @@ int main(int argc, char** argv) {
                     if (best) { log::Info("autopickup: %s (%.1f tiles)", best->name.c_str(), bd); core.PickUp(best->id); }
                 }
             }
+        }
+
+        // ---- --toggle-equip (testing): every 3 s alternately take off / put on the armor and the first weapon ----
+        if (toggleEquip && inGame && now - inGameSince > 2.5 && now - lastToggle > 3.0 && !core.inventory().empty()) {
+            lastToggle = now;
+            const char* want = (toggleStep / 2) % 2 == 0 ? "armor" : "weapon";
+            for (const gnet::InvEntry& e : core.inventory()) {
+                const ProtoInfo* p = core.protos().ByPid(e.pid);
+                if (p && p->cls == want) {
+                    log::Info("toggle-equip: %s %s", e.equipped ? "unequip" : "equip", e.name.c_str());
+                    core.Equip(e.id, !e.equipped);
+                    break;
+                }
+            }
+            ++toggleStep;
         }
 
         // ---- snapshot for the renderer ----

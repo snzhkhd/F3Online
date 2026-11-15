@@ -653,7 +653,23 @@ private:
         app.model = model;
         if (proto) {
             app.skin = proto->skin;
-            for (const WornPart& w : proto->worn) app.worn.emplace_back(w.part, w.tex);
+            for (const WornPart& w : proto->worn) {
+                // players start from the base body: the prototype's built-in outfit (prison suit) is not worn
+                static const char* kOutfit[] = {"Bod", "Fee", "Bac", "Han", "Sho", "Hea"};
+                bool outfit = false;
+                if (c.kind == CritterKind::Player) for (const char* o : kOutfit) if (w.part.compare(0, 3, o) == 0) outfit = true;
+                if (!outfit) app.worn.emplace_back(w.part, w.tex);
+            }
+        }
+        if (c.hasApp && s.protos) {   // equipment sent by the server (armor, helmet): its parts replace parts of the same slot
+            for (uint16_t apid : {c.appBody, c.appHead}) {
+                const ProtoInfo* ap = apid == 0xFFFF ? nullptr : s.protos->ByPid(apid);
+                if (!ap) continue;
+                for (const WornPart& w : ap->armorParts) {
+                    app.worn.erase(std::remove_if(app.worn.begin(), app.worn.end(), [&](const std::pair<std::string, std::string>& o) { return o.first.compare(0, 3, w.part, 0, 3) == 0; }), app.worn.end());
+                    app.worn.emplace_back(w.part, w.tex);
+                }
+            }
         }
         const std::string appKey = app.Key();
         if (v.model != appKey) {

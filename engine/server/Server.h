@@ -146,6 +146,7 @@ private:
     void TickCombat(Critter& c);
     void CheckRegions(Critter& c);
     void SendCritterState(const Critter& c);
+    void SendAppearance(const Critter& c, Critter* onlyTo = nullptr);   // worn armor / helmet / hand-1 weapon (appearance block)
     void SendObjectInfo(Critter& to, const Item& it);
     void DropAllToGround(Critter& c);
     void Respawn(Critter& c);

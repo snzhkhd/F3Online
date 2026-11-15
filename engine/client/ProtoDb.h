@@ -33,6 +33,7 @@ struct ProtoInfo {
     struct Mode { int type = 0, ap = 0; };
     std::vector<Mode> modes;     // weapon attack modes (type 1 burst, 2 single, 6 thrust, 8 swing, 9 throw/other: guess)
     int armor[7] = {0, 0, 0, 0, 0, 0, 0};
+    std::vector<WornPart> armorParts;   // armor: b3d parts it adds to the wearer (Bod/Fee/Bac/Han/Sho/Hea...)
     bool isCritter() const { return cls == "critter"; }
 };
 

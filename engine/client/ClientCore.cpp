@@ -322,6 +322,15 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
             else if (!m.dead && c.dead) { c.dead = false; c.deathT = -1; }
             break;
         }
+        case static_cast<uint8_t>(GMsg::S2C_Appearance): {
+            gnet::Appearance m;
+            if (!m.Read(b)) return;
+            auto it = critters_.find(m.id);
+            if (it == critters_.end()) return;
+            ClientCritter& c = it->second;
+            c.hasApp = true; c.appBody = m.body; c.appHead = m.head; c.appWeapon = m.weapon;
+            break;
+        }
         case static_cast<uint8_t>(GMsg::S2C_CombatEvent): {
             gnet::CombatEvent m;
             if (!m.Read(b)) return;
