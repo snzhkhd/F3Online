@@ -41,6 +41,7 @@ struct FrameInput {
     bool keyInventory = false;        // I
     bool keyChar = false;             // C
     bool keyExamine = false;          // X
+    bool keyHand = false;             // B: switch the active hand
     bool keyStop = false;             // Tab: stop attacking
 };
 
@@ -108,7 +109,7 @@ struct LoginLayout {
 
 struct UiCommand {
     enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, CloseContainer, DialogChoose, DialogClose,
-                CharCreate, SpendSkill, UseSkill } type = SetMode;   // SpendSkill/UseSkill: a = skill index, b = points; CharCreate sends UiState::draft
+                CharCreate, SpendSkill, UseSkill, SwapHands } type = SetMode;   // SpendSkill/UseSkill: a = skill index, b = points; CharCreate sends UiState::draft
     uint32_t a = 0, b = 0, c = 0;   // Equip: a = inventory id, b = on, c = EquipSlot (0 = automatic)
 };
 

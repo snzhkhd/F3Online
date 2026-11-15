@@ -82,7 +82,7 @@ public:
             }
         }
         if (const char* e = std::getenv("F3_HELD"))   // dev: held weapon transform "scale,rx,ry,rz,ox,oy,oz" (degrees, b3d units)
-            std::sscanf(e, "%f,%f,%f,%f,%f,%f,%f", &kHeldScale, &kHeldRotX, &kHeldRotY, &kHeldRotZ, &kHeldOffX, &kHeldOffY, &kHeldOffZ);
+            std::sscanf(e, "%f,%f,%f,%f,%f,%f,%f", &kHeldModelScale, &kHeldRotX, &kHeldRotY, &kHeldRotZ, &kHeldOffX, &kHeldOffY, &kHeldOffZ);
         showGrid_ = opt_.showGrid;
         startTime_ = GetTime();
         return true;
@@ -145,6 +145,7 @@ public:
         in.keyChar = IsKeyPressed(KEY_C);
         in.keyExamine = IsKeyPressed(KEY_X);
         in.keyStop = IsKeyPressed(KEY_TAB);
+        in.keyHand = IsKeyPressed(KEY_B);
         // right button: a click (toggle cursor mode) unless the mouse was dragged (camera orbit)
         if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) { rmbDown_ = true; rmbTravel_ = 0; }
         if (rmbDown_) {
@@ -530,8 +531,8 @@ private:
         if (IsKeyPressed(KEY_G)) showGrid_ = !showGrid_;
         if (IsKeyPressed(KEY_H)) dopt_.entities = !dopt_.entities;
         if (IsKeyPressed(KEY_L)) dopt_.lmGain = dopt_.lmGain > 1.5f ? 1.0f : 2.0f;
-        if (IsKeyPressed(KEY_PAGE_UP)) dopt_.clipY = std::min(dopt_.clipY, 60.0f) + 1.0f;
-        if (IsKeyPressed(KEY_PAGE_DOWN)) dopt_.clipY = std::min(dopt_.clipY, 60.0f) - 1.0f;
+        if (!orig_.ChatOwnsPaging() && IsKeyPressed(KEY_PAGE_UP)) dopt_.clipY = std::min(dopt_.clipY, 60.0f) + 1.0f;
+        if (!orig_.ChatOwnsPaging() && IsKeyPressed(KEY_PAGE_DOWN)) dopt_.clipY = std::min(dopt_.clipY, 60.0f) - 1.0f;
         if (IsKeyPressed(KEY_END)) dopt_.clipY = 1e9f;
     }
 
@@ -784,7 +785,11 @@ private:
     void DrawHeldWeapon(const SceneView& s, const ClientCritter& c, Visual& v, const Matrix& body) {
         if (!c.hasApp || c.appWeapon == 0xFFFF || !s.protos) return;
         const ProtoInfo* wp = s.protos->ByPid(c.appWeapon);
-        const ModelAsset* wm = wp && !wp->model.empty() ? assets_->Model(wp->model) : nullptr;
+        // The hand model (item record field heldModel, "WP_*") is authored in hand space at world scale; the ground model ("GD_WP_*",
+        // ProtoInfo::model) is a different, much larger mesh and is only a fallback (tuned by eye with kHeldScale).
+        const ModelAsset* wm = wp && !wp->heldModel.empty() ? assets_->Model(wp->heldModel) : nullptr;
+        const bool held = wm != nullptr;
+        if (!wm) wm = wp && !wp->model.empty() ? assets_->Model(wp->model) : nullptr;
         float h[16];
         if (!wm || !v.inst->BoneWorld("R Handle_1", h)) return;
         const float ss = v.inst->model()->skelScale;
@@ -793,12 +798,13 @@ private:
         g.m1 = h[1];  g.m5 = h[5];  g.m9 = -h[9];   g.m13 = h[13] * ss;
         g.m2 = -h[2]; g.m6 = -h[6]; g.m10 = h[10];  g.m14 = -h[14] * ss;
         g.m15 = 1.0f;
-        const float ks = kHeldScale * wm->unitScale;
+        const float ks = (held ? kHeldModelScale : kHeldScale) * wm->unitScale;
         Matrix local = MatrixMultiply(MatrixScale(ks, ks, ks), MatrixRotateXYZ(Vector3{kHeldRotX * DEG2RAD, kHeldRotY * DEG2RAD, kHeldRotZ * DEG2RAD}));
         local = MatrixMultiply(local, MatrixTranslate(kHeldOffX, kHeldOffY, kHeldOffZ));
         const Matrix wmat = MatrixMultiply(MatrixMultiply(local, g), body);
         MapView::DrawModel(*assets_, *wm, wmat, WHITE, nullptr, dopt_, true);
     }
+    float kHeldModelScale = 1.0f;
     float kHeldScale = 0.5f, kHeldRotX = 0, kHeldRotY = 0, kHeldRotZ = 0, kHeldOffX = 0, kHeldOffY = 0, kHeldOffZ = 0;
 
     void DrawItem(const SceneView& s, const ClientItem& it, int tw, int th) {

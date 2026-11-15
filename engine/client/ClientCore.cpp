@@ -122,7 +122,7 @@ void ClientCore::AddChat(ChatLine l) {
     l.time = Now();
     chat_.push_back(std::move(l));
     ++chatCounter_;
-    while (chat_.size() > 100) chat_.pop_front();
+    while (chat_.size() > kChatHistory) chat_.pop_front();
 }
 
 void ClientCore::OnLoginOk() {
@@ -541,6 +541,13 @@ void ClientCore::SendPing() {
 
 void ClientCore::PickUp(ItemId id) { gnet::PickUp m; m.id = id; SendG(m); }
 void ClientCore::Drop(uint32_t invId) { gnet::Drop m; m.id = invId; SendG(m); }
+void ClientCore::SwapHands() {
+    const gnet::InvEntry* h1 = nullptr; const gnet::InvEntry* h2 = nullptr;
+    for (const auto& e : inventory_) { if (e.equipped == gnet::SlotHand1) h1 = &e; else if (e.equipped == gnet::SlotHand2) h2 = &e; }
+    if (h2) Equip(h2->id, true, gnet::SlotHand1);
+    else if (h1) Equip(h1->id, true, gnet::SlotHand2);
+}
+
 void ClientCore::Equip(uint32_t invId, bool on, uint32_t slot) { gnet::Equip m; m.id = invId; m.on = on ? 1 : 0; m.slot = static_cast<uint8_t>(slot); SendG(m); }
 void ClientCore::Use(uint32_t objectId) { gnet::Use m; m.id = objectId; SendG(m); }
 void ClientCore::Attack(CritterId id) { gnet::Attack m; m.id = id; SendG(m); }

@@ -110,6 +110,9 @@ public:
     void PickUp(ItemId id);
     void Drop(uint32_t invId);
     void Equip(uint32_t invId, bool on, uint32_t slot = 0);
+    // Switch the active hand: hand 2's item comes into hand 1 (swapping with whatever is there); with an empty hand 2 the active
+    // weapon is put into hand 2, leaving the active hand empty (holstered). Does nothing when both hands are empty.
+    void SwapHands();
     void Use(uint32_t objectId);
     void Attack(CritterId id);   // 0 = stop
     void Take(uint32_t container, uint32_t entry);   // entry 0 = everything
@@ -134,6 +137,7 @@ public:
     uint64_t mapSerial() const { return mapSerial_; }   // increments on every MapInfo
     const std::unordered_map<CritterId, ClientCritter>& critters() const { return critters_; }
     const std::unordered_map<ItemId, ClientItem>& items() const { return items_; }
+    static constexpr size_t kChatHistory = 300;   // chat lines kept for scrolling
     const std::deque<ChatLine>& chat() const { return chat_; }
     uint64_t chatCounter() const { return chatCounter_; }  // total lines ever received
     int lastPongToken() const { return static_cast<int>(lastPong_); }

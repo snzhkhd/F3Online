@@ -23,7 +23,7 @@ Test options: `--shot FILE.png`, `--shots PREFIX --shot-times 5,8,11` (timed ser
 Note: under MSYS bash set `MSYS_NO_PATHCONV=1` or `/tp ...` is rewritten into a Windows path.
 
 Controls (network): LMB acts according to the cursor mode, RMB click cycles the mode (Move/Attack/Use/Talk/Pickup, or
-keys 1-5), Shift = walk instead of run, Tab stops attacking, I inventory, C character, X examine, Enter chat.
+keys 1-5), Shift = walk instead of run, Tab stops attacking, I inventory, C character, X examine, B switches the active hand, Enter chat (mouse wheel over the chat or PgUp/PgDn scrolls it).
 The camera follows the player; wheel zooms; RMB drag orbits; Q/E rotate.
 
 ## Movement and timing
@@ -135,6 +135,14 @@ Vault: 47 k triangles. All geometry is static GPU meshes; no per-frame allocatio
   towards the server open state.
 * Known gaps: the Overseer door and other doors without skeleton just vanish when open; some Vault rooms are dark (lightmaps, pre-existing).
 
+## Held weapon model
+
+Weapons in the hand use the item record's `heldModel` (`WP_<name>.b3d`, parsed from the end of the GITM record in `protos.json` raw_hex by
+`ProtoDb`; compare vbdecomp `GameItem::ReadVersion0`), not `model` (`GD_WP_<name>.b3d`, the larger ground model). The held mesh is authored in
+hand space (origin at the grip, barrel along +x) and is attached at scale 1 to the Granny bone `R Handle_1` (bone 30, vbdecomp
+`GameInventory::Equip`: both weapon slots use bone 30; `ModelInstance::Attach` just copies the bone transform). `F3_HELD=scale,rx,ry,rz,ox,oy,oz`
+tunes the transform. The old code drew the ground model at 0.5, i.e. too small for big weapons (minigun).
+
 ## Original-art action bar and inventory (`OrigUi`)
 
 `engine/client/OrigUi.{h,cpp}` draws the action bar and the inventory window from the game install (`Interface\Actionbar.gui`,
@@ -145,8 +153,10 @@ Everything else (chat, dialogue, container, character sheet, labels) is still ra
 
 * The layout is 1024 wide (bar 1024x164 anchored bottom centre, inventory 1024x604 centred above it); both scale down uniformly
   on small windows. Background textures are stretched (800 -> 1024), buttons are 1:1.
-* **Action bar**: weapon slot 1 = hand 1 (active weapon, "down" texture), slot 2 = hand 2 (spare; clicking it swaps the hands via
-  `Equip(id, 1, SlotHand1)`). Weapon image = `iconAct`, mode text = first attack mode of the prototype (SINGLE/BURST/THRUST/SWING/THROW,
+* **Action bar**: weapon slot 1 = hand 1 (active weapon, "down" texture), slot 2 = hand 2 (spare). Clicking the spare slot or pressing **B** switches the active hand
+  (`ClientCore::SwapHands`: hand 2's item goes to hand 1 via `Equip(id, 1, SlotHand1)`; with an empty hand 2 the active weapon is moved to
+  hand 2 via `Equip(id, 1, SlotHand2)` and the active hand is empty = holstered / unarmed). An empty hand is a valid active slot; the server
+  already treats "no weapon in hand 1" as unarmed. Weapon image = `iconAct`, mode text = first attack mode of the prototype (SINGLE/BURST/THRUST/SWING/THROW,
   mode type numbers are a guess), `NAP` = mode AP word / 10 (guess), ammo icon on when the player carries any ammo and the weapon is
   ranged. Digit boxes: health, current AP, armor class. Player frame (name, yellow health fill, blue AP fill), AP cells (green full,
   blue regenerating, grey empty) and AP counter, Inventory / Character buttons. The dark message area on the left holds the cursor
@@ -161,6 +171,12 @@ Everything else (chat, dialogue, container, character sheet, labels) is still ra
 * Not done: skills, the 3D paperdoll model (`winModel`), "use item from inventory", attack-mode switching, reload.
 
 ### Chat in the original action bar (and inventory tooltip)
+
+* The chat log is scrollable: mouse wheel while the pointer is over the message screen (the wheel then does not zoom the camera), PageUp /
+  PageDown (a page = visible lines - 1; they replace the viewer's roof-cut keys while the action bar is shown). The client keeps 300 lines
+  (`ClientCore::kChatHistory`). New lines keep the view at the bottom; if you scrolled up the view stays on the same lines, a thin scroll bar
+  on the right edge shows the position and "more below" appears. Sending a message jumps back to the newest lines. The plain raylib fallback
+  HUD (no original art) does not scroll.
 
 * With the original-art bar the chat log and input line live in the bar's left dark message screen (`OrigUi::DrawActionBar`): lines are word-wrapped to the screen width (gothic font), newest at the bottom just above the input row; the input row shows the typed text while Enter-chat is active and a faint "Enter: chat" hint otherwise. The floating chat panel above the bar is not drawn in this mode (the raylib fallback HUD keeps it). The Move / Examine / Attack buttons are gone: RMB toggles Move / Examine, key A selects Attack; the mode is shown next to the cursor and as a small label in the top-right corner of the message screen. The break-time bar stays at the bottom of the screen; the "busy" message appears on the input row.
 * The inventory window no longer shows a floating item tooltip (hovering fills the description box). Tooltips remain on the weapon slots of the bar.

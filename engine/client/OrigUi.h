@@ -28,6 +28,8 @@ public:
     void DrawOverlay();   // tooltip, after all windows
     // True while an item is being dragged (the world must not react to the mouse).
     bool Dragging() const { return drag_.active; }
+    // True while the action bar is on screen: PageUp / PageDown scroll its chat (the viewer's roof-cut keys must stand back).
+    bool ChatOwnsPaging() const { return ok_ && GetTime() - lastBarTime_ < 0.25; }
 
 private:
     struct Tex { Texture2D t{}; bool ok = false; };
@@ -49,6 +51,13 @@ private:
 
     struct Drag { bool active = false, pressed = false; uint32_t id = 0; int from = 0; Vector2 start{}; } drag_;
     int scrollRows_ = 0;
+    // chat log in the message screen: wrapped history cache + scroll position (lines above the bottom)
+    std::vector<std::pair<std::string, Color>> wrapped_;
+    uint64_t wrapCounter_ = ~0ull;
+    float wrapWidth_ = 0;
+    int chatScroll_ = 0;
+    bool wasTyping_ = false;
+    double lastBarTime_ = -1;
     int sortMode_ = 0;            // 0 type, 1 weight, 2 name
     uint32_t examineId_ = 0;
     std::string examineName_, examineText_;

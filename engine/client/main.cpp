@@ -32,7 +32,8 @@ static const char* kUsage =
     "           --cam AZ,EL,FOV  --target X,Z  --clipy Y  --noentities  --modelscale S\n"
     "controls:  LMB act, RMB click toggles Move/Examine cursor (A = attack cursor, RMB/Esc back) or drag to orbit;\n"
     "           pickup / use / talk cursors switch by themselves over items / usable objects / NPCs,\n"
-    "           I inventory, C character, X examine, Tab stop attack, Enter chat, wheel zoom, Shift+LMB = walk.\n";
+    "           I inventory, C character, X examine, B switch active hand, Tab stop attack, Enter chat (PgUp/PgDn or wheel over the chat scrolls it),\n"
+    "           wheel zoom, Shift+LMB = walk.\n";
 
 namespace {
 
@@ -304,6 +305,7 @@ int main(int argc, char** argv) {
             if (in.keyInventory) uiState.inventory = !uiState.inventory;
             if (in.keyChar) uiState.charSheet = !uiState.charSheet;
             if (in.keyStop) core.Attack(0);
+            if (in.keyHand) core.SwapHands();
             if (in.escape) {
                 if (core.dialog().open) core.DialogClose();
                 else if (core.hasContainer()) core.CloseContainer();
@@ -488,6 +490,7 @@ int main(int argc, char** argv) {
                 case UiCommand::ToggleInventory: uiState.inventory = !uiState.inventory; break;
                 case UiCommand::ToggleChar: uiState.charSheet = !uiState.charSheet; break;
                 case UiCommand::Equip: core.Equip(c.a, c.b != 0, c.c); break;
+                case UiCommand::SwapHands: core.SwapHands(); break;
                 case UiCommand::Drop: core.Drop(c.a); break;
                 case UiCommand::Take: core.Take(c.a, c.b); break;
                 case UiCommand::CloseContainer: core.CloseContainer(); break;

@@ -837,6 +837,23 @@ int main(int argc, char** argv) {
         CHECK(WaitFor({&a, &b}, 2, [&] { return a.waits.size() > w1; }) && a.waits.back().w.result == gnet::ActionResult::Ok, "Equip accepted again after the breaktime (%zu entries)", a.inv.size());
         WaitFor({&a, &b}, 0.7, [] { return false; });
     }
+    // --- hand switching with an empty hand: hand 1 -> hand 2 leaves the active hand empty (holstered), and back
+    {
+        ItemId gun = 0;
+        for (auto& e : a.inv) if (e.equipped == gnet::SlotHand1 && e.name.find("9mm") != std::string::npos) gun = e.id;
+        auto slotOf = [&](ItemId id) { for (auto& e : a.inv) if (e.id == id) return (int)e.equipped; return -1; };
+        if (gun) {
+            WaitFor({&a, &b}, 1.0, [] { return false; });
+            gnet::Equip toH2; toH2.id = gun; toH2.on = 1; toH2.slot = gnet::SlotHand2;
+            a.Send(gnet::PackG(toH2));
+            CHECK(WaitFor({&a, &b}, 3, [&] { return slotOf(gun) == gnet::SlotHand2; }), "weapon moved to hand 2, the active hand 1 is now empty (slot %d)", slotOf(gun));
+            WaitFor({&a, &b}, 0.7, [] { return false; });
+            gnet::Equip toH1; toH1.id = gun; toH1.on = 1; toH1.slot = gnet::SlotHand1;
+            a.Send(gnet::PackG(toH1));
+            CHECK(WaitFor({&a, &b}, 3, [&] { return slotOf(gun) == gnet::SlotHand1; }), "weapon back in the active hand (slot %d)", slotOf(gun));
+            WaitFor({&a, &b}, 0.7, [] { return false; });
+        }
+    }
 
     // --- dialogue: Corporal Armstrong (00 Corporal Armstrong.scra) runs through the original conversation graph
     {

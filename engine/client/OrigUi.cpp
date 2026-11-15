@@ -170,7 +170,7 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
     rects.push_back(P(0, 0, 1024, 164));
     Blit(Texture("f3_actionbar.tga"), P(0, 0, 1024, 164));
 
-    // ---- weapon slots: left = hand 1 (active weapon), right = hand 2 (spare); clicking the spare one swaps hands
+    // ---- weapon slots: left = hand 1 (active weapon), right = hand 2 (spare); clicking the spare one (or key B) switches hands, even if it is empty
     for (int i = 0; i < 2; ++i) {
         const std::string n = std::string("0") + static_cast<char>('1' + i);
         int bi;
@@ -209,7 +209,9 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
         }
         if (In(br, mp)) {
             if (item) Tooltip(item->name, ItemText(*item, p));
-            if (click && !active && item) ui.commands->push_back(UiCommand{UiCommand::Equip, item->id, 1, static_cast<uint32_t>(gnet::SlotHand1)});
+            else Tooltip(active ? "Active hand (empty)" : "Spare hand (empty)", active ? "Fists. Press B or click the other hand to switch." : "Click here or press B to switch hands.");
+            // clicking the inactive hand makes it the active one, also when it is empty (= holster the weapon)
+            if (click && !active) ui.commands->push_back(UiCommand{UiCommand::SwapHands, 0, 0, 0});
         }
     }
 
@@ -281,36 +283,64 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
         const Rectangle inR = P(16, 108, 262, 16);   // input / hint line (bottom of the area)
         const int maxLines = std::max(1, static_cast<int>((inR.y - area.y - 2) / lineH));
         const float maxW = area.width - 4 * s;
-        std::vector<std::pair<std::string, Color>> wrapped;
-        if (ui.chat) {
-            const int count = static_cast<int>(ui.chat->size());
-            for (int i = std::max(0, count - 30); i < count; ++i) {
-                const ChatLine& l = (*ui.chat)[i];
-                std::string line = l.name.empty() ? l.text : l.name + ": " + l.text;
-                const Color c = l.channel == ChatChannel::System ? Color{140, 220, 255, 255} : Color{225, 205, 150, 255};
-                std::string cur;
-                size_t pos = 0;
-                while (pos < line.size()) {
-                    size_t sp = line.find(' ', pos);
-                    std::string word = line.substr(pos, sp == std::string::npos ? std::string::npos : sp - pos + 1);
-                    pos = sp == std::string::npos ? line.size() : sp + 1;
-                    while (TextW(gothic_, word, fs) > maxW && word.size() > 1) {
-                        size_t n = word.size();
-                        while (n > 1 && TextW(gothic_, word.substr(0, n), fs) > maxW) --n;
-                        if (!cur.empty()) { wrapped.emplace_back(cur, c); cur.clear(); }
-                        wrapped.emplace_back(word.substr(0, n), c);
-                        word = word.substr(n);
+        // wrap the whole history (cached until a line arrives or the width changes)
+        const uint64_t counter = ui.core ? ui.core->chatCounter() : 0;
+        if (counter != wrapCounter_ || std::fabs(maxW - wrapWidth_) > 0.5f) {
+            const size_t oldN = wrapped_.size();
+            wrapped_.clear();
+            if (ui.chat) {
+                for (const ChatLine& l : *ui.chat) {
+                    std::string line = l.name.empty() ? l.text : l.name + ": " + l.text;
+                    const Color c = l.channel == ChatChannel::System ? Color{140, 220, 255, 255} : Color{225, 205, 150, 255};
+                    std::string cur;
+                    size_t pos = 0;
+                    while (pos < line.size()) {
+                        size_t sp = line.find(' ', pos);
+                        std::string word = line.substr(pos, sp == std::string::npos ? std::string::npos : sp - pos + 1);
+                        pos = sp == std::string::npos ? line.size() : sp + 1;
+                        while (TextW(gothic_, word, fs) > maxW && word.size() > 1) {
+                            size_t n = word.size();
+                            while (n > 1 && TextW(gothic_, word.substr(0, n), fs) > maxW) --n;
+                            if (!cur.empty()) { wrapped_.emplace_back(cur, c); cur.clear(); }
+                            wrapped_.emplace_back(word.substr(0, n), c);
+                            word = word.substr(n);
+                        }
+                        if (!cur.empty() && TextW(gothic_, cur + word, fs) > maxW) { wrapped_.emplace_back(cur, c); cur.clear(); }
+                        cur += word;
                     }
-                    if (!cur.empty() && TextW(gothic_, cur + word, fs) > maxW) { wrapped.emplace_back(cur, c); cur.clear(); }
-                    cur += word;
+                    if (!cur.empty()) wrapped_.emplace_back(cur, c);
                 }
-                if (!cur.empty()) wrapped.emplace_back(cur, c);
             }
+            // a user who scrolled up keeps looking at the same lines when new ones arrive; at the bottom the view follows
+            if (chatScroll_ > 0 && wrapWidth_ == maxW && wrapped_.size() > oldN) chatScroll_ += static_cast<int>(wrapped_.size() - oldN);
+            wrapCounter_ = counter;
+            wrapWidth_ = maxW;
         }
-        const int first = std::max(0, static_cast<int>(wrapped.size()) - maxLines);
-        const int shown = static_cast<int>(wrapped.size()) - first;
-        float y = inR.y - 2 * s - shown * lineH;   // newest line sits right above the input line
-        for (size_t i = first; i < wrapped.size(); ++i, y += lineH) Text(gothic_, wrapped[i].first, area.x + 2 * s, y, fs, wrapped[i].second);
+        const std::vector<std::pair<std::string, Color>>& wrapped = wrapped_;
+        const int maxScroll = std::max(0, static_cast<int>(wrapped.size()) - maxLines);
+        lastBarTime_ = GetTime();
+        // scrolling: mouse wheel while hovering the message screen, PageUp / PageDown
+        if (In(P(16, 18, 262, 124), mp)) chatScroll_ += static_cast<int>(std::lround(GetMouseWheelMove() * 3));
+        if (IsKeyPressed(KEY_PAGE_UP) || IsKeyPressedRepeat(KEY_PAGE_UP)) chatScroll_ += std::max(1, maxLines - 1);
+        if (IsKeyPressed(KEY_PAGE_DOWN) || IsKeyPressedRepeat(KEY_PAGE_DOWN)) chatScroll_ -= std::max(1, maxLines - 1);
+        if (wasTyping_ && !ui.chatInputActive) chatScroll_ = 0;   // the message was sent (or dropped): look at the newest lines again
+        wasTyping_ = ui.chatInputActive;
+        chatScroll_ = std::clamp(chatScroll_, 0, maxScroll);
+        const int first = std::max(0, static_cast<int>(wrapped.size()) - maxLines - chatScroll_);
+        const int last = std::min(static_cast<int>(wrapped.size()), first + maxLines);
+        const int shown = last - first;
+        float y = inR.y - 2 * s - shown * lineH;   // newest visible line sits right above the input line
+        for (int i = first; i < last; ++i, y += lineH) Text(gothic_, wrapped[i].first, area.x + 2 * s, y, fs, wrapped[i].second);
+        if (maxScroll > 0) {   // scroll indicator: thin track + thumb on the right edge, "more" while lines below are hidden
+            const float th = inR.y - area.y - 2;
+            const Rectangle tr{area.x + area.width - 3 * s, area.y, 2 * s, th};
+            DrawRectangleRec(tr, Color{70, 60, 30, 120});
+            const float frac = static_cast<float>(maxLines) / static_cast<float>(wrapped.size());
+            const float thumbH = std::max(8.0f * s, th * frac);
+            const float pos = maxScroll > 0 ? static_cast<float>(maxScroll - chatScroll_) / maxScroll : 1.0f;
+            DrawRectangleRec(Rectangle{tr.x, tr.y + (th - thumbH) * pos, tr.width, thumbH}, chatScroll_ > 0 ? Color{255, 220, 120, 230} : Color{170, 150, 80, 180});
+            if (chatScroll_ > 0) Text(gothic_, "more below", area.x + area.width - 6 * s, inR.y - 12 * s, 10 * s, kAmberDim, 2);
+        }
         if (ui.chatInputActive) {
             DrawRectangleRec(inR, Color{30, 26, 8, 200});
             const std::string t = ui.chatInput + ((static_cast<int>(ui.now * 2) & 1) ? "_" : "");
