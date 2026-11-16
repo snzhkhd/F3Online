@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
     std::string draftArg;
     int toggleStep = 0;
     double lastToggle = 0;
-    bool noAssets = false, autowalk = false, hostGiven = false, legacy = false, autoattack = false, autopickup = false, autoloot = false;
+    bool noAssets = false, autowalk = false, hostGiven = false, legacy = false, autoattack = false, autopickup = false, autoloot = false, autotalk = false;
     std::vector<std::string> sayList;
     std::string traceFile;
     double runSeconds = 0;
@@ -133,6 +133,7 @@ int main(int argc, char** argv) {
         } else if (a == "--autowalk") autowalk = true;
         else if (a == "--autoattack") autoattack = true;
         else if (a == "--autopickup") autopickup = true;
+        else if (a == "--autotalk") autotalk = true;     // testing: talk to the nearest living NPC once (open the dialogue window)
         else if (a == "--autoloot") autoloot = true;     // testing: loot the nearest corpse once (open the loot window)
         else if (a == "--legacy") legacy = true;
         else if (a == "--say") sayList.push_back(next());
@@ -336,7 +337,9 @@ int main(int argc, char** argv) {
                 uiState.mode = CursorMode::Skill;
                 uiState.charSheet = false;
             }
-            if (in.keyNumber >= 0 && in.keyNumber < kUsableSkillCount) {   // 1..7: the usable skills (Medic, Science, Mechanics, Security, Sneak, Steal, Traps); Alt = on yourself now
+            if (in.keyNumber >= 0 && core.dialog().open) {   // during a conversation 1..9 pick the answers
+                if (in.keyNumber < 9 && in.keyNumber < static_cast<int>(core.dialog().replies.size())) core.DialogChoose(in.keyNumber);
+            } else if (in.keyNumber >= 0 && in.keyNumber < kUsableSkillCount) {   // 1..7: the usable skills (Medic, Science, Mechanics, Security, Sneak, Steal, Traps); Alt = on yourself now
                 uiState.skill = kUsableSkills[in.keyNumber];
                 if (in.alt) core.UseSkill(uiState.skill, 0, 0);
                 else { uiState.mode = CursorMode::Skill; uiState.charSheet = false; }
@@ -433,6 +436,18 @@ int main(int argc, char** argv) {
         if (inGame && inGameSince >= 0) {
             if (!sayList.empty() && now - inGameSince > 1.0) { core.SendChat(sayList.front()); sayList.erase(sayList.begin()); }
             const ClientCritter* me = core.self();
+            if (me && autotalk && !core.dialog().open && now - inGameSince > 5.0 && now - lastAutoAct > 3.0) {
+                lastAutoAct = now;
+                const CritterPose mp = core.Pose(*me, now);
+                const ClientCritter* best = nullptr; float bd = 1e9f;
+                for (auto& [id, c] : core.critters()) {
+                    if (id == core.selfId() || c.dead || c.kind != CritterKind::Npc) continue;
+                    const CritterPose p = core.Pose(c, now);
+                    const float d = std::hypot(p.x - mp.x, p.y - mp.y);
+                    if (d < bd) { bd = d; best = &c; }
+                }
+                if (best) core.Talk(best->id);
+            }
             if (me && autoloot && !core.hasContainer() && now - inGameSince > 3.5 && now - lastAutoAct > 2.0) {
                 lastAutoAct = now;
                 for (auto& [id, c] : core.critters()) if (id != core.selfId() && c.dead && c.kind == CritterKind::Npc) { core.Loot(id); break; }

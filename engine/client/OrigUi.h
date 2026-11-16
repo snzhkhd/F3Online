@@ -34,6 +34,11 @@ public:
     // Skill panel (key U): the usable skills with their values; a click selects the skill cursor (UiCommand::SelectSkill). No original
     // layout exists for it (no Skilldex .gui in the demo), so it is drawn in the style of the action bar (dark plate, amber gothic text).
     void DrawSkillPanel(const UiView& ui, std::vector<Rectangle>& rects);
+    // Conversation window from Dialog.gui (SpeakerWin: name, text, SpeakerPic; ListenerWin: the player's answers). The layout carries no
+    // answer list and no window skin, so the answers are numbered lines in ListenerWin (click or keys 1..9, see main.cpp); the 3D
+    // SpeakerModel / ListenerPic areas are not rendered (no portrait renderer). Mouse wheel scrolls long NPC text.
+    bool HasDialog() const { return ok_ && haveDlg_; }
+    void DrawDialog(const UiView& ui, std::vector<Rectangle>& rects);
     void DrawOverlay();   // tooltip, after all windows
     // Floating speech: word-wrapped outlined text (gothic font), centred on cx, the block's bottom edge at bottomY. Returns the block height.
     float DrawSpeech(const std::string& text, float cx, float bottomY, Color c, float alpha, float maxW = 230);
@@ -69,7 +74,11 @@ private:
     struct LootDrag { bool active = false, pressed = false; uint32_t id = 0; int side = 0; Vector2 start{}; } lootDrag_;
     double lootClickTime_ = 0;
     uint32_t lootClickId_ = 0;
-    gd::GuiTree char_;                                            // CharacterGeneration.gui, exact tree
+    gd::GuiTree dlg_;                                              // Dialog.gui (SpeakerWin / ListenerWin)
+    bool haveDlg_ = false;
+    int dlgScroll_ = 0;
+    std::string dlgText_;                                          // text the scroll position belongs to
+    gd::GuiTree char_;                                         // CharacterGeneration.gui, exact tree
     std::unordered_map<std::string, const gd::GuiNode*> charIdx_;   // widget name -> node (first one)
     std::vector<const gd::GuiNode*> charFlat_;                     // all nodes, file order
     gd::Stf stf_;                                                  // English.stf (label / tooltip ids of the layouts)

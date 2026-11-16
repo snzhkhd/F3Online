@@ -1,7 +1,7 @@
 # Interface layouts (`Interface\*.gui`, resource type 1600) and skins (`*.ini`, type 800)
 
 Status: **the .gui layout format is | **OrigUi** (`DrawLoot`: two inventory panels side by side, see client-rendering.md; Container.gui supplies the button labels / ids, the window skin is not drawn) |
-| Dialog | v3, 9 | speaker / listener model windows of the dialogue (the text window is drawn by the engine) | raylib (dialogue box) |
+| Dialog | v3, 9 | `SpeakerWin` (name, text, 32x32 `SpeakerPic`, 96x96 `SpeakerModel` 3D area) over `ListenerWin` (name, one text line, `ListenerPic`); absolute layout rects, no skin art, no answer list | **OrigUi** (`DrawDialog`: layout geometry scaled x1.5, answers as numbered lines in ListenerWin; model areas not rendered) |
 | Mainmenu | v4, 9 | main menu: New Game, Load, Multi, Cinematics, Options, Quit | - (a raylib login screen replaces it) |
 | EscapeMenu | v4, 22 | Esc menu: Continue, Load/Save, Options, Quit | - |
 | MessageBox | v4, 21 | Yes / No / Done confirmation | - |

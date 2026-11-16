@@ -87,6 +87,9 @@ bool OrigUi::Load(gd::GameData& data, const std::string& gameDir, std::string* e
     if (!haveFonts_) return fail("fonts missing (Fonts\\r_fallouty.ttf, TT0807M_.TTF)");
     SetTextureFilter(fallouty_.texture, TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(gothic_.texture, TEXTURE_FILTER_BILINEAR);
+    haveDlg_ = data.Read("Dialog", gd::kResGui, buf) && gd::ParseGuiTree(buf.data(), buf.size(), dlg_) && dlg_.Find("SpeakerWin") && dlg_.Find("ListenerWin") &&
+               dlg_.Find("SpeakerTextLbl") && dlg_.Find("ListenerTextLbl");
+    if (!haveDlg_) log::Warn("original UI: Dialog.gui unavailable, the raylib dialogue box stays");
     // the character screen is optional: without it the renderer keeps its raylib character window
     haveChar_ = false;
     charIdx_.clear(); charFlat_.clear(); char_ = gd::GuiTree();
@@ -215,6 +218,138 @@ void OrigUi::DrawSkillPanel(const UiView& ui, std::vector<Rectangle>& rects) {
         if (hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) ui.commands->push_back(UiCommand{UiCommand::SelectSkill, static_cast<uint32_t>(sk), 0, 0});
     }
     Text(gothic_, "U / Esc: close", r.x, r.y + r.height - 20 * s, 12 * s, kAmberDim, 1, r.width);
+}
+
+void OrigUi::DrawDialog(const UiView& ui, std::vector<Rectangle>& rects) {
+    if (!HasDialog() || !haveFonts_ || !ui.core || !ui.commands) return;
+    const ClientCore::DialogState& d = ui.core->dialog();
+    if (!d.open) return;
+    // layout rectangles are absolute (layout units, origin = top-left of SpeakerWin); the block is scaled up for legibility (the original
+    // used 8 pt Arial) and centred at the top of the screen
+    const gd::GuiNode* spW = dlg_.Find("SpeakerWin");
+    const gd::GuiNode* liW = dlg_.Find("ListenerWin");
+    const gd::GuiNode* spT = dlg_.Find("SpeakerTextLbl");
+    const gd::GuiNode* spN = dlg_.Find("SpeakerNameLbl");
+    const gd::GuiNode* liN = dlg_.Find("ListenerNameLbl");
+    const gd::GuiNode* liT = dlg_.Find("ListenerTextLbl");
+    const float sw = static_cast<float>(GetScreenWidth()), sh = static_cast<float>(GetScreenHeight());
+    const float k = std::min(sw / 1024.0f, sh / 768.0f) * 1.5f;
+    const float W = spW->w() * k;
+    const float ox = std::floor(sw / 2 - W / 2), oy = std::floor(24 * k / 1.5f);
+    const float fs = 12 * k, lh = fs + 4 * k / 1.5f;
+    auto X = [&](int lx) { return ox + (lx - spW->rect[0]) * k; };
+    auto Y = [&](int ly, float extra = 0) { return oy + (ly - spW->rect[1]) * k + extra; };
+    auto wrap = [&](const std::string& text, float maxW) {
+        std::vector<std::string> lines;
+        std::string cur;
+        size_t pos = 0;
+        while (pos <= text.size()) {
+            size_t nl = text.find('\n', pos);
+            std::string para = text.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+            pos = nl == std::string::npos ? text.size() + 1 : nl + 1;
+            cur.clear();
+            size_t p = 0;
+            while (p < para.size()) {
+                size_t sp = para.find(' ', p);
+                std::string word = para.substr(p, sp == std::string::npos ? std::string::npos : sp - p + 1);
+                p = sp == std::string::npos ? para.size() : sp + 1;
+                while (TextW(gothic_, word, fs) > maxW && word.size() > 1) {   // overlong word
+                    size_t n = word.size();
+                    while (n > 1 && TextW(gothic_, word.substr(0, n), fs) > maxW) --n;
+                    if (!cur.empty()) { lines.push_back(cur); cur.clear(); }
+                    lines.push_back(word.substr(0, n));
+                    word = word.substr(n);
+                }
+                if (!cur.empty() && TextW(gothic_, cur + word, fs) > maxW) { lines.push_back(cur); cur.clear(); }
+                cur += word;
+            }
+            lines.push_back(cur);
+        }
+        while (lines.size() > 1 && lines.back().empty()) lines.pop_back();
+        return lines;
+    };
+    const Vector2 mp = GetMousePosition();
+    const Color plate{8, 8, 6, 240}, edge{120, 100, 44, 255}, inner{60, 50, 24, 255};
+    auto frame = [&](Rectangle r) {
+        DrawRectangleRec(r, plate);
+        DrawRectangleLinesEx(r, 2, edge);
+        DrawRectangleLinesEx(Rectangle{r.x + 3, r.y + 3, r.width - 6, r.height - 6}, 1, inner);
+        rects.push_back(r);
+    };
+
+    // ---- speaker: name + text (the model area is not drawn, so the text uses the whole width right of the picture)
+    const float tx = X(spT->rect[0]), textW = W - (spT->rect[0] - spW->rect[0]) * k - 8 * k;
+    const std::vector<std::string> tl = wrap(d.text, textW);
+    const int minLines = 3;   // the layout's text label holds ~4 lines of 8 pt Arial; the window grows with the text instead
+    const int maxLines = std::max(minLines, static_cast<int>((sh * 0.42f) / lh));
+    const int shown = std::clamp(static_cast<int>(tl.size()), minLines, maxLines);
+    if (d.text != dlgText_) { dlgText_ = d.text; dlgScroll_ = 0; }
+    const int overflow = std::max(0, static_cast<int>(tl.size()) - shown);
+    const float spH = (spT->rect[1] - spW->rect[1]) * k + shown * lh + 10 * k;
+    const Rectangle spR{ox, oy, W, spH};
+    if (overflow > 0 && CheckCollisionPointRec(mp, spR)) dlgScroll_ -= static_cast<int>(std::lround(GetMouseWheelMove()));
+    dlgScroll_ = std::clamp(dlgScroll_, 0, overflow);
+    frame(spR);
+    Text(fallouty_, d.npcName, X(spN->rect[0]), Y(spN->rect[1]), 14 * k, kAmber);
+    // picture slot (SpeakerPic): initial of the speaker on a dark tile
+    {
+        const gd::GuiNode* pic = dlg_.Find("SpeakerPic");
+        if (pic) {
+            const Rectangle pr{X(pic->rect[0]), Y(pic->rect[1]), pic->w() * k, pic->h() * k};
+            DrawRectangleRec(pr, Color{24, 20, 10, 255});
+            DrawRectangleLinesEx(pr, 1, inner);
+            if (!d.npcName.empty()) Text(fallouty_, d.npcName.substr(0, 1), pr.x, pr.y + pr.height * 0.18f, pr.height * 0.6f, kAmberDim, 1, pr.width);
+        }
+    }
+    for (int i = 0; i < shown && dlgScroll_ + i < static_cast<int>(tl.size()); ++i)
+        Text(gothic_, tl[dlgScroll_ + i], tx, Y(spT->rect[1]) + i * lh, fs, Color{235, 235, 225, 255});
+    if (overflow > 0) {
+        if (dlgScroll_ > 0) Text(gothic_, "^", spR.x, spR.y + 6 * k, fs, kAmber, 2, spR.width - 10 * k);
+        if (dlgScroll_ < overflow) Text(gothic_, "v", spR.x, spR.y + spR.height - lh - 4 * k, fs, kAmber, 2, spR.width - 10 * k);
+    }
+
+    // ---- listener: the player's name and the numbered answers (click or keys 1..9)
+    const float liY = oy + spH - 2 * k;
+    const float repX = X(liT->rect[0]), repW = W - (liT->rect[0] - liW->rect[0]) * k - 8 * k;
+    struct Rep { std::vector<std::string> lines; float h = 0; };
+    std::vector<Rep> reps(d.replies.size());
+    float repH = 0;
+    for (size_t i = 0; i < d.replies.size(); ++i) {
+        reps[i].lines = wrap((i < 9 ? std::to_string(i + 1) + ". " : std::string("   ")) + d.replies[i], repW - 12 * k);
+        reps[i].h = reps[i].lines.size() * lh + 4 * k;
+        repH += reps[i].h;
+    }
+    if (reps.empty()) repH = lh;
+    const float liHead = (liT->rect[1] - liW->rect[1]) * k;
+    const float liH = liHead + repH + lh + 8 * k;
+    const Rectangle liR{ox, liY, W, liH};
+    frame(liR);
+    Text(fallouty_, ui.core->playerName(), X(liN->rect[0]), liY + (liN->rect[1] - liW->rect[1]) * k, 14 * k, Color{120, 235, 90, 255});
+    if (const gd::GuiNode* pic = dlg_.Find("ListenerPic")) {
+        const Rectangle pr{X(pic->rect[0]), liY + (pic->rect[1] - liW->rect[1]) * k, pic->w() * k, pic->h() * k};
+        DrawRectangleRec(pr, Color{12, 22, 10, 255});
+        DrawRectangleLinesEx(pr, 1, inner);
+        const std::string& pn = ui.core->playerName();
+        if (!pn.empty()) Text(fallouty_, pn.substr(0, 1), pr.x, pr.y + pr.height * 0.18f, pr.height * 0.6f, Color{70, 150, 56, 255}, 1, pr.width);
+    }
+    float y = liY + liHead;
+    for (size_t i = 0; i < reps.size(); ++i) {
+        const Rectangle row{repX - 4 * k, y, repW + 8 * k, reps[i].h};
+        const bool hot = CheckCollisionPointRec(mp, row);
+        if (hot) DrawRectangleRec(row, Color{70, 58, 22, 200});
+        for (size_t l = 0; l < reps[i].lines.size(); ++l)
+            Text(gothic_, reps[i].lines[l], repX + (l ? 12 * k : 0), y + 2 * k + l * lh, fs, hot ? Color{255, 235, 140, 255} : kAmber);
+        if (hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) ui.commands->push_back(UiCommand{UiCommand::DialogChoose, static_cast<uint32_t>(i), 0, 0});
+        y += reps[i].h;
+    }
+    if (reps.empty()) Text(gothic_, "...", repX, y, fs, kAmberDim);
+    // leave
+    const std::string leave = "[Esc] End conversation";
+    const float lw = TextW(gothic_, leave, fs * 0.85f);
+    const Rectangle lr{liR.x + liR.width - lw - 14 * k, liR.y + liR.height - lh - 4 * k, lw + 8 * k, lh};
+    const bool lhot = CheckCollisionPointRec(mp, lr);
+    Text(gothic_, leave, lr.x + 4 * k, lr.y, fs * 0.85f, lhot ? Color{255, 235, 140, 255} : kAmberDim);
+    if (lhot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) ui.commands->push_back(UiCommand{UiCommand::DialogClose, 0, 0, 0});
 }
 
 float OrigUi::DrawSpeech(const std::string& text, float cx, float bottomY, Color c, float alpha, float maxW) {

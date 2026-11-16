@@ -1080,7 +1080,7 @@ private:
             orig_.DrawSkillPanel(ui, uiRects_);
             orig_.DrawOverlay();
             if (core.hasContainer() && !orig_.HasLoot()) DrawContainer(ui);
-            if (core.dialog().open) DrawDialog(ui);
+            if (core.dialog().open) { if (orig_.HasDialog()) orig_.DrawDialog(ui, uiRects_); else DrawDialog(ui); }
             if (st.charSheet) {
                 if (orig_.HasCharScreen()) orig_.DrawCharScreen(ui, false, uiRects_);
                 else DrawCharSheet(ui);

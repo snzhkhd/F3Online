@@ -14,3 +14,12 @@ Requests from the project owner, recorded in spirit; items 1-4 and the U panel o
    `Ctrl+A` = AttackModeCycle, `C` character, `I` inventory, `P` = PipBoy, `Esc` menu.
 6. **Move the whole UI onto the original `.gui` layouts** (see `docs/formats/gui.md` for the status of each layout).
 7. **Original game in a window:** set `fullscreen = 0` in `Documents\F3\F3.ini`, section `[Graphics]` (`width` / `height` are there too).
+
+## Dialogue window (Dialog.gui)
+
+`Dialog.gui` (v3, 9 widgets) only defines two stacked windows: `SpeakerWin` (`SpeakerNameLbl`, `SpeakerTextLbl` 268x76, `SpeakerPic` 32x32,
+`SpeakerModel` 96x96 for the NPC's 3D model) and `ListenerWin` (`ListenerNameLbl`, `ListenerTextLbl` one line, `ListenerPic`). All rects are absolute
+layout units; skins are blank (`quickslot.ini`). There is no answer list, so the original engine builds it in ListenerWin; `OrigUi::DrawDialog` does the same:
+numbered answers (click or keys 1..9, hover highlight), `[Esc] End conversation`, mouse wheel scrolls NPC text longer than the window. The speaker window
+grows with the text, the plates are drawn like the skill panel. Not done: 3D SpeakerModel / ListenerPic (an initial letter tile replaces the pictures),
+original window skin, barter/continue buttons. Test aid: `f3_client --say "/near Armstrong" --autotalk --shot X.png` (needs a server with `--dev-kit`).
