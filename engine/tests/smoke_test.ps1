@@ -10,7 +10,8 @@ param(
     [string]$BinDir = "$PSScriptRoot\..\..\build\vs2022\bin",
     [string]$ScriptsDir = "$PSScriptRoot\..\..\scripts",
     [string]$DataDir = "$PSScriptRoot\..\..\gamedata\server",
-    [int]$Port = 4047
+    [int]$Port = 4047,
+    [uint32]$Seed = 0          # server RNG seed (combat / lock rolls); 0 = pick one and print it, rerun with -Seed N to replay a failure
 )
 $ErrorActionPreference = "Stop"
 $server = Join-Path $BinDir "f3_server.exe"
@@ -22,8 +23,22 @@ $saves = Join-Path $env:TEMP ("f3_smoke_saves_" + $PID)   # throw-away account d
 if (Test-Path $saves) { Remove-Item -Recurse -Force $saves }
 
 function Run-Server([string]$extra, [string]$log, [int]$port) {
-    Start-Process -FilePath $server -ArgumentList "--local --port $port --scripts `"$ScriptsDir`" --saves `"$saves`" $extra --run-seconds 150" `
+    Start-Process -FilePath $server -ArgumentList "--local --port $port --scripts `"$ScriptsDir`" --saves `"$saves`" --seed $Seed $extra --run-seconds 150" `
         -RedirectStandardOutput $log -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
+}
+
+# Runs f3_gametest with the given arguments, echoes its output and, on failure, lists the FAILED check names (and the
+# bot diagnostics) once more at the end so they are not lost in a long log. Returns the exit code.
+function Run-GameTest([string[]]$gtArgs) {
+    $out = @(& $gametest @gtArgs)
+    $code = $LASTEXITCODE
+    $out | ForEach-Object { Write-Host $_ }
+    if ($code -ne 0) {
+        Write-Host "==== f3_gametest $($gtArgs -join ' ') FAILED (exit $code, server seed $Seed): failing checks ===="
+        $out | Where-Object { $_ -match '^FAIL' } | ForEach-Object { Write-Host "  $_" }
+        if (-not ($out | Where-Object { $_ -match '^FAIL' })) { Write-Host "  (no FAIL line: the test aborted early, see the output above)" }
+    }
+    return $code
 }
 
 $exit = 0
@@ -142,8 +157,7 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
     $p = Run-Server "--data `"$DataDir`" --dev-kit" $log2 ($Port + 1)
     try {
         Start-Sleep -Milliseconds 2500
-        & $gametest --port ($Port + 1)
-        $code = $LASTEXITCODE
+        $code = Run-GameTest @("--port", ($Port + 1))
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
     }
@@ -158,8 +172,7 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
         $p = Run-Server "--data `"$DataDir`"" $log3 ($Port + 2)
         try {
             Start-Sleep -Milliseconds 2500
-            & $gametest --port ($Port + 2) --accounts $phase --state $state
-            $code = $LASTEXITCODE
+            $code = Run-GameTest @("--port", ($Port + 2), "--accounts", $phase, "--state", $state)
         } finally {
             if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
         }
@@ -174,12 +187,11 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
     if (Test-Path $dsaves) { Remove-Item -Recurse -Force $dsaves }
     foreach ($phase in 1, 2) {
         $log4 = Join-Path $env:TEMP "f3_server_smoke_doors$phase.log"
-        $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 3) --data `"$DataDir`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$dsaves`" --run-seconds 150" `
+        $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 3) --data `"$DataDir`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$dsaves`" --seed $Seed --run-seconds 150" `
             -RedirectStandardOutput $log4 -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
         try {
             Start-Sleep -Milliseconds 2500
-            & $gametest --port ($Port + 3) --doors $phase --state $dstate
-            $code = $LASTEXITCODE
+            $code = Run-GameTest @("--port", ($Port + 3), "--doors", $phase, "--state", $dstate)
         } finally {
             if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
         }
@@ -195,12 +207,11 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
     foreach ($d in $csaves, $cdata) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
     Copy-Item -Recurse $contentDir $cdata
     $log5 = Join-Path $env:TEMP "f3_server_smoke_content.log"
-    $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 4) --data `"$DataDir`" --content `"$cdata`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$csaves`" --run-seconds 150" `
+    $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 4) --data `"$DataDir`" --content `"$cdata`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$csaves`" --seed $Seed --run-seconds 150" `
         -RedirectStandardOutput $log5 -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
     try {
         Start-Sleep -Milliseconds 2500
-        & $gametest --port ($Port + 4) --content $cdata
-        $code = $LASTEXITCODE
+        $code = Run-GameTest @("--port", ($Port + 4), "--content", $cdata)
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
     }
@@ -214,12 +225,11 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
     $lsaves = Join-Path $env:TEMP ("f3_smoke_locale_saves_" + $PID)
     if (Test-Path $lsaves) { Remove-Item -Recurse -Force $lsaves }
     $log6 = Join-Path $env:TEMP "f3_server_smoke_locale.log"
-    $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 5) --data `"$DataDir`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$lsaves`" --run-seconds 120" `
+    $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 5) --data `"$DataDir`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$lsaves`" --seed $Seed --run-seconds 120" `
         -RedirectStandardOutput $log6 -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
     try {
         Start-Sleep -Milliseconds 2500
-        & $gametest --port ($Port + 5) --locale
-        $code = $LASTEXITCODE
+        $code = Run-GameTest @("--port", ($Port + 5), "--locale")
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
     }

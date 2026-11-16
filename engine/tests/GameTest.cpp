@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -31,12 +32,14 @@ using namespace f3;
 using Clock = std::chrono::steady_clock;
 
 static int g_failed = 0;
+static std::function<void()> g_failHook;   // prints the state of the bots (position, hp, who is around, recent combat / chat): set once the bots exist
 #define CHECK(cond, ...)                                  \
     do {                                                  \
         if (!(cond)) {                                    \
             std::printf("FAIL: " __VA_ARGS__);            \
             std::printf("  [%s:%d]\n", __FILE__, __LINE__); \
             ++g_failed;                                   \
+            if (g_failHook) g_failHook();                 \
         } else {                                          \
             std::printf("ok:   " __VA_ARGS__);            \
             std::printf("\n");                            \
@@ -1196,6 +1199,25 @@ int main(int argc, char** argv) {
 
     Bot a, b;
     if (!a.Connect(port) || !b.Connect(port)) { std::printf("FAIL: cannot connect to 127.0.0.1:%u\n", port); return 1; }
+    g_failHook = [&] {   // diagnostics for a failed check: the wall clock matches the server log's timestamps
+        std::time_t now = std::time(nullptr);
+        char ts[16]; std::strftime(ts, sizeof ts, "%H:%M:%S", std::localtime(&now));
+        std::printf("  diag %s:\n", ts);
+        for (Bot* bp : {&a, &b}) {
+            auto st = bp->states.find(bp->myId);
+            std::printf("  diag %s id %u map %s at %d,%d hp %d/%d dead %d, %zu critters in view, %zu combat events\n", bp->name.c_str(), (unsigned)bp->myId, bp->map.name.c_str(), bp->pos.x, bp->pos.y,
+                        st != bp->states.end() ? st->second.hp : -1, st != bp->states.end() ? st->second.maxHp : -1, st != bp->states.end() ? st->second.dead : -1, bp->critters.size(), bp->combat.size());
+            for (size_t i = bp->combat.size() > 4 ? bp->combat.size() - 4 : 0; i < bp->combat.size(); ++i)
+                std::printf("  diag   combat %u -> %u result %d dmg %d targetHp %d\n", (unsigned)bp->combat[i].attacker, (unsigned)bp->combat[i].target, (int)bp->combat[i].result, bp->combat[i].damage, bp->combat[i].targetHp);
+            for (auto& [id, cr] : bp->critters) {
+                if (id == bp->myId || TileDist(TilePos{cr.x, cr.y}, bp->pos) > 14) continue;
+                auto cs = bp->states.find(id);
+                std::printf("  diag   near %u '%s' at %d,%d dist %d hp %d dead %d\n", (unsigned)id, cr.name.c_str(), (int)cr.x, (int)cr.y, TileDist(TilePos{cr.x, cr.y}, bp->pos), cs != bp->states.end() ? cs->second.hp : -1, cs != bp->states.end() ? cs->second.dead : -1);
+            }
+            for (size_t i = bp->chat.size() > 3 ? bp->chat.size() - 3 : 0; i < bp->chat.size(); ++i) std::printf("  diag   chat: %.100s\n", bp->chat[i].c_str());
+        }
+        std::fflush(stdout);
+    };
     a.Login("GameBotA");
     CHECK(WaitFor({&a}, 8, [&] { return a.loggedIn && a.mapInfoCount > 0 && a.havePos && a.haveStats && a.invUpdates > 0; }), "bot A logged in with map, stats, inventory");
     if (expectEmpty) {

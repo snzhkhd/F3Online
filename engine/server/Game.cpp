@@ -16,7 +16,7 @@ namespace f3 {
 
 namespace {
 std::mt19937& Rng() {
-    static std::mt19937 r{std::random_device{}()};
+    static std::mt19937 r{ServerSeed()};
     return r;
 }
 int RandRange(int lo, int hi) {
@@ -994,7 +994,7 @@ void Server::KillCritter(Critter& c, Critter* killer) {
     CritterId cid = c.id, kid = killer ? killer->id : 0;
     // an NPC corpse is a container: its inventory stays on it (Loot / Take), see LootTarget
     SendCritterState(c);
-    if (c.IsPlayer()) { SendStats(c); TellK(c, "msg.died"); }
+    if (c.IsPlayer()) { SendStats(c); TellK(c, "msg.died"); log::Info("player '%s' killed by '%s' at %d,%d (map %u)", c.name.c_str(), killer ? killer->name.c_str() : "?", c.pos.x, c.pos.y, (unsigned)c.mapId); }
     if (amx_) amx_->OnDeath(c);
     if (c.IsPlayer() || (killer && killer->IsPlayer()))   // audit log: every player death and every kill by a player
         Audit("kill", killer ? killer->name : std::string(), {{"victim", c.name}, {"victim_is_player", c.IsPlayer()}, {"map", c.mapId}, {"x", c.pos.x}, {"y", c.pos.y}});

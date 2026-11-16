@@ -3,6 +3,7 @@
 #include <enet/enet.h>
 
 #include <algorithm>
+#include <random>
 #include <cctype>
 #include <chrono>
 #include <cstring>
@@ -35,6 +36,15 @@ Critter* PeerCritter(World& w, ENetPeer* peer) {
     return id ? w.GetCritter(id) : nullptr;
 }
 }  // namespace
+
+namespace {
+uint32_t g_serverSeed = 0;
+}
+void SetServerSeed(uint32_t seed) { g_serverSeed = seed; }
+uint32_t ServerSeed() {
+    if (!g_serverSeed) { g_serverSeed = std::random_device{}(); if (!g_serverSeed) g_serverSeed = 1; }
+    return g_serverSeed;
+}
 
 Server::Server(Config cfg) : cfg_(std::move(cfg)) {}
 
@@ -81,6 +91,8 @@ bool Server::Init() {
     if (cfg_.savesDir.empty()) cfg_.savesDir = cfg_.scriptsDir.parent_path() / "saves";
     if (!OpenStore()) return false;   // <saves>/f3.db (+ import of old JSON saves); a damaged file is refused, never replaced
     LoadWorldState();   // door / container state per map (table world_objects)
+    SetServerSeed(cfg_.seed);
+    log::Info("rng seed: %u%s", ServerSeed(), cfg_.seed ? "" : " (random; replay with --seed)");
     accounts_.ConfigureLimit(cfg_.maxLoginFails, 300, 30);
     if (cfg_.devKit) { cfg_.allowGuest = true; cfg_.devCommands = true; }
     nextSaveTick_ = static_cast<uint64_t>(std::max(0, cfg_.saveIntervalSec)) * cfg_.tickRate;

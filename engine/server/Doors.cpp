@@ -32,7 +32,7 @@ bool KeyMatches(const Proto& p, const std::string& keyId) {
     return pk == k || StripExt(pk) == StripExt(k);
 }
 std::mt19937& Rng() {
-    static std::mt19937 r(std::random_device{}());
+    static std::mt19937 r(ServerSeed() ^ 0x9e3779b9u);
     return r;
 }
 const char* Noun(const Item& o) { return o.kind == ObjKind::Door ? "door" : "container"; }

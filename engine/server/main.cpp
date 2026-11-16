@@ -1,5 +1,5 @@
 // f3_server: headless authoritative server.
-//   f3_server [--port N] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit]
+//   f3_server [--port N] [--scripts DIR] [--data DIR | --no-data] [--seed N] [--tickrate N] [--run-seconds N] [--dev-kit]
 // --data defaults to the nearest gamedata/server (output of f3_dataimport) next to the binary or in a parent of the cwd.
 //   --content DIR (default: nearest data/), --lenient, --validate-data (check data/ and exit), --dev-commands (chat /reload; implied by --dev-kit)
 //   --saves DIR (holds f3.db), --save-interval SEC
@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
         else if (a == "--check-locale") checkLocale = true;
         else if (a == "--strict") strictLocale = true;
         else if (a == "--src") srcDir = next("--src");
+        else if (a == "--seed") cfg.seed = static_cast<uint32_t>(std::strtoul(next("--seed"), nullptr, 10));
         else if (a == "--tickrate") cfg.tickRate = std::max(1, std::atoi(next("--tickrate")));
         else if (a == "--dev-kit") cfg.devKit = true;
         else if (a == "--allow-guest") cfg.allowGuest = true;

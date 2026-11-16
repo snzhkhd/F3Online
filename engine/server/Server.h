@@ -24,11 +24,16 @@ struct _ENetHost;
 
 namespace f3 {
 
+// Seed of the server-side gameplay RNGs (combat, doors/locks). 0 = pick a random one on first use; SetServerSeed(0) keeps it random.
+void SetServerSeed(uint32_t seed);
+uint32_t ServerSeed();
+
 class Scripting;
 
 class Server {
 public:
     struct Config {
+        uint32_t seed = 0;              // --seed N: seed of the gameplay RNGs (0 = random, the chosen seed is logged) so a failing run can be replayed
         uint16_t port = kDefaultPort;
         int tickRate = kDefaultTickRate;
         int moveTicks = 4;  // ticks per tile step (20Hz/4 = 5 tiles/s)
