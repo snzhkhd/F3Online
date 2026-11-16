@@ -4,6 +4,7 @@
 #      that must fail); with game data: f3_gametest --locale (per-player language of server messages, Cyrillic names / chat).
 #  0. Data layer: f3_datatest (loader / merge / validation unit tests), f3_server --validate-data on data/ (must pass) and on the
 #     deliberately broken engine/tests/data_bad (must fail with a status code, must pass with --lenient).
+#  0d. Content editor (--editor): f3_editortest, then a live server on a copy of data/: token / Host / path-confinement rejections, get / put / validate / reload.
 #  2. If gamedata/server exists (run f3_dataimport first): f3_server on the real data + f3_gametest
 #     (real map grid, stats, inventory, walk, pickup, combat, map transition, door). Skipped otherwise.
 param(
@@ -140,6 +141,124 @@ $blout = & $server --check-locale --content $contentDir --locale $badLoc --src (
 if ($LASTEXITCODE -ne 1 -or -not (($blout -join "`n") -match "ui.undefined_key" -and ($blout -join "`n") -match "placeholders differ")) { Write-Host ($blout -join "`n"); Write-Host "FAIL: --check-locale did not fail on the broken fixture (exit $LASTEXITCODE)"; $exit = 1 }
 else { Write-Host "ok:   --check-locale fails on a broken locale (placeholder mismatch, undefined key)" }
 Remove-Item -Recurse -Force $badLoc
+
+# ---- 0d. content editor (f3_server --editor): API unit tests, then a live server on a throw-away copy of data/
+$editortest = Join-Path $BinDir "f3_editortest.exe"
+if (Test-Path $editortest) {
+    & $editortest | Where-Object { $_ -notmatch "INFO" }
+    if ($LASTEXITCODE -ne 0) { Write-Host "f3_editortest FAILED"; $exit = 1 }
+}
+$edPort = Get-Random -Minimum 47500 -Maximum 47990
+$edRoot = Join-Path $env:TEMP ("f3_smoke_editor_" + $PID)
+if (Test-Path $edRoot) { Remove-Item -Recurse -Force $edRoot }
+New-Item -ItemType Directory -Force $edRoot | Out-Null
+Copy-Item -Recurse $contentDir (Join-Path $edRoot "data")
+$edData = Join-Path $edRoot "data"
+$edUi = Join-Path (Split-Path $PSScriptRoot -Parent | Split-Path -Parent) "tools\editor"
+function Test-PortOpen([int]$port) {
+    $c = New-Object System.Net.Sockets.TcpClient
+    try { $c.Connect("127.0.0.1", $port); return $true } catch { return $false } finally { $c.Close() }
+}
+function Ed-Call([string]$method, [string]$path, $body, [string]$token) {   # returns @{status; json}
+    $h = @{}
+    if ($token) { $h["X-F3-Token"] = $token }
+    $a2 = @{ Uri = "http://127.0.0.1:$edPort/api/$path"; Method = $method; Headers = $h; UseBasicParsing = $true; ErrorAction = "Stop" }
+    if ($null -ne $body) { $a2["Body"] = [Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $body -Depth 40 -Compress)); $a2["ContentType"] = "application/json" }
+    try { $r = Invoke-WebRequest @a2; return @{ status = [int]$r.StatusCode; json = ($r.Content | ConvertFrom-Json) } }
+    catch {
+        $resp = $_.Exception.Response
+        if ($null -eq $resp) { return @{ status = 0; json = $null } }
+        $txt = ""
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $txt = $_.ErrorDetails.Message }
+        else { try { $sr = New-Object IO.StreamReader($resp.GetResponseStream()); $txt = $sr.ReadToEnd() } catch {} }
+        $j = $null; try { $j = $txt | ConvertFrom-Json } catch {}
+        return @{ status = [int]$resp.StatusCode; json = $j }
+    }
+}
+function Ed-Check([bool]$cond, [string]$what) {
+    if ($cond) { Write-Host "ok:   editor: $what" } else { Write-Host "FAIL: editor: $what"; $script:exit = 1 }
+}
+# --local alone must not open the editor; a non-loopback editor bind must be refused (exit 2) before anything starts
+$pLocal = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 21) --no-data --content `"$edData`" --scripts `"$ScriptsDir`" --saves `"$saves`" --editor-port $edPort --run-seconds 6" -RedirectStandardOutput (Join-Path $edRoot "local.log") -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
+Start-Sleep -Milliseconds 2500
+Ed-Check (-not (Test-PortOpen $edPort)) "--local alone does not open the editor port"
+if (-not $pLocal.HasExited) { Stop-Process -Id $pLocal.Id -Force }
+$pBind = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 22) --no-data --content `"$edData`" --scripts `"$ScriptsDir`" --saves `"$saves`" --editor --editor-port $edPort --editor-bind 0.0.0.0 --run-seconds 10" -RedirectStandardOutput (Join-Path $edRoot "bind.log") -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
+$null = $pBind.Handle
+if (-not $pBind.WaitForExit(10000)) { Stop-Process -Id $pBind.Id -Force; Ed-Check $false "--editor-bind 0.0.0.0 is refused" }
+else { Ed-Check ($pBind.ExitCode -eq 2) "--editor-bind 0.0.0.0 is refused (exit $($pBind.ExitCode))" }
+$edLog = Join-Path $edRoot "editor.log"
+$pEd = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 23) --no-data --content `"$edData`" --scripts `"$ScriptsDir`" --saves `"$saves`" --editor --editor-port $edPort --editor-dir `"$edUi`" --run-seconds 90" -RedirectStandardOutput $edLog -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
+try {
+    $tok = $null
+    for ($i = 0; $i -lt 60 -and -not $tok; $i++) {
+        Start-Sleep -Milliseconds 250
+        if (Test-Path $edLog) { $m = [regex]::Match([string](Get-Content $edLog -Raw -ErrorAction SilentlyContinue), "token=([0-9a-f]{32})"); if ($m.Success) { $tok = $m.Groups[1].Value } }
+    }
+    Ed-Check ($null -ne $tok) "server prints the access token"
+    if ($tok) {
+        Ed-Check ((Ed-Call "GET" "kinds" $null $null).status -eq 401) "no token is rejected (401)"
+        Ed-Check ((Ed-Call "GET" "kinds" $null ("0" * 32)).status -eq 401) "wrong token is rejected (401)"
+        $k = Ed-Call "GET" "kinds" $null $tok
+        Ed-Check ($k.status -eq 200 -and $k.json.kinds.Count -ge 7) "GET /api/kinds with the token"
+        $sc = Ed-Call "GET" "schema" $null $tok
+        Ed-Check ($sc.status -eq 200 -and $null -ne $sc.json.kinds.items) "GET /api/schema (generated from the validator's definitions)"
+        $l = Ed-Call "GET" "list?kind=quests" $null $tok
+        Ed-Check ($l.status -eq 200 -and $l.json.rows.Count -ge 1) "GET /api/list?kind=quests"
+        $g = Ed-Call "GET" "get?kind=quests&file=quests.json" $null $tok
+        Ed-Check ($g.status -eq 200 -and $g.json.parsed -and $g.json.etag) "GET /api/get returns the file and an etag"
+        $v = Ed-Call "POST" "validate" @{} $tok
+        Ed-Check ($v.status -eq 200 -and $v.json.ok) "POST /api/validate on the clean copy"
+        # PUT a changed title; the file on disk must carry it
+        $doc = $g.json.doc
+        $doc.records[0].title = "Smoke edited title"
+        $pu = Ed-Call "PUT" "put" @{ kind = "quests"; file = "quests.json"; doc = $doc; etag = $g.json.etag } $tok
+        Ed-Check ($pu.status -eq 200 -and $pu.json.ok) "PUT /api/put saves a valid edit"
+        $disk = Get-Content (Join-Path $edData "quests\quests.json") -Raw
+        Ed-Check ($disk -match "Smoke edited title") "the saved file contains the edit"
+        # stale etag -> 409; invalid -> 422 and nothing written
+        $st = Ed-Call "PUT" "put" @{ kind = "quests"; file = "quests.json"; doc = $doc; etag = $g.json.etag } $tok
+        Ed-Check ($st.status -eq 409) "a stale etag is a conflict (409)"
+        $g2 = Ed-Call "GET" "get?kind=quests&file=quests.json" $null $tok
+        $bad = $g2.json.doc
+        $bad.records[0] | Add-Member -NotePropertyName "no_such_field" -NotePropertyValue 1
+        $before = Get-Content (Join-Path $edData "quests\quests.json") -Raw
+        $pb = Ed-Call "PUT" "put" @{ kind = "quests"; file = "quests.json"; doc = $bad; etag = $g2.json.etag } $tok
+        $after = Get-Content (Join-Path $edData "quests\quests.json") -Raw
+        Ed-Check ($pb.status -eq 422 -and $pb.json.errors.Count -ge 1) "an invalid edit is refused (422) with errors"
+        Ed-Check ($before -eq $after) "the refused edit did not touch the file"
+        # reload: the running server re-reads data/ and reports the diff
+        $rl = Ed-Call "POST" "reload" @{} $tok
+        Ed-Check ($rl.status -eq 200 -and $rl.json.ok -and ($rl.json.report -match "data reloaded")) "POST /api/reload applies the change and returns the report"
+        # confinement
+        foreach ($t in @("get?kind=quests&file=..%2f..%2fmanifest.json", "get?kind=quests&file=..%5c..%5cmanifest.json", "get?kind=..%2f&file=quests.json", "get?kind=quests&file=C%3A%5CWindows%5Cwin.ini", "get?kind=quests&file=quests.txt", "get?kind=locale%2f..&file=x.json")) {
+            $r = Ed-Call "GET" $t $null $tok
+            Ed-Check ($r.status -ge 400 -and $r.status -lt 500) "path escape '$t' is rejected ($($r.status))"
+        }
+        $tr = Ed-Call "PUT" "put" @{ kind = "quests"; file = "..\escape.json"; doc = @{ schema = 1; kind = "quests"; records = @() } } $tok
+        Ed-Check ($tr.status -ge 400 -and -not (Test-Path (Join-Path $edData "escape.json")) -and -not (Test-Path (Join-Path $edRoot "escape.json"))) "PUT with a traversal file name is rejected and writes nothing"
+        # a foreign Host header (DNS rebinding) is refused even with the right token
+        $c = New-Object System.Net.Sockets.TcpClient("127.0.0.1", $edPort)
+        try {
+            $ns = $c.GetStream()
+            $req = "GET /api/kinds HTTP/1.1`r`nHost: evil.example.com`r`nX-F3-Token: $tok`r`nConnection: close`r`n`r`n"
+            $bytes = [Text.Encoding]::ASCII.GetBytes($req)
+            $ns.Write($bytes, 0, $bytes.Length)
+            $buf = New-Object byte[] 4096
+            $n = $ns.Read($buf, 0, $buf.Length)
+            $first = [Text.Encoding]::ASCII.GetString($buf, 0, [Math]::Max($n, 0)).Split("`n")[0]
+            Ed-Check ($first -match " 403 ") "a foreign Host header is refused (403): $($first.Trim())"
+        } finally { $c.Close() }
+        # the UI is served; the token in the URL is accepted for the page only
+        $ix = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$edPort/?token=$tok"
+        Ed-Check ($ix.StatusCode -eq 200 -and $ix.Content -match "F3 Content Editor") "GET / serves the editor page"
+        $ixBad = 0; try { Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$edPort/api/kinds?token=$tok" -ErrorAction Stop | Out-Null; $ixBad = 200 } catch { $ixBad = [int]$_.Exception.Response.StatusCode }
+        Ed-Check ($ixBad -eq 401) "the query token is not accepted for /api"
+    }
+} finally {
+    if (-not $pEd.HasExited) { Stop-Process -Id $pEd.Id -Force }
+    Remove-Item -Recurse -Force $edRoot -ErrorAction SilentlyContinue
+}
 
 # ---- 1. test map
 $log1 = Join-Path $env:TEMP "f3_server_smoke.log"

@@ -306,6 +306,8 @@ Command line (`f3_server`):
 deliberately broken `engine/tests/data_bad/`, `--export-data --check` (the generated files are up to date), a server end-to-end
 test (`f3_gametest --content`) and one for the data dialogs (`f3_gametest --dialogs`).
 
+> Editing these files by hand is optional: `f3_server --editor` serves a browser editor with forms, base diff and the same validator (`docs/editor.md`).
+
 ## 6. Reloading
 
 * Console `reload [data|scripts|all]` (default `all`) and chat `/reload [data|scripts|all]` (dev servers only: `--dev-kit` or
