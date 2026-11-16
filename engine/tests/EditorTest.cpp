@@ -748,12 +748,34 @@ static void TestObjectScripts() {
     }
 }
 
+static void TestSavePreservesFieldOrder() {
+    std::printf("save keeps the file's field order\n");
+    Fixture f("order", true);
+    const fs::path file = f.data / "perks/order.json";
+    Put(file, "{\n  \"schema\": 1,\n  \"kind\": \"perks\",\n  \"records\": [\n    {\n      \"name\": \"Zed\",\n      \"ranks\": 2,\n      \"id\": \"zed_perk\"\n    }\n  ]\n}\n");
+    const std::string before = Slurp(file);
+    Response gr = f.api->Handle(Req("GET", "/api/get", {{"kind", "perks"}, {"file", "order.json"}}));
+    ordered_json g = ordered_json::parse(gr.body);
+    ordered_json doc = g["doc"];
+    doc["records"][0]["name"] = "Zed Two";
+    Response pr = f.api->Handle(Req("PUT", "/api/put", {}, PutBody("perks", "order.json", doc.dump(), ",\"etag\":\"" + g["etag"].get<std::string>() + "\"")));
+    CHECK(J(pr)["ok"] == true, "order file saved: %s", pr.body.c_str());
+    const std::string after = Slurp(file);
+    auto lines = [](const std::string& t) { std::vector<std::string> v; std::stringstream ss(t); std::string l; while (std::getline(ss, l)) v.push_back(l); return v; };
+    const auto lb = lines(before), la = lines(after);
+    int diff = 0;
+    CHECK(lb.size() == la.size(), "line count unchanged (%zu vs %zu)\n%s", lb.size(), la.size(), after.c_str());
+    for (size_t i = 0; i < lb.size() && i < la.size(); ++i) if (lb[i] != la[i]) { ++diff; CHECK(la[i].find("Zed Two") != std::string::npos, "unexpected changed line: %s", la[i].c_str()); }
+    CHECK(diff == 1, "exactly one line changed (%d)", diff);
+}
+
 int main(int argc, char** argv) {
     std::srand(static_cast<unsigned>(std::time(nullptr)));
     TestSecurity();
     TestRequestGuards();
     TestReadEndpoints();
     TestSaveFlow();
+    TestSavePreservesFieldOrder();
     TestLocale();
     TestEmitterOnRepoData(argc > 0 ? argv[0] : "");
     TestSchemaMatchesValidator();

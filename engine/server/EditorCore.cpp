@@ -663,7 +663,7 @@ Response Api::Get(const Request& req) {
         std::error_code ec;
         if (!fs::exists(p, ec)) return Error(404, "not_found", "no such file");
         const FileInfo fi = ReadFile(kind, fq->second);
-        json out = json::object();
+        ordered_json out = ordered_json::object();   // ordered: the doc keeps the file's own key order (a std::map json would sort it)
         out["ok"] = true;
         out["kind"] = kind;
         out["file"] = fq->second;
@@ -674,7 +674,9 @@ Response Api::Get(const Request& req) {
         out["text"] = fi.text;
         if (fi.generated) out["generator"] = fi.doc["generator"];
         if (fi.ok) out["doc"] = fi.doc; else out["error"] = fi.error;
-        return Ok(out);
+        Response r;
+        r.body = out.dump();
+        return r;
     }
     if (iq == req.query.end() || IsLocaleKind(kind)) return Error(400, "bad_request", "file or id required");
     const std::string want = Low(iq->second);

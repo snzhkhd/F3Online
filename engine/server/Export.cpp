@@ -47,6 +47,11 @@ struct Writer {
         }
         cur.erase(std::remove(cur.begin(), cur.end(), '\r'), cur.end());
         if (exists && cur == text) { ++same; std::cout << "unchanged  " << rel << "\n"; return; }
+        if (check && exists && !force && cur.find("\"generator\"") == std::string::npos) {   // taken over by hand: the exporter never overwrites it, so it is not "out of date"
+            ++skipped;
+            std::cout << "skipped    " << rel << " (edited by hand: no \"generator\" key)\n";
+            return;
+        }
         if (check) { ++differs; std::cout << (exists ? "DIFFERS    " : "MISSING    ") << rel << "\n"; return; }
         if (exists && !force && cur.find("\"generator\"") == std::string::npos) {
             ++skipped;
