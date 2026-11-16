@@ -22,7 +22,15 @@ FetchContent_Declare(nlohmann_json
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 set(JSON_Install OFF CACHE INTERNAL "")
 
-FetchContent_MakeAvailable(enet lua sol2 nlohmann_json)
+# SQLite amalgamation (public domain): the server's persistence layer (docs/persistence.md). Only a zip with sqlite3.c / sqlite3.h,
+# built as a static C library below. Offline: point FETCHCONTENT_SOURCE_DIR_SQLITE3 at an unpacked amalgamation directory.
+FetchContent_Declare(sqlite3
+  URL https://www.sqlite.org/2024/sqlite-amalgamation-3450300.zip
+  URL_HASH SHA256=ea170e73e447703e8359308ca2e4366a3ae0c4304a8665896f068c736781c651
+  SOURCE_SUBDIR no_cmake_here
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+
+FetchContent_MakeAvailable(enet lua sol2 nlohmann_json sqlite3)
 
 target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
 if(WIN32)
@@ -36,6 +44,15 @@ target_include_directories(lua_static PUBLIC ${lua_SOURCE_DIR}/src)
 set_target_properties(lua_static PROPERTIES C_STANDARD 99)
 if(MSVC)
   target_compile_options(lua_static PRIVATE /W0)
+endif()
+
+add_library(sqlite3_static STATIC ${sqlite3_SOURCE_DIR}/sqlite3.c)
+target_include_directories(sqlite3_static SYSTEM PUBLIC ${sqlite3_SOURCE_DIR})
+target_compile_definitions(sqlite3_static PRIVATE SQLITE_THREADSAFE=1 SQLITE_OMIT_LOAD_EXTENSION=1 SQLITE_DQS=0 SQLITE_DEFAULT_FOREIGN_KEYS=1
+  SQLITE_OMIT_DEPRECATED=1 SQLITE_OMIT_SHARED_CACHE=1 SQLITE_USE_URI=0)
+set_target_properties(sqlite3_static PROPERTIES C_STANDARD 99)
+if(MSVC)
+  target_compile_options(sqlite3_static PRIVATE /W0)
 endif()
 
 add_library(sol2_headers INTERFACE)
