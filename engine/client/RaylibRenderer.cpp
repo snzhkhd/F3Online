@@ -726,7 +726,7 @@ private:
             const float cell = Vector3Distance(map_.TileToWorld(1, 0, tw, th), map_.TileToWorld(0, 0, tw, th));
             fogR_ = nm->viewCells * cell;
             fogC_ = c0;
-            assets_->SetFog(c0.x, c0.z, std::max(0.0f, fogR_ - 10 * cell), fogR_, 0.08f);
+            assets_->SetFog(c0.x, c0.z, std::max(0.0f, fogR_ - 10 * cell), fogR_, kFogDarkness);
         } else assets_->SetFog(0, 0, 0, 0);
         rlSetClipPlanes(30.0, 1500.0);
         BeginMode3D(lastCam_);
@@ -790,6 +790,7 @@ private:
     //  * "highlight" = model effect on the target (applies to attachments too): model colour (70,255,251) pulsing to (0,193,188), sine, 1 Hz.
     //  * "select1" / "select2" = discs under the target (Disc_select_01 / 02.b3d, textures select_01 / select_02.tga, radius 0.637 model units,
     //    VFX scale 0.30 / 0.34), RP_BLEND_ADD, colour (70,255,251), alpha 255 -> 100 sine 1 Hz; select1 scale 0.30 -> 0.25 sine 0.5 Hz.
+    static constexpr float kFogDarkness = 0.25f;   // brightness beyond the visible radius (was 0.08: too black)
     static float Pulse(double t, float hz) { return 0.5f + 0.5f * std::sin(static_cast<float>(t) * 6.2831853f * hz); }
     static Color HighlightTint() {
         const float k = Pulse(GetTime(), 1.0f);
@@ -799,7 +800,9 @@ private:
     }
     void DrawSelectDisc(const Vector3& w) {
         const double t = GetTime();
-        struct D { const char* tex; float scale, scaleEnd, scaleHz; } discs[2] = {{"select_01", 0.30f, 0.25f, 0.5f}, {"select_02", 0.34f, 0.34f, 1.0f}};
+        // the original spins the discs about the target: the bright arc of select_02 travels around the ring (one turn ~2.5 s),
+        // select_01 turns the other way, slower
+        struct D { const char* tex; float scale, scaleEnd, scaleHz, turnsPerSec; } discs[2] = {{"select_01", 0.30f, 0.25f, 0.5f, -0.25f}, {"select_02", 0.34f, 0.34f, 1.0f, 0.4f}};
         const float alpha = (255.0f + (100.0f - 255.0f) * Pulse(t, 1.0f)) / 255.0f;
         BeginBlendMode(BLEND_ADDITIVE);
         rlDisableDepthMask();
@@ -811,12 +814,11 @@ private:
             const float r = 0.6367f * 10.0f * sc;   // b3d bounds +-0.6367, non-preconverted model = 1/10 world units
             const float y = w.y + 0.2f;
             rlSetTexture(tex->id);
+            const float ang = static_cast<float>(std::fmod(t * d.turnsPerSec, 1.0)) * 6.2831853f, ca = std::cos(ang), sa = std::sin(ang);
+            auto V = [&](float u, float v) { rlTexCoord2f(u * 0.5f + 0.5f, v * 0.5f + 0.5f); rlVertex3f(w.x + r * (u * ca - v * sa), y, w.z + r * (u * sa + v * ca)); };
             rlBegin(RL_QUADS);
             rlColor4ub(70, 255, 251, static_cast<unsigned char>(255 * alpha));
-            rlTexCoord2f(0, 0); rlVertex3f(w.x - r, y, w.z - r);
-            rlTexCoord2f(0, 1); rlVertex3f(w.x - r, y, w.z + r);
-            rlTexCoord2f(1, 1); rlVertex3f(w.x + r, y, w.z + r);
-            rlTexCoord2f(1, 0); rlVertex3f(w.x + r, y, w.z - r);
+            V(-1, -1); V(-1, 1); V(1, 1); V(1, -1);
             rlEnd();
             rlSetTexture(0);
         }

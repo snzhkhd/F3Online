@@ -247,7 +247,8 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
     }
 
     // ---- information block where the original shows the character model (no model preview in this client)
-    if (const gd::GuiNode* m = Nd("winModel")) {
+    // (belongs to the Stats tab: the Thresholds page draws its own table over the same area)
+    if (const gd::GuiNode* m = charTab_ == 0 ? Nd("winModel") : nullptr) {
         const Rectangle r = Rc(*m);
         const float px = 17 * s, lh = 22 * s;
         float y = r.y + 14 * s;
