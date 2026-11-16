@@ -46,6 +46,8 @@ struct Bot {
     int authCode = -1, authNew = 0;   // account block
     gnet::CharSheet sheet;
     int sheetCount = 0;
+    gnet::PipData pip;   // latest Pip-Boy snapshot (quests, friends, mail)
+    int pipCount = 0;
     CritterId myId = 0;
     net::MapInfo map;
     int mapInfoCount = 0;
@@ -143,6 +145,7 @@ struct Bot {
             }
             case (uint8_t)GMsgRt::S2C_WaitState: { gnet::WaitState m; if (m.Read(b)) waits.push_back({m, LocalMs()}); break; }
             case (uint8_t)GMsgAuth::S2C_AuthResult: { gnet::AuthResult m; if (m.Read(b)) { authCode = m.code; authNew = m.isNew; } break; }
+            case (uint8_t)GMsgPip::S2C_Pip: { if (pip.Read(b)) ++pipCount; break; }
             case (uint8_t)GMsgChar::S2C_CharSheet: { if (sheet.Read(b)) ++sheetCount; break; }
             case (uint8_t)GMsgDlg::S2C_DialogOpen: { gnet::DialogOpen m; if (m.Read(b)) dlgOpens.push_back(m); break; }
             case (uint8_t)GMsgDlg::S2C_DialogNode: { gnet::DialogNode m; if (m.Read(b)) dlgNodes.push_back(m); break; }
@@ -199,6 +202,13 @@ static bool Walkable(const Bot& b, int x, int y) {
 //          set a per-player global, logout. Phase 2 (run against a RESTARTED server with the same --saves): login, assert the
 //          position, inventory with the equipped slot, vars and globals were restored; wrong password; duplicate login kicks the first session.
 // ---------------------------------------------------------------------------------------------------------------------
+static void PipOp(Bot& b, gnet::PipOp op, const std::string& a = std::string(), const std::string& t = std::string(), uint32_t num = 0) {
+    gnet::PipReq r; r.op = static_cast<uint8_t>(op); r.a = a; r.b = t; r.num = num;
+    b.Send(gnet::PackG(r));
+}
+static const gnet::PipData::Quest* FindQuest(const Bot& b, const char* id) { for (auto& q : b.pip.quests) if (q.id == id) return &q; return nullptr; }
+static const gnet::PipData::Friend* FindFriend(const Bot& b, const char* n) { for (auto& f : b.pip.friends) if (f.name == n) return &f; return nullptr; }
+
 static int RunAccountTests(uint16_t port, int phase, const std::string& stateFile) {
     const char* kName = "AcctBot";
     const char* kPass = "secret1";
@@ -346,7 +356,42 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
                 CHECK(WaitFor({&a}, 3, [&] { return said(a, "passive"); }), "UseSkill with a passive skill (Firearms) is refused");
             }
         }
-        enet_peer_disconnect(obs.peer, 0);
+        {   // Pip-Boy: quests (demo quests of main.lua), friends, mail
+            // every request costs one point of the per-client budget (10, +1 per 5 ticks = 4/s, silently dropped when empty): pause after a burst
+            auto pace = [&](Bot& b) { WaitFor({&b}, 1.5, [] { return false; }); };
+            auto said2 = [&](Bot& b, const char* needle) { for (auto& t : b.chat) if (t.find(needle) != std::string::npos) return true; return false; };
+            PipOp(a, gnet::PipOp::Request);
+            CHECK(WaitFor({&a}, 3, [&] { return FindQuest(a, "first_steps") && FindQuest(a, "survivor"); }) && FindQuest(a, "first_steps")->state == 0, "Pip-Boy: the demo quests are in the log (active)");
+            PipOp(a, gnet::PipOp::FriendAdd, "ObsBot");
+            CHECK(WaitFor({&a, &obs}, 3, [&] { return FindFriend(a, "ObsBot") != nullptr; }) && FindFriend(a, "ObsBot")->online == 1, "Pip-Boy: friend added, shown online");
+            a.chat.clear();
+            PipOp(a, gnet::PipOp::FriendAdd, "NoSuchPlayerX");
+            PipOp(a, gnet::PipOp::FriendAdd, "acctbot");
+            PipOp(a, gnet::PipOp::FriendAdd, "obsbot");
+            CHECK(WaitFor({&a}, 3, [&] { return said2(a, "no such player") && said2(a, "yourself") && said2(a, "already"); }) && a.pip.friends.size() == 1, "Pip-Boy: unknown, own and duplicate friends refused");
+            PipOp(a, gnet::PipOp::MailSend, "ObsBot", "hello from the pip-boy");
+            CHECK(WaitFor({&a, &obs}, 3, [&] { return !obs.pip.mail.empty(); }) && obs.pip.mail[0].from == kName && obs.pip.mail[0].text == "hello from the pip-boy" && obs.pip.mail[0].read == 0,
+                  "Pip-Boy: mail delivered to an online account (unread)");
+            CHECK(said2(obs, "new mail"), "Pip-Boy: the recipient is told about the new mail");
+            PipOp(obs, gnet::PipOp::MailRead, "", "", obs.pip.mail.empty() ? 0 : obs.pip.mail[0].id);
+            CHECK(WaitFor({&a, &obs}, 3, [&] { return !obs.pip.mail.empty() && obs.pip.mail[0].read == 1; }), "Pip-Boy: reading marks the mail read");
+            pace(a);
+            a.chat.clear();
+            PipOp(a, gnet::PipOp::MailSend, "NoSuchPlayerX", "x");
+            PipOp(a, gnet::PipOp::MailSend, "ObsBot", "   ");
+            CHECK(WaitFor({&a}, 3, [&] { return said2(a, "no such player") && said2(a, "empty"); }), "Pip-Boy: mail to an unknown player / an empty mail refused");
+            net::ChatReq mc; mc.text = "/mail ObsBot second one via chat";   // chat command form
+            a.Send(net::Pack(mc));
+            CHECK(WaitFor({&a, &obs}, 3, [&] { return obs.pip.mail.size() == 2; }) && obs.pip.mail[1].text == "second one via chat", "Pip-Boy: /mail chat command");
+            PipOp(obs, gnet::PipOp::MailDelete, "", "", obs.pip.mail[0].id);
+            CHECK(WaitFor({&obs}, 3, [&] { return obs.pip.mail.size() == 1; }), "Pip-Boy: mail deleted");
+            pace(a);   // budget refill, see above
+            PipOp(a, gnet::PipOp::MailSend, kName, "persist me across the restart");   // to itself: checked after the server restart
+            CHECK(WaitFor({&a}, 3, [&] { return !a.pip.mail.empty(); }), "Pip-Boy: mail to oneself arrives");
+            size_t pc = a.pipCount;
+            enet_peer_disconnect(obs.peer, 0);
+            CHECK(WaitFor({&a, &obs}, 4, [&] { return a.pipCount > pc && FindFriend(a, "ObsBot") && FindFriend(a, "ObsBot")->online == 0; }), "Pip-Boy: a friend going offline updates the list");
+        }
         {   // name taken (case insensitive)
             Bot x;
             x.Connect(port);
@@ -381,6 +426,7 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
         gnet::PickUp pu; pu.id = ground;
         a.Send(gnet::PackG(pu));
         CHECK(WaitFor({&a}, 15, [&] { return a.invUpdates > upd && !a.inv.empty(); }), "picked up (inventory %zu)", a.inv.size());
+        CHECK(WaitFor({&a}, 3, [&] { return FindQuest(a, "first_steps") && FindQuest(a, "first_steps")->state == 1; }), "Pip-Boy: the pickup completed the quest 'First steps' (on_pickup hook, c:quest_done)");
         if (!a.inv.empty()) {
             WaitFor({&a}, 1, [] { return false; });   // breaktime
             gnet::Equip e; e.id = a.inv[0].id; e.on = 1;
@@ -428,6 +474,14 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
         gnet::UseSkill us; us.skill = 7; us.kind = 0;
         a.Send(gnet::PackG(us));
         CHECK(WaitFor({&a}, 4, [&] { for (size_t i = n; i < a.chat.size(); ++i) if (a.chat[i].find("not hurt") != std::string::npos) return true; return false; }), "use_skill hook answered for Medic");
+    }
+    {   // Pip-Boy data restored: quests and friends from the character, mail from the account's mailbox file
+        CHECK(WaitFor({&a}, 3, [&] { return a.pipCount > 0; }) && FindQuest(a, "first_steps") && FindQuest(a, "first_steps")->state == 1 && FindQuest(a, "survivor") && FindQuest(a, "survivor")->state == 0,
+              "Pip-Boy: quest log restored (First steps done, Survivor active)");
+        CHECK(FindFriend(a, "ObsBot") != nullptr && a.pip.friends.size() == 1, "Pip-Boy: friends list restored");
+        bool mailOk = false;
+        for (auto& m : a.pip.mail) if (m.text == "persist me across the restart" && m.from == kName && m.read == 0) mailOk = true;
+        CHECK(mailOk, "Pip-Boy: mail survived the server restart (unread)");
     }
     {
         size_t n = a.chat.size();

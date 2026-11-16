@@ -90,6 +90,8 @@ bool OrigUi::Load(gd::GameData& data, const std::string& gameDir, std::string* e
     haveDlg_ = data.Read("Dialog", gd::kResGui, buf) && gd::ParseGuiTree(buf.data(), buf.size(), dlg_) && dlg_.Find("SpeakerWin") && dlg_.Find("ListenerWin") &&
                dlg_.Find("SpeakerTextLbl") && dlg_.Find("ListenerTextLbl");
     if (!haveDlg_) log::Warn("original UI: Dialog.gui unavailable, the raylib dialogue box stays");
+    havePip_ = Texture("f3_pipboy.tga") != nullptr;
+    if (!havePip_) log::Warn("original UI: f3_pipboy.tga unavailable, no Pip-Boy window");
     // the character screen is optional: without it the renderer keeps its raylib character window
     haveChar_ = false;
     charIdx_.clear(); charFlat_.clear(); char_ = gd::GuiTree();

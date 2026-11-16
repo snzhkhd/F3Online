@@ -17,6 +17,6 @@ add_executable(f3_skinprobe tools/skinprobe.cpp)
 target_link_libraries(f3_skinprobe PRIVATE f3_gamedata f3_gr2)
 
 if(F3_BUILD_CLIENT)
-  add_executable(f3_client main.cpp RaylibRenderer.cpp GameAssets.cpp MapView.cpp CritterRig.cpp OrigUi.cpp OrigUiChar.cpp)
+  add_executable(f3_client main.cpp RaylibRenderer.cpp GameAssets.cpp MapView.cpp CritterRig.cpp OrigUi.cpp OrigUiChar.cpp OrigUiPip.cpp)
   target_link_libraries(f3_client PRIVATE f3_client_core f3_gamedata f3_gr2 raylib)
 endif()

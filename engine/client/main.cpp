@@ -33,7 +33,7 @@ static const char* kUsage =
     "controls:  LMB act, RMB click toggles Move/Examine cursor (A = attack cursor, RMB/Esc back) or drag to orbit;\n"
     "           pickup / use / talk cursors switch by themselves over items / usable objects / NPCs,\n"
     "           1-9, 0 = skill 1..10 (next click uses it on the target), Alt+1..0 = use the skill on yourself, S cycles skills,\n"
-    "           I inventory, C character, X examine, B switch active hand, Tab stop attack, U skill panel, Enter chat (PgUp/PgDn or wheel over the chat scrolls it),\n"
+    "           I inventory, C character, X examine, B switch active hand, Tab stop attack, U skill panel, P Pip-Boy (tasks / friends / mail), Enter chat (PgUp/PgDn or wheel over the chat scrolls it),\n"
     "           wheel zoom, Shift+LMB = walk.\n";
 
 namespace {
@@ -92,8 +92,9 @@ int main(int argc, char** argv) {
     std::string viewMap, protosHint, gameDirArg, password;
     bool doRegister = false, guest = false, autoCreate = false;
     uint16_t port = cfg.count("port") ? static_cast<uint16_t>(std::atoi(cfg["port"].c_str())) : kDefaultPort;
-    bool openInv = false, openSkills = false, openChar = false, toggleEquip = false;
-    std::string draftArg;
+    bool openInv = false, openSkills = false, openPip = false, openChar = false, toggleEquip = false;
+    std::string draftArg, pipSel;
+    int pipTab = 1;
     int toggleStep = 0;
     double lastToggle = 0;
     bool noAssets = false, autowalk = false, hostGiven = false, legacy = false, autoattack = false, autopickup = false, autoloot = false, autotalk = false;
@@ -121,6 +122,9 @@ int main(int argc, char** argv) {
         else if (a == "--shot-exit") ropt.exitAfterScreenshot = true;
         else if (a == "--no-origui") ropt.noOrigUi = true;
         else if (a == "--open-inv") openInv = true;
+        else if (a == "--pip-tab") pipTab = std::clamp(std::atoi(next()), 0, 3);   // testing: first Pip-Boy tab (0 friends, 1 tasks, 3 mail)
+        else if (a == "--pip-sel") pipSel = next();   // testing: preselect an entry (quest id / friend name / mail id)
+        else if (a == "--open-pip") openPip = true;         // testing: the P Pip-Boy window starts open
         else if (a == "--open-skills") openSkills = true;   // testing: the U skill panel starts open
         else if (a == "--open-char") openChar = true;   // testing: the character window is open once the character exists
         else if (a == "--draft") draftArg = next();     // testing: preset the creation screen, "S,P,E,C,I,A,L:tagMask:traitMask"
@@ -219,6 +223,9 @@ int main(int argc, char** argv) {
     UiState uiState;
     uiState.inventory = openInv;
     uiState.skillPanel = openSkills;
+    uiState.pipboy = openPip;
+    uiState.pipTab = pipTab;
+    uiState.pipSel = pipSel;
     if (!draftArg.empty()) {
         unsigned v[7] = {5, 5, 5, 5, 5, 5, 5}, tm = 0, trm = 0;
         std::sscanf(draftArg.c_str(), "%u,%u,%u,%u,%u,%u,%u:%u:%u", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &tm, &trm);
@@ -346,6 +353,7 @@ int main(int argc, char** argv) {
             }
             if (in.keySkillPanel) uiState.skillPanel = !uiState.skillPanel;
             if (in.escape && uiState.skillPanel) uiState.skillPanel = false;
+            if (in.keyPipBoy) { uiState.pipboy = !uiState.pipboy; if (uiState.pipboy) core.PipOp(gnet::PipOp::Request); }
             if (in.keyAttack) uiState.mode = CursorMode::Attack;
             if (in.keyInventory) uiState.inventory = !uiState.inventory;
             if (in.keyChar) uiState.charSheet = !uiState.charSheet;
@@ -354,6 +362,7 @@ int main(int argc, char** argv) {
             if (in.escape) {
                 if (core.dialog().open) core.DialogClose();
                 else if (core.hasContainer()) core.CloseContainer();
+                else if (uiState.pipboy) uiState.pipboy = false;
                 else if (uiState.inventory || uiState.charSheet) uiState.inventory = uiState.charSheet = false;
                 else uiState.mode = CursorMode::Move;
             }
@@ -581,6 +590,9 @@ int main(int argc, char** argv) {
                     uiState.charSheet = false;
                     uiState.skillPanel = false;
                     break;
+                case UiCommand::PipOp:
+                    if (c.a == 0xFFFFFFFFu) { typing = true; input = "/mail " + c.s + " "; uiState.pipboy = false; }   // Reply
+                    else core.PipOp(static_cast<gnet::PipOp>(c.a), c.s, std::string(), c.b); break;
                 case UiCommand::Quit: quit = true; break;
             }
         }

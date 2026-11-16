@@ -45,6 +45,7 @@ struct FrameInput {
     bool keyExamine = false;          // X
     bool keyHand = false;             // B: switch the active hand
     bool keyStop = false;             // Tab: stop attacking
+    bool keyPipBoy = false;           // P: Pip-Boy (tasks, friends, mail)
     bool keySkillPanel = false;       // U: the usable-skill panel (original hotkey UseSkill)
     bool keySkill = false;            // S: next skill cursor (Shift+S: previous)
     int keyNumber = -1;               // top-row 1..9 -> 0..8, 0 -> 9: skill hotkey (Alt = use on yourself)
@@ -115,8 +116,9 @@ struct LoginLayout {
 
 struct UiCommand {
     enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, Put, CloseContainer, DialogChoose, DialogClose,
-                CharCreate, SpendSkill, UseSkill, SwapHands, Quit, SelectSkill } type = SetMode;   // SpendSkill/UseSkill: a = skill index, b = points; CharCreate sends UiState::draft; SelectSkill: a = skill (enters the skill cursor, closes the sheet); Quit: leave the game (Cancel on the creation screen)
-    uint32_t a = 0, b = 0, c = 0;   // Equip: a = inventory id, b = on, c = EquipSlot (0 = automatic)
+                CharCreate, SpendSkill, UseSkill, SwapHands, Quit, SelectSkill, PipOp } type = SetMode;   // SpendSkill/UseSkill: a = skill index, b = points; CharCreate sends UiState::draft; SelectSkill: a = skill (enters the skill cursor, closes the sheet); Quit: leave the game (Cancel on the creation screen)
+    uint32_t a = 0, b = 0, c = 0;   // PipOp: a = gnet::PipOp, b = mail id, s = friend name. Equip: a = inventory id, b = on, c = EquipSlot (0 = automatic)
+    std::string s;
 };
 
 struct CharDraft {            // character creation in progress (client side until "Create" is pressed)
@@ -132,6 +134,9 @@ struct UiState {
     int skill = 0;                        // the skill of the Skill cursor (index into kSkillNames)
     bool inventory = false;
     bool charSheet = false;
+    int pipTab = 1;                       // Pip-Boy tab: 0 Alarm (friends), 1 Tasks (quests), 2 Maps, 3 Downloads (mail)
+    std::string pipSel;                   // selected Pip-Boy entry (quest id / friend name / mail id)
+    bool pipboy = false;                  // P: Pip-Boy (tasks, friends, mail)
     bool skillPanel = false;              // U: list of the usable skills
 };
 

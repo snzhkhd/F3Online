@@ -149,6 +149,7 @@ public:
         in.keyHand = IsKeyPressed(KEY_B);
         in.keySkill = IsKeyPressed(KEY_S);
         in.keySkillPanel = IsKeyPressed(KEY_U);
+        in.keyPipBoy = IsKeyPressed(KEY_P);
         in.alt = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
         for (int k = 0; k < 10; ++k)
             if (IsKeyPressed(k == 9 ? KEY_ZERO : KEY_ONE + k)) in.keyNumber = k;
@@ -1087,6 +1088,7 @@ private:
                 if (orig_.HasCharScreen()) orig_.DrawCharScreen(ui, false, uiRects_);
                 else DrawCharSheet(ui);
             }
+            orig_.DrawPipBoy(ui, uiRects_);
             return;
         }
         Rectangle hud{sw - 566.0f, sh - 124.0f, 558, 116};

@@ -57,6 +57,8 @@ void ClientCore::Disconnect() {
     containerOwner_ = 0;
     hasStats_ = false;
     hasSheet_ = false;
+    hasPip_ = false;
+    pip_ = gnet::PipData{};
     serverTiming_ = false;
     wait_ = Wait{};
     map_ = ClientMap{};
@@ -304,6 +306,11 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
         case static_cast<uint8_t>(GMsgChar::S2C_CharSheet): {
             gnet::CharSheet m;
             if (m.Read(b)) { sheet_ = m; hasSheet_ = true; }
+            break;
+        }
+        case static_cast<uint8_t>(GMsgPip::S2C_Pip): {
+            gnet::PipData m;
+            if (m.Read(b)) { pip_ = std::move(m); hasPip_ = true; }
             break;
         }
         case static_cast<uint8_t>(GMsg::S2C_Stats): {
@@ -584,6 +591,10 @@ void ClientCore::Examine(uint32_t id, bool isCritter) { gnet::Examine m; m.id = 
 void ClientCore::CharCreate(const uint8_t special[7], uint16_t tagMask, uint16_t traitMask) { gnet::CharCreate m; for (int i = 0; i < 7; i++) m.special[i] = special[i]; m.tagMask = tagMask; m.traitMask = traitMask; SendG(m); }
 void ClientCore::SpendSkill(int skill, int points) { gnet::SpendSkill m; m.skill = static_cast<uint8_t>(skill); m.points = static_cast<uint8_t>(points); SendG(m); }
 void ClientCore::UseSkill(int skill, int kind, uint32_t target) { gnet::UseSkill m; m.skill = static_cast<uint8_t>(skill); m.kind = static_cast<uint8_t>(kind); m.target = target; SendG(m); }
+void ClientCore::PipOp(gnet::PipOp op, const std::string& a, const std::string& b, uint32_t num) {
+    gnet::PipReq m; m.op = static_cast<uint8_t>(op); m.a = a; m.b = b; m.num = num;
+    SendG(m);
+}
 void ClientCore::RequestState() { SendG(gnet::ReqState{}); }
 
 }  // namespace f3

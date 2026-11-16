@@ -44,6 +44,9 @@ json Server::CharacterToJson(const Critter& c) const {
     }
     j["vars"] = json::object();
     for (auto& [k, v] : c.vars) j["vars"][k] = v;
+    j["quests"] = json::array();
+    for (const Critter::QuestEntry& q : c.quests) j["quests"].push_back({{"id", q.id}, {"title", q.title}, {"text", q.text}, {"state", q.state}, {"updated", q.updated}});
+    j["friends"] = c.friends;
     j["gvars"] = json::object();   // per player quest / journal / script globals (original globals.ini names)
     for (auto& [k, v] : c.gvars) j["gvars"][k] = v;
     return j;
@@ -76,6 +79,19 @@ void Server::ApplyCharacter(Critter& c, const json& j) {
         }
     if (j.contains("vars") && j["vars"].is_object())
         for (auto& [k, v] : j["vars"].items()) if (v.is_number()) c.vars[k] = v.get<double>();
+    if (j.contains("quests") && j["quests"].is_array())
+        for (const json& e : j["quests"]) {
+            if (!e.is_object() || c.quests.size() >= 100) continue;
+            Critter::QuestEntry q;
+            q.id = e.value("id", std::string());
+            q.title = e.value("title", q.id);
+            q.text = e.value("text", std::string());
+            q.state = static_cast<uint8_t>(std::clamp(e.value("state", 0), 0, 2));
+            q.updated = e.value("updated", static_cast<int64_t>(0));
+            if (!q.id.empty()) c.quests.push_back(std::move(q));
+        }
+    if (j.contains("friends") && j["friends"].is_array())
+        for (const json& e : j["friends"]) if (e.is_string() && c.friends.size() < 50) c.friends.push_back(e.get<std::string>());
     if (j.contains("gvars") && j["gvars"].is_object())
         for (auto& [k, v] : j["gvars"].items()) if (v.is_number()) c.gvars[k] = v.get<double>();
 }

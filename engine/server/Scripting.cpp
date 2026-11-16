@@ -129,6 +129,10 @@ void Scripting::BindApi(sol::state& L) {
         "distance_to", [](Critter& c, Critter& o) { return c.mapId == o.mapId ? TileDist(c.pos, o.pos) : 9999; },
         "get_var", [](Critter& c, const std::string& k) { auto it = c.vars.find(k); return it == c.vars.end() ? 0.0 : it->second; },
         "set_var", [](Critter& c, const std::string& k, double v) { c.vars[k] = v; },
+        "quest_add", [&S](Critter& c, const std::string& id, const std::string& title, sol::optional<std::string> text) { return S.QuestAdd(c, id, title, text.value_or("")); },
+        "quest_done", [&S](Critter& c, const std::string& id) { return S.QuestSet(c, id, 1); },
+        "quest_fail", [&S](Critter& c, const std::string& id) { return S.QuestSet(c, id, 2); },
+        "quest_state", [&S](Critter& c, const std::string& id) { return S.QuestState(c, id); },
         "get_gvar", [&S](Critter& c, const std::string& k) { return S.GetGlobalFor(&c, k); },
         "set_gvar", [&S](Critter& c, const std::string& k, double v) { S.SetGlobalFor(&c, k, v); });
 

@@ -327,6 +327,7 @@ void Server::EnterWorld(Critter& crit, const nlohmann::json* saved) {
     if (Critter* cc = world_.GetCritter(cid)) {
         log::Info("player '%s' (id %u%s) entered map %u at %d,%d", cc->name.c_str(), cc->id, account.empty() ? ", guest" : restore ? ", restored" : ", new", cc->mapId, cc->pos.x, cc->pos.y);
         if (Map* mm = world_.GetMap(cc->mapId)) UpdateVisibility(*mm);
+        PipOnLogin(*cc);
         SavePlayer(*cc);
     }
 }
@@ -346,6 +347,7 @@ void Server::OnDisconnect(ENetPeer* peer) {
     log::Info("player '%s' left", c->name.c_str());
     c->peer = nullptr;
     scripting_->OnLogout(*c);
+    PipOnLogout(*c);
     SavePlayer(*c);
     RemoveCritter(id);
 }
@@ -419,6 +421,7 @@ void Server::OnChatReq(Critter& c, const std::string& raw) {
     std::string text = SanitizeText(raw, kMaxChatLen);
     if (text.empty()) return;
     CritterId id = c.id;
+    if (PipChat(c, text)) return;   // /friend /friends /mail /inbox /maildel /quests
     if (!scripting_->OnChat(c, text)) return;
     text = SanitizeText(text, kMaxChatLen);
     if (text.empty()) return;

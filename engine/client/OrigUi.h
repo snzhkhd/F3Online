@@ -39,6 +39,10 @@ public:
     // SpeakerModel / ListenerPic areas are not rendered (no portrait renderer). Mouse wheel scrolls long NPC text.
     bool HasDialog() const { return ok_ && haveDlg_; }
     void DrawDialog(const UiView& ui, std::vector<Rectangle>& rects);
+    // Pip-Boy (key P, UiState::pipboy): PipBoy.gui / f3_pipboy.tga. Tabs Alarm = friends, Tasks = quests, Downloads = mail (OrigUiPip.cpp).
+    // Operations go out as UiCommand::PipOp (a = gnet::PipOp, b = mail id, s = name); op 0xFFFFFFFF = Reply (chat line "/mail <name> ").
+    bool HasPip() const;
+    void DrawPipBoy(const UiView& ui, std::vector<Rectangle>& rects);
     void DrawOverlay();   // tooltip, after all windows
     // Floating speech: word-wrapped outlined text (gothic font), centred on cx, the block's bottom edge at bottomY. Returns the block height.
     float DrawSpeech(const std::string& text, float cx, float bottomY, Color c, float alpha, float maxW = 230);
@@ -64,6 +68,7 @@ private:
     // widget rectangle in layout units, relative to its parent
     Rectangle LRect(const gd::GuiFile& g, const std::string& name, int from = 0, int* idx = nullptr) const;
     void Tooltip(const std::string& title, const std::string& body);
+    std::vector<std::string> WrapText(const Font& f, const std::string& text, float size, float maxW) const;
 
     gd::GameData* data_ = nullptr;
     std::unordered_map<std::string, Tex> tex_;
@@ -76,6 +81,8 @@ private:
     uint32_t lootClickId_ = 0;
     gd::GuiTree dlg_;                                              // Dialog.gui (SpeakerWin / ListenerWin)
     bool haveDlg_ = false;
+    bool havePip_ = false;
+    int pipScroll_ = 0;                                            // Pip-Boy: list scroll
     int dlgScroll_ = 0;
     std::string dlgText_;                                          // text the scroll position belongs to
     gd::GuiTree char_;                                         // CharacterGeneration.gui, exact tree

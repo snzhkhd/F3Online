@@ -103,6 +103,20 @@ public:
     bool CreateCharacter(Critter& c, const gnet::CharCreate& m);
     bool SpendSkillPoints(Critter& c, int skill, int points);
     bool UseSkill(Critter& c, int skill, int kind, uint32_t target);
+    // ---- Pip-Boy: quests, friends, mail (Pip.cpp). Quests and friends live in the character, mail per account in <saves>/mail/<key>.json.
+    bool QuestAdd(Critter& c, const std::string& id, const std::string& title, const std::string& text);   // false: id already in the log
+    bool QuestSet(Critter& c, const std::string& id, uint8_t state);   // 1 completed, 2 failed, 0 active again; false: unknown quest
+    int QuestState(const Critter& c, const std::string& id) const;     // -1 unknown, else 0 / 1 / 2
+    bool FriendAdd(Critter& c, const std::string& name);
+    bool FriendDel(Critter& c, const std::string& name);
+    bool MailSend(Critter& c, const std::string& to, const std::string& text);
+    bool MailRead(Critter& c, uint32_t id);
+    bool MailDelete(Critter& c, uint32_t id);
+    void SendPip(Critter& c);          // full snapshot (S2C_Pip)
+    void PipOnLogin(Critter& c);       // snapshot, unread-mail notice, tells friends
+    void PipOnLogout(Critter& c);      // updates the friends' lists
+    bool PipChat(Critter& c, const std::string& text);   // /friend, /friends, /mail, /inbox, /quests chat commands; true = handled
+    void HandlePip(Critter& c, const gnet::PipReq& m);
     // ---- accounts + persistence (Persist.cpp)
     bool SavePlayer(Critter& c);
     void SaveAllPlayers();
@@ -221,6 +235,10 @@ private:
     uint64_t nextSaveTick_ = 0;
     std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
 
+    struct MailMsg { uint32_t id = 0; std::string from, text; int64_t time = 0; bool read = false; };
+    std::vector<MailMsg>& Mailbox(const std::string& accountKey);   // loads <saves>/mail/<key>.json on first use
+    bool SaveMailbox(const std::string& accountKey);
+    std::map<std::string, std::vector<MailMsg>> mail_;
     std::mutex cmdMutex_;
     std::vector<std::string> commands_;
 };

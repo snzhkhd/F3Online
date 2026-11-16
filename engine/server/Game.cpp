@@ -1176,6 +1176,11 @@ void Server::HandleGamePacket(ENetPeer*, Critter* c, GMsg id, ByteBuffer& b, boo
             if (ok && budget()) UseSkill(*c, m.skill, m.kind, m.target);
             break;
         }
+        case static_cast<GMsg>(GMsgPip::C2S_Pip): {
+            gnet::PipReq m; ok = m.Read(b);
+            if (ok && budget()) HandlePip(*c, m);
+            break;
+        }
         case static_cast<GMsg>(GMsgDlg::C2S_Talk): {
             gnet::Talk m; ok = m.Read(b);
             if (ok && budget()) TalkTo(*c, m.critter);

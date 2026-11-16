@@ -58,6 +58,9 @@ function on_login(c)
         if gun > 0 then c:equip(gun, true) end
         if arm > 0 then c:equip(arm, true) end
     end
+    -- Pip-Boy demo quests (c:quest_add(id, title, text) / c:quest_done(id) / c:quest_fail(id) / c:quest_state(id) -> -1 unknown, 0 active, 1 done, 2 failed)
+    c:quest_add("first_steps", "First steps", "Look around, pick up something useful (an item on the ground) and get yourself a weapon.")
+    c:quest_add("survivor", "Survivor", "The wasteland is dangerous. Defeat your first enemy.")
     c:tell("Welcome to F3Online, " .. c.name .. "! Click to move, Enter to chat. Try /help")
     broadcast(c.name .. " entered the wasteland")
     return true
@@ -103,6 +106,15 @@ function use_skill(c, skill, value, kind, target)
         return true
     end
     return false
+end
+
+-- Pip-Boy demo quests
+function on_pickup(c, obj_id, proto_key)
+    if c:quest_state("first_steps") == 0 then c:quest_done("first_steps") end
+end
+
+function on_death(c, killer)
+    if killer and killer:is_player() and killer:quest_state("survivor") == 0 then killer:quest_done("survivor") end
 end
 
 function on_logout(c)

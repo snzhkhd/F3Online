@@ -579,4 +579,51 @@ struct CharSheet {
     }
 };
 }  // namespace gnet
+// ---- Pip-Boy block: quest log, friends list and mail. One request message (C2S_Pip = 36, the last free id of the 20..39 client range)
+// carries an operation; the answer to every operation (and the unsolicited update after a quest / friend / mail change or a friend
+// logging in or out) is the complete S2C_Pip snapshot, which is small (<= 50 mails of <= 400 chars). Older clients never send or
+// receive these ids.
+enum class GMsgPip : uint8_t { C2S_Pip = 36, S2C_Pip = 142 };
+inline constexpr size_t kMaxMailText = 400;
+inline constexpr size_t kMaxMailbox = 50;
+inline constexpr size_t kMaxFriends = 50;
+namespace gnet {
+enum class PipOp : uint8_t { Request = 0, FriendAdd = 1, FriendDel = 2, MailSend = 3, MailRead = 4, MailDelete = 5 };
+struct PipReq {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgPip::C2S_Pip);
+    uint8_t op = 0;
+    uint32_t num = 0;     // MailRead / MailDelete: mail id
+    std::string a, b;     // FriendAdd / FriendDel: a = name; MailSend: a = recipient, b = text
+    void Write(ByteBuffer& w) const { w.WriteU8(op); w.WriteU32(num); w.WriteString(a); w.WriteString(b); }
+    bool Read(ByteBuffer& r) { op = r.ReadU8(); num = r.ReadU32(); a = r.ReadString(64); b = r.ReadString(kMaxMailText * 4); return r.Ok(); }
+};
+struct PipData {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgPip::S2C_Pip);
+    struct Quest { std::string id, title, text; uint8_t state = 0; };   // state 0 active, 1 completed, 2 failed
+    struct Friend { std::string name; uint8_t online = 0; };
+    struct Mail { uint32_t id = 0; std::string from, text; uint32_t time = 0; uint8_t read = 0; };
+    std::vector<Quest> quests;
+    std::vector<Friend> friends;
+    std::vector<Mail> mail;
+    void Write(ByteBuffer& w) const {
+        w.WriteU16(static_cast<uint16_t>(quests.size()));
+        for (const Quest& q : quests) { w.WriteString(q.id); w.WriteString(q.title); w.WriteString(q.text); w.WriteU8(q.state); }
+        w.WriteU16(static_cast<uint16_t>(friends.size()));
+        for (const Friend& f : friends) { w.WriteString(f.name); w.WriteU8(f.online); }
+        w.WriteU16(static_cast<uint16_t>(mail.size()));
+        for (const Mail& m : mail) { w.WriteU32(m.id); w.WriteString(m.from); w.WriteString(m.text); w.WriteU32(m.time); w.WriteU8(m.read); }
+    }
+    bool Read(ByteBuffer& r) {
+        quests.clear(); friends.clear(); mail.clear();
+        uint16_t n = r.ReadU16();
+        for (uint16_t i = 0; i < n && r.Ok(); i++) { Quest q; q.id = r.ReadString(64); q.title = r.ReadString(200); q.text = r.ReadString(2000); q.state = r.ReadU8(); quests.push_back(std::move(q)); }
+        n = r.ReadU16();
+        for (uint16_t i = 0; i < n && r.Ok(); i++) { Friend f; f.name = r.ReadString(64); f.online = r.ReadU8(); friends.push_back(std::move(f)); }
+        n = r.ReadU16();
+        for (uint16_t i = 0; i < n && r.Ok(); i++) { Mail m; m.id = r.ReadU32(); m.from = r.ReadString(64); m.text = r.ReadString(kMaxMailText * 4); m.time = r.ReadU32(); m.read = r.ReadU8(); mail.push_back(std::move(m)); }
+        return r.Ok();
+    }
+};
+}  // namespace gnet
+
 }  // namespace f3

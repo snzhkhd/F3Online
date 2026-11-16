@@ -154,6 +154,10 @@ public:
     void CharCreate(const uint8_t special[7], uint16_t tagMask, uint16_t traitMask = 0);
     const std::string& playerName() const { return name_; }
     void SpendSkill(int skill, int points);
+    // Pip-Boy block: quests / friends / mail snapshot of the server (S2C_Pip); PipOp sends one operation (answered with a new snapshot)
+    bool hasPip() const { return hasPip_; }
+    const gnet::PipData& pip() const { return pip_; }
+    void PipOp(gnet::PipOp op, const std::string& a = std::string(), const std::string& b = std::string(), uint32_t num = 0);
     void UseSkill(int skill, int kind = 0, uint32_t target = 0);
     const std::vector<gnet::InvEntry>& inventory() const { return inventory_; }
     bool hasContainer() const { return containerOwner_ != 0; }
@@ -216,6 +220,8 @@ private:
 
     bool hasStats_ = false;
     bool hasSheet_ = false;
+    bool hasPip_ = false;
+    gnet::PipData pip_;
     gnet::CharSheet sheet_;
     gnet::Stats stats_;
     std::vector<gnet::InvEntry> inventory_;

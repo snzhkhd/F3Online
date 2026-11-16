@@ -117,6 +117,10 @@ struct Critter {
 
     std::unordered_map<std::string, double> vars;  // script-visible numeric state (persisted for accounts)
     std::unordered_map<std::string, double> gvars; // per player quest / journal / script globals (persisted; overlay on the shared globals table)
+    // Pip-Boy (Pip.cpp): quest log (persisted in the character) and friends list (display names, persisted)
+    struct QuestEntry { std::string id, title, text; uint8_t state = 0; int64_t updated = 0; };   // state 0 active, 1 completed, 2 failed
+    std::vector<QuestEntry> quests;
+    std::vector<std::string> friends;
 
     // ---- account / character progression (Persist.cpp, Character.cpp)
     std::string account;        // account name when logged in with an account (empty = guest, nothing is saved)
