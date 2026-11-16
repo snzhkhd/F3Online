@@ -503,13 +503,29 @@ inline const char* AuthCodeText(AuthCode c) {
         default: return "server error";
     }
 }
+// Locale key of an AuthCode text (data/locale/<lang>/messages.json); AuthCodeText above is the English fallback.
+inline const char* AuthCodeKey(AuthCode c) {
+    switch (c) {
+        case AuthCode::Ok: return "auth.ok";
+        case AuthCode::BadCredentials: return "auth.bad_credentials";
+        case AuthCode::NameTaken: return "auth.name_taken";
+        case AuthCode::InvalidName: return "auth.invalid_name";
+        case AuthCode::WeakPassword: return "auth.weak_password";
+        case AuthCode::RateLimited: return "auth.rate_limited";
+        case AuthCode::GuestDisabled: return "auth.guest_disabled";
+        case AuthCode::VersionMismatch: return "auth.version_mismatch";
+        case AuthCode::Full: return "auth.full";
+        default: return "auth.server_error";
+    }
+}
 struct Auth {
     static constexpr GMsg kId = static_cast<GMsg>(GMsgAuth::C2S_Auth);
     uint32_t version = kProtocolVersion;
     uint8_t mode = 0;
     std::string name, password;
-    void Write(ByteBuffer& b) const { b.WriteU32(version); b.WriteU8(mode); b.WriteString(name); b.WriteString(password); }
-    bool Read(ByteBuffer& b) { version = b.ReadU32(); mode = b.ReadU8(); name = b.ReadString(64); password = b.ReadString(128); return b.Ok(); }
+    std::string lang;   // optional trailing field: the client's UI language code ("en", "ru"); the server localizes its messages with it
+    void Write(ByteBuffer& b) const { b.WriteU32(version); b.WriteU8(mode); b.WriteString(name); b.WriteString(password); if (!lang.empty()) b.WriteString(lang); }
+    bool Read(ByteBuffer& b) { version = b.ReadU32(); mode = b.ReadU8(); name = b.ReadString(64); password = b.ReadString(128); if (b.Ok() && b.Remaining() >= 2) lang = b.ReadString(8); return b.Ok(); }
 };
 struct AuthResult {
     static constexpr GMsg kId = static_cast<GMsg>(GMsgAuth::S2C_AuthResult);

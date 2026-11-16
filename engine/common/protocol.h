@@ -13,8 +13,8 @@ inline constexpr uint32_t kProtocolVersion = 1;
 inline constexpr uint16_t kDefaultPort = 4040;
 inline constexpr int kDefaultTickRate = 20;
 inline constexpr int kViewRadius = 24;  // tiles; per-map visibility range
-inline constexpr size_t kMaxNameLen = 16;
-inline constexpr size_t kMaxChatLen = 200;
+inline constexpr size_t kMaxNameLen = 16;   // code points (names are UTF-8: Latin or Cyrillic letters, digits, '_')
+inline constexpr size_t kMaxChatLen = 200;  // code points
 inline constexpr size_t kMaxPacketSize = 64 * 1024;
 
 enum class Msg : uint8_t {
@@ -44,8 +44,9 @@ struct LoginReq {
     static constexpr Msg kId = Msg::C2S_Login;
     uint32_t version = kProtocolVersion;
     std::string name;
-    void Write(ByteBuffer& b) const { b.WriteU32(version); b.WriteString(name); }
-    bool Read(ByteBuffer& b) { version = b.ReadU32(); name = b.ReadString(64); return b.Ok(); }
+    std::string lang;   // optional trailing field: UI language code ("en", "ru"); older clients omit it
+    void Write(ByteBuffer& b) const { b.WriteU32(version); b.WriteString(name); if (!lang.empty()) b.WriteString(lang); }
+    bool Read(ByteBuffer& b) { version = b.ReadU32(); name = b.ReadString(64); if (b.Ok() && b.Remaining() >= 2) lang = b.ReadString(8); return b.Ok(); }
 };
 
 struct MoveToReq {

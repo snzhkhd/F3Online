@@ -7,6 +7,10 @@ if(MSVC)
   target_compile_definitions(f3_common INTERFACE _CRT_SECURE_NO_WARNINGS NOMINMAX)
 endif()
 
+# --- localization: string tables (data/locale/<lang>/*.json), fallback chain, placeholders, coverage check; UTF-8 helpers are header only ---
+add_library(f3_locale STATIC common/Localization.cpp)
+target_link_libraries(f3_locale PUBLIC f3_common nlohmann_json::nlohmann_json)
+
 add_subdirectory(server)
 add_subdirectory(client)
 add_subdirectory(tests)

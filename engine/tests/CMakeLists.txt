@@ -13,3 +13,9 @@ add_executable(f3_dbtest DbTest.cpp ../server/Db.cpp ../server/Store.cpp ../serv
 target_include_directories(f3_dbtest PRIVATE ../server)
 target_link_libraries(f3_dbtest PRIVATE f3_common nlohmann_json::nlohmann_json sqlite3_static)
 add_test(NAME f3_dbtest COMMAND f3_dbtest)
+
+# Localization layer: locale loader, fallback chain, placeholders, --check-locale report, UTF-8 helpers and UTF-8 safe wrapping. No game data.
+add_executable(f3_localetest LocaleTest.cpp)
+target_include_directories(f3_localetest PRIVATE ../client)
+target_link_libraries(f3_localetest PRIVATE f3_locale f3_common nlohmann_json::nlohmann_json)
+add_test(NAME f3_localetest COMMAND f3_localetest)

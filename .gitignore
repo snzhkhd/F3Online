@@ -34,3 +34,7 @@ _work/
 *.db.*.bak
 *.migrated/
 *.migrated.*/
+
+# Cyrillic UI fonts: licenses unclear, never committed (see assets/fonts/README.md)
+assets/fonts/*
+!assets/fonts/README.md
