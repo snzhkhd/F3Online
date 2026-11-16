@@ -308,6 +308,18 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
             if (m.Read(b)) { sheet_ = m; hasSheet_ = true; }
             break;
         }
+        case static_cast<uint8_t>(GMsgContent::S2C_ContentDefs): {
+            gnet::ContentDefs m;
+            if (!m.Read(b)) return;
+            if (m.first) { protos_.ResetOverrides(); content_ = gnet::ContentDefs{}; content_.schema = m.schema; content_.revision = m.revision; content_.traitMax = m.traitMax; content_.traits = std::move(m.traits); content_.perks = std::move(m.perks); hasContent_ = true; }
+            for (const auto& it : m.items) {
+                ProtoOverride o;
+                o.pid = it.pid; o.basePid = it.basePid; o.key = it.key; o.name = it.name; o.desc = it.desc; o.range = it.range; o.dmgMin = it.dmgMin; o.dmgMax = it.dmgMax;
+                for (int k = 0; k < 7; ++k) o.armor[k] = it.armor[k];
+                protos_.ApplyOverride(o);
+            }
+            break;
+        }
         case static_cast<uint8_t>(GMsgPip::S2C_Pip): {
             gnet::PipData m;
             if (m.Read(b)) { pip_ = std::move(m); hasPip_ = true; }

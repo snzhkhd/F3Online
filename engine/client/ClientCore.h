@@ -153,6 +153,10 @@ public:
 
     bool hasStats() const { return hasStats_; }
     const gnet::Stats& stats() const { return stats_; }
+    // Designer data of the server (S2C_ContentDefs): trait list of the creation screen, perk names. Empty / false on servers without it.
+    bool hasContent() const { return hasContent_; }
+    const gnet::ContentDefs& content() const { return content_; }
+    const gnet::ContentDefs::Trait* TraitAt(int index) const { for (const auto& t : content_.traits) if (t.index == index) return &t; return nullptr; }
     bool hasSheet() const { return hasSheet_; }
     const gnet::CharSheet& sheet() const { return sheet_; }   // character window data (level, xp, skills, ...)
     void CharCreate(const uint8_t special[7], uint16_t tagMask, uint16_t traitMask = 0);
@@ -225,6 +229,8 @@ private:
     bool hasStats_ = false;
     bool hasSheet_ = false;
     bool hasPip_ = false;
+    bool hasContent_ = false;
+    gnet::ContentDefs content_;
     gnet::PipData pip_;
     gnet::CharSheet sheet_;
     gnet::Stats stats_;

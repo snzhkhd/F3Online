@@ -201,10 +201,12 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         const gd::GuiNode* b = Nd("btnTrait" + key);
         const gd::GuiNode* l = Nd("lblTrait" + key);
         if (!b || !l) continue;
+        const gnet::ContentDefs::Trait* td = core.TraitAt(t);
+        if (core.hasContent() && !td) continue;   // the server's trait list has no trait in this slot
         const bool on = (traits >> t) & 1u;
         const bool hot = Hit(b) || Hit(l);
         BtnPic(b, on);
-        Lbl(l, stf_.Get(159 + t), on ? kBright : (hot && creating ? Color{120, 235, 90, 255} : Argb(l->textColor)));
+        Lbl(l, td ? td->name : stf_.Get(159 + t), on ? kBright : (hot && creating ? Color{120, 235, 90, 255} : Argb(l->textColor)));
         if (creating && click && hot) {
             if (on) d.traitMask &= ~(1u << t);
             else if (traitCount < sh.traitMax) d.traitMask |= (1u << t);
@@ -319,6 +321,11 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
             title = stf_.Get(best->tipTitleRef);
             if (best->tipTextRef != kNoRef && best->tipTextRef != best->tipTitleRef) body = stf_.Get(best->tipTextRef);
             img = best->tipImage;
+            if (core.hasContent() && (best->name.rfind("lblTrait", 0) == 0 || best->name.rfind("btnTrait", 0) == 0) && best->name.size() >= 10) {
+                const int tens = best->name[8] - '0', dig = best->name[9] - '0';   // "lblTrait<1|2><1..8>": slot (tens - 1) * 8 + digit - 1
+                if (tens >= 1 && tens <= 2 && dig >= 1 && dig <= 8)
+                    if (const gnet::ContentDefs::Trait* td = core.TraitAt((tens - 1) * 8 + dig - 1)) { title = td->name; body = td->desc; img.clear(); }
+            }
         } else if (hoverSkill == 13) title = "Traps";
         const Color ink{20, 14, 6, 255};
         if (const gd::GuiNode* n = Nd("lblToolTipTitle")) {

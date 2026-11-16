@@ -38,6 +38,16 @@ struct ProtoInfo {
     bool isCritter() const { return cls == "critter"; }
 };
 
+// A prototype overridden or added by the server's data layer (gnet::ContentDefs::Item).
+struct ProtoOverride {
+    uint32_t pid = 0;
+    uint32_t basePid = 0xFFFF;   // 0xFFFF: override of `pid`; else a new prototype cloned from basePid (pid must be the next free index)
+    std::string key, name, desc;
+    int range = 0;
+    float dmgMin = 0, dmgMax = 0;
+    int armor[7] = {0, 0, 0, 0, 0, 0, 0};
+};
+
 class ProtoDb {
 public:
     // Looks for protos.json: explicit path or directory, else gamedata/server relative to the cwd / exe, walking up.
@@ -51,6 +61,10 @@ public:
     const ProtoInfo* PlayerProto() const { return ByKey("Default_PC.CRT"); }
     int PidOf(const ProtoInfo* p) const { return p ? static_cast<int>(p - protos_.data()) : -1; }
     size_t size() const { return protos_.size(); }
+    // Data layer (server content sync): overrides names / descriptions / numbers, appends new prototypes. ResetOverrides restores the
+    // original values of every overridden prototype (before a new sync). Addresses stay valid (capacity is reserved at Load).
+    bool ApplyOverride(const ProtoOverride& o);
+    void ResetOverrides();
 
     static std::string FindFile(const std::string& hint);
 
@@ -59,6 +73,7 @@ private:
     std::vector<ProtoInfo> protos_;
     std::unordered_map<std::string, uint32_t> byKey_;
     std::unordered_map<std::string, uint32_t> byName_;
+    std::unordered_map<uint32_t, ProtoInfo> saved_;   // pid -> original record of overridden prototypes
 };
 
 }  // namespace f3

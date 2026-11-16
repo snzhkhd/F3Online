@@ -180,8 +180,41 @@ bool ProtoDb::Load(const std::string& hint, std::string* err) {
         protos_.clear();
         return false;
     }
+    protos_.reserve(protos_.size() + 2048);   // server data may append prototypes; keeps ByPid / ByKey pointers valid
+    saved_.clear();
     log::Info("protos: %zu prototypes from %s", protos_.size(), path_.c_str());
     return true;
+}
+
+bool ProtoDb::ApplyOverride(const ProtoOverride& o) {
+    uint32_t pid = o.pid;
+    if (o.basePid != 0xFFFF) {   // new prototype
+        if (pid < protos_.size()) { if (protos_[pid].key != o.key) return false; }   // already known (resync): refresh below
+        else {
+            if (pid != protos_.size() || o.basePid >= protos_.size() || protos_.size() >= protos_.capacity()) return false;
+            ProtoInfo np = protos_[o.basePid];
+            np.key = o.key;
+            protos_.push_back(std::move(np));
+            byKey_[Lower(o.key)] = pid;
+        }
+    }
+    if (pid >= protos_.size()) return false;
+    ProtoInfo& p = protos_[pid];
+    if (!saved_.count(pid)) saved_[pid] = p;
+    if (!o.name.empty()) {
+        p.name = o.name;
+        if (p.isCritter() && !p.isStatic) byName_.emplace(Lower(o.name), pid);
+    }
+    p.desc = o.desc;
+    if (p.cls == "weapon") { p.range = o.range; p.dmgMin = o.dmgMin; p.dmgMax = o.dmgMax; }
+    if (p.cls == "armor") for (int i = 0; i < 7; ++i) p.armor[i] = o.armor[i];
+    return true;
+}
+
+void ProtoDb::ResetOverrides() {
+    for (auto& [pid, orig] : saved_)
+        if (pid < protos_.size()) protos_[pid] = orig;
+    saved_.clear();
 }
 
 const ProtoInfo* ProtoDb::ByKey(const std::string& key) const {

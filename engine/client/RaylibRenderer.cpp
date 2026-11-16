@@ -1404,9 +1404,11 @@ private:
             std::snprintf(b, sizeof b, "Traits (up to %d)", sh.traitMax);
             DrawText(b, px + 10, py + 408, 14, gold);
             for (int t = 0; t < 16; ++t) {
+                const gnet::ContentDefs::Trait* td = core.TraitAt(t);
+                if (core.hasContent() && !td) continue;
                 const bool on = (d.traitMask & (1u << t)) != 0;
                 const Rectangle tb{static_cast<float>(px + 10 + (t % 4) * 146), static_cast<float>(py + 430 + (t / 4) * 24), 142, 22};
-                if (Button(tb, traitNames[t], on, on || nt < sh.traitMax)) { if (on) d.traitMask &= ~(1u << t); else d.traitMask |= (1u << t); }
+                if (Button(tb, td ? td->name.c_str() : traitNames[t], on, on || nt < sh.traitMax)) { if (on) d.traitMask &= ~(1u << t); else d.traitMask |= (1u << t); }
             }
             const bool ready = left == 0 && tags == sh.tagCount;
             if (Button(Rectangle{static_cast<float>(px + 10), static_cast<float>(py + 528), 150, 28}, "Create character", ready, ready))
