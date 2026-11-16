@@ -1,11 +1,13 @@
 {
   "schema": 1,
   "kind": "perks",
+  "note": "The original demo has no perk list (English.stf has no perk names; the creature record only has perk rank slots), so these perks are our own placeholders and every number is a placeholder (\"placeholder\": true). Tune freely.",
   "records": [
     {
       "id": "toughness",
       "name": "Toughness",
       "desc": "You can take a beating: +10 maximum hit points.",
+      "placeholder": true,
       "requires": {
         "level": 3,
         "special": {
@@ -23,6 +25,7 @@
       "id": "strong_back",
       "name": "Strong Back",
       "desc": "Carry 50 more pounds.",
+      "placeholder": true,
       "requires": {
         "level": 3,
         "special": {
@@ -40,6 +43,7 @@
       "id": "bonus_move",
       "name": "Bonus Move",
       "desc": "One extra action point.",
+      "placeholder": true,
       "requires": {
         "level": 6,
         "special": {
@@ -57,6 +61,7 @@
       "id": "marksman",
       "name": "Marksman",
       "desc": "+10% Firearms per rank.",
+      "placeholder": true,
       "ranks": 2,
       "requires": {
         "level": 3,
@@ -75,6 +80,7 @@
       "id": "lucky_streak",
       "name": "Lucky Streak",
       "desc": "+5% critical hit chance per rank.",
+      "placeholder": true,
       "ranks": 3,
       "requires": {
         "level": 6,
@@ -93,6 +99,7 @@
       "id": "educated",
       "name": "Educated",
       "desc": "Two more skill points per level.",
+      "placeholder": true,
       "requires": {
         "level": 3,
         "special": {
@@ -110,6 +117,7 @@
       "id": "swift_learner",
       "name": "Swift Learner",
       "desc": "+10% experience from everything, per rank.",
+      "placeholder": true,
       "ranks": 3,
       "requires": {
         "level": 3,
@@ -128,6 +136,7 @@
       "id": "thick_skin",
       "name": "Thick Skin",
       "desc": "Toughened hide: +5 armor class.",
+      "placeholder": true,
       "requires": {
         "level": 6,
         "perks": [
@@ -145,6 +154,7 @@
       "id": "awareness",
       "name": "Awareness",
       "desc": "Notice what others miss (calls the Lua hook perk_awareness when taken).",
+      "placeholder": true,
       "requires": {
         "level": 3,
         "special": {

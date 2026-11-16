@@ -1,0 +1,166 @@
+{
+  "schema": 1,
+  "kind": "items",
+  "generator": "f3_server --export-data",
+  "note": "Generated from the original prototypes by f3_server --export-data. Edit the numbers freely; remove the \"generator\" key to keep the file from being overwritten. Reference-only fields are explained in docs/data-format.md.",
+  "records": [
+    {
+      "id": "ArmorLeather_Outfit.ARM",
+      "name": "Leather Outfit",
+      "model": "GD_Armor_LeatherOutfit",
+      "held_model": "BodLeatherOutfit",
+      "armor": { "values": [4, 4, 4, 0, 8, 4, 0] },
+      "head_armor": false
+    },
+    {
+      "id": "ArmorLeather_Outfit_Biohazard.ARM",
+      "name": "Leather Outfit",
+      "model": "GD_Armor_LeatherOutfit",
+      "held_model": "BodLeatherOutfit",
+      "armor": { "values": [4, 4, 4, 0, 8, 4, 0] },
+      "head_armor": false
+    },
+    {
+      "id": "ArmorMotorcycle_Helmet.ARM",
+      "name": "Motorcycle Helmet",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [16, 8, 4, 0, 20, 4, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ArmorPower_Armor.ARM",
+      "name": "Power Armor",
+      "model": "GD_Armor_PowerArmorSuit",
+      "held_model": "HeaArmingCap",
+      "armor": { "values": [32, 24, 12, 0, 36, 12, 0] },
+      "head_armor": false
+    },
+    {
+      "id": "ArmorPower_Helmet.ARM",
+      "name": "Power Helmet",
+      "model": "GD_Armor_PowerArmorHelmet",
+      "held_model": "HeaPowerArmor",
+      "armor": { "values": [32, 24, 12, 0, 36, 12, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_Helmet8Ball.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetBlack.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetBlue.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetDefault.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetEasyrider.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetEyeRed.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetFlames.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetGreen.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetGrey.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetPolice.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetRed.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetShotSmiley.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetSkull.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetSkullFull.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingCop_HelmetYellow.ARM",
+      "model": "DS_Vault_Props{17}TrashCan2",
+      "held_model": "HeaMotorcycle",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": true
+    },
+    {
+      "id": "ClothingPrison_Suit.ARM",
+      "model": "DS_Vault_Props{16}TrashCan1",
+      "held_model": "BodPrisonsuit",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": false
+    },
+    {
+      "id": "ClothingVault_Suit.ARM",
+      "model": "GD_Armor_VaultSuit",
+      "held_model": "BodVaultsuit",
+      "armor": { "values": [0, 0, 0, 0, 0, 0, 0] },
+      "head_armor": false
+    }
+  ]
+}

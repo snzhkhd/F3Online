@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "kind": "items",
+  "generator": "f3_server --export-data",
+  "note": "Generated from the original prototypes by f3_server --export-data. Edit the numbers freely; remove the \"generator\" key to keep the file from being overwritten. Reference-only fields are explained in docs/data-format.md.",
+  "records": [
+    {
+      "id": "Ammo12_ga.AMO",
+      "model": "GD_Ammo_Shotgun",
+      "ammo": { "caliber": 0, "dmg_min": 5, "dmg_max": 12, "armor_adj": -25, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo15mm_EC.AMO",
+      "name": "15mm EC",
+      "model": "GD_Ammo_15mm_EC",
+      "ammo": { "caliber": 1, "dmg_min": 25, "dmg_max": 40, "armor_adj": 30, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo22.AMO",
+      "name": ".22 FMJ",
+      "model": "GD_Ammo_22_cal",
+      "ammo": { "caliber": 3, "dmg_min": 3, "dmg_max": 10, "armor_adj": 5, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo223.AMO",
+      "name": ".223 FMJ",
+      "model": "GD_Ammo_223_FMJ",
+      "ammo": { "caliber": 2, "dmg_min": 12, "dmg_max": 24, "armor_adj": 5, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo22_Injector.AMO",
+      "name": ".22 Injector",
+      "model": "GD_Ammo_22injector",
+      "ammo": { "caliber": 3, "dmg_min": 1, "dmg_max": 8, "armor_adj": 10, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo2mm_EC.AMO",
+      "name": "2mm EC",
+      "model": "GD_Ammo_2mm_EC",
+      "ammo": { "caliber": 5, "dmg_min": 15, "dmg_max": 30, "armor_adj": 20, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo30.AMO",
+      "name": ".30 FMJ",
+      "model": "GD_Ammo_30_cal",
+      "ammo": { "caliber": 6, "dmg_min": 15, "dmg_max": 25, "armor_adj": 10, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo40mm_Rifle_Grenade.AMO",
+      "name": "40mm RG",
+      "model": "GD_Ammo_40mm_RifleGrenade",
+      "ammo": { "caliber": 7, "dmg_min": 30, "dmg_max": 60, "armor_adj": 0, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo44.AMO",
+      "name": ".44 FMJ",
+      "model": "GD_Ammo_44_cal",
+      "ammo": { "caliber": 8, "dmg_min": 15, "dmg_max": 25, "armor_adj": 0, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo45.AMO",
+      "name": ".45 FMJ",
+      "model": "GD_Ammo_45_cal",
+      "ammo": { "caliber": 9, "dmg_min": 10, "dmg_max": 18, "armor_adj": 0, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo50.AMO",
+      "name": ".50 FMJ",
+      "model": "GD_Ammo_50_cal",
+      "ammo": { "caliber": 10, "dmg_min": 20, "dmg_max": 30, "armor_adj": 10, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo762mm.AMO",
+      "name": "7.62mm FMJ",
+      "model": "GD_Ammo_762mm",
+      "ammo": { "caliber": 11, "dmg_min": 15, "dmg_max": 25, "armor_adj": 10, "accuracy_adj": 0 }
+    },
+    {
+      "id": "Ammo9mm.AMO",
+      "name": "9mm FMJ",
+      "model": "GD_Ammo_9mm",
+      "ammo": { "caliber": 12, "dmg_min": 5, "dmg_max": 12, "armor_adj": 5, "accuracy_adj": 0 }
+    },
+    {
+      "id": "AmmoBB.AMO",
+      "name": "BB",
+      "model": "GD_Ammo_BBgun",
+      "ammo": { "caliber": 13, "dmg_min": 1, "dmg_max": 3, "armor_adj": 0, "accuracy_adj": 20 }
+    },
+    {
+      "id": "AmmoHeavy_Rivet.AMO",
+      "name": "Heavy Rivet",
+      "model": "GD_Ammo_RivetHeavy",
+      "ammo": { "caliber": 16, "dmg_min": 10, "dmg_max": 20, "armor_adj": 10, "accuracy_adj": 0 }
+    },
+    {
+      "id": "AmmoLil_Rivet.AMO",
+      "name": "Lil' Rivet",
+      "model": "GD_Ammo_Rivetsmall",
+      "ammo": { "caliber": 17, "dmg_min": 5, "dmg_max": 15, "armor_adj": 10, "accuracy_adj": 0 }
+    },
+    {
+      "id": "AmmoMicro_Fusion_Cell.AMO",
+      "name": "Micro Fusion Cell",
+      "model": "GD_Ammo_MFC",
+      "ammo": { "caliber": 14, "dmg_min": 20, "dmg_max": 32, "armor_adj": 0, "accuracy_adj": 0 }
+    },
+    {
+      "id": "AmmoNaphate.AMO",
+      "name": "Naphate",
+      "model": "GD_Ammo_Naphate",
+      "ammo": { "caliber": 15, "dmg_min": 45, "dmg_max": 90, "armor_adj": 0, "accuracy_adj": 0 }
+    },
+    {
+      "id": "AmmoRocket.AMO",
+      "name": "Rocket HE",
+      "model": "GD_Ammo_Rocket",
+      "ammo": { "caliber": 18, "dmg_min": 75, "dmg_max": 125, "armor_adj": 15, "accuracy_adj": -10 }
+    },
+    {
+      "id": "AmmoSmall_Energy_Cell.AMO",
+      "name": "Small Energy Cell",
+      "model": "GD_Ammo_SEC",
+      "ammo": { "caliber": 19, "dmg_min": 12, "dmg_max": 20, "armor_adj": 0, "accuracy_adj": 0 }
+    }
+  ]
+}

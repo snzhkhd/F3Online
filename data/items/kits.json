@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "kind": "items",
+  "generator": "f3_server --export-data",
+  "note": "Generated from the original prototypes by f3_server --export-data. Edit the numbers freely; remove the \"generator\" key to keep the file from being overwritten. Reference-only fields are explained in docs/data-format.md.",
+  "records": [
+    {
+      "id": "ItemsKeystest.ITM",
+      "model": "IT_FirstAidKit"
+    },
+    {
+      "id": "KitsFirst_Aid_Kit.ITM",
+      "name": "First Aid Kit",
+      "model": "GD_Items_First_Aid_Kit"
+    },
+    {
+      "id": "KitsSecurity_Kit.ITM",
+      "name": "Security Kit",
+      "model": "GD_Items_Lockpicks"
+    },
+    {
+      "id": "KitsTool_Kit.ITM",
+      "name": "Tool Kit",
+      "model": "GD_Items_Tool_Kit"
+    }
+  ]
+}

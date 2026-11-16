@@ -2,6 +2,7 @@
 //   f3_server [--port N] [--scripts DIR] [--data DIR | --no-data] [--seed N] [--tickrate N] [--run-seconds N] [--dev-kit]
 // --data defaults to the nearest gamedata/server (output of f3_dataimport) next to the binary or in a parent of the cwd.
 //   --content DIR (default: nearest data/), --lenient, --validate-data (check data/ and exit), --dev-commands (chat /reload; implied by --dev-kit)
+//   --export-data [--export-out DIR] [--force] [--check]   regenerate data/items, data/npcs/original.json, data/skills from the original data and exit
 //   --saves DIR (holds f3.db), --save-interval SEC
 //   database tools (no network, exit when done): --migrate-json | --export-json DIR | --db-dump [TABLE] | --db-backup FILE  (docs/persistence.md)
 // Console commands on stdin: reload [data|scripts|all] | status | dbinfo | events [n] [kind] | say <text> | quit
@@ -54,6 +55,8 @@ int main(int argc, char** argv) {
     f3::Server::Config cfg;
     std::string dbTool, dbToolArg;
     bool scriptsGiven = false, dataGiven = false, contentGiven = false, validateOnly = false, checkLocale = false, strictLocale = false;
+    bool exportData = false, exportForce = false, exportCheck = false;
+    std::string exportOut;
     std::string srcDir;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -68,6 +71,10 @@ int main(int argc, char** argv) {
         else if (a == "--content") { cfg.contentDir = next("--content"); contentGiven = true; }
         else if (a == "--lenient") cfg.lenient = true;
         else if (a == "--validate-data") validateOnly = true;
+        else if (a == "--export-data") exportData = true;
+        else if (a == "--export-out") exportOut = next("--export-out");
+        else if (a == "--force") exportForce = true;
+        else if (a == "--check") exportCheck = true;
         else if (a == "--dev-commands") cfg.devCommands = true;
         else if (a == "--lang") cfg.lang = next("--lang");
         else if (a == "--locale") cfg.localeDir = next("--locale");
@@ -88,7 +95,7 @@ int main(int argc, char** argv) {
         else if (a == "--db-dump") { dbTool = "db-dump"; if (i + 1 < argc && std::strncmp(argv[i + 1], "--", 2) != 0) dbToolArg = argv[++i]; }
         else if (a == "--bind") cfg.bindHost = next("--bind");
         else if (a == "--local") cfg.bindHost = "127.0.0.1";
-        else { std::cerr << "usage: f3_server [--lang CODE] [--locale DIR] [--check-locale [--strict] [--src DIR]] [--content DIR] [--lenient] [--validate-data] [--dev-commands] [--port N] [--bind ADDR | --local] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit] [--allow-guest] [--saves DIR] [--save-interval SEC]\n"; return 2; }
+        else { std::cerr << "usage: f3_server [--lang CODE] [--locale DIR] [--check-locale [--strict] [--src DIR]] [--content DIR] [--lenient] [--validate-data] [--export-data [--export-out DIR] [--force] [--check]] [--dev-commands] [--port N] [--bind ADDR | --local] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit] [--allow-guest] [--saves DIR] [--save-interval SEC]\n"; return 2; }
     }
     if (!scriptsGiven) cfg.scriptsDir = FindScripts(argv[0]);
     if (!dbTool.empty()) {   // database tools: only need the saves folder
@@ -100,6 +107,9 @@ int main(int argc, char** argv) {
     if (checkLocale) {   // --check-locale: coverage of data/locale (missing / extra / unused keys, placeholders), exit 0 / 1 (2 = no locale)
         if (cfg.contentDir.empty()) { std::cerr << "check-locale: no data/ folder found (use --content DIR)" << std::endl; return 2; }
         return f3::RunCheckLocale(cfg.contentDir, cfg.localeDir, srcDir, std::filesystem::absolute(argv[0]), strictLocale);
+    }
+    if (exportData) {   // --export-data [--export-out DIR] [--force] [--check]: original items / NPCs / skill formulas as data/*.json (docs/data-format.md, "Exporter")
+        return f3::RunExportData(cfg.noData ? std::filesystem::path() : cfg.dataDir, cfg.contentDir, exportOut, exportForce, exportCheck);
     }
     if (validateOnly) {   // --validate-data: check data/ (against gamedata when present), print the report, exit 0 / 1 (2 = gamedata unusable)
         if (cfg.contentDir.empty()) { std::cerr << "validate-data: no data/ folder found (use --content DIR)" << std::endl; return 2; }

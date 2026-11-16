@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "kind": "npcs",
+  "generator": "f3_server --export-data",
+  "note": "Critter templates placed by the shipped maps, from the original data (f3_server --export-data). Map instances keep their own team / script / dialog / inventory; these records are the template defaults (and what data spawns use). Remove the \"generator\" key to keep your edits.",
+  "records": [
+    {
+      "id": "Critters00_TMCommunist_Insugent_Gun.CRT",
+      "name": "Communist Insurgent",
+      "model": "HumFWir",
+      "team": 2,
+      "level": 3,
+      "max_hp": 31,
+      "special": { "strength": 6, "perception": 6, "endurance": 5, "charisma": 5, "intelligence": 5, "agility": 6, "luck": 5 },
+      "script": "00_TutorialDefault_Communist_Insurgent.amx",
+      "equipment": ["ArmorLeather_Outfit.ARM", "Weapons9mm_Autoloader.WEA"],
+      "inventory": ["Ammo9mm.AMO"]
+    },
+    {
+      "id": "Critters00_TMCommunist_Insurgent.CRT",
+      "name": "Communist Insurgent",
+      "model": "HumMNor",
+      "team": 2,
+      "level": 3,
+      "max_hp": 31,
+      "special": { "strength": 6, "perception": 6, "endurance": 5, "charisma": 5, "intelligence": 5, "agility": 6, "luck": 5 },
+      "script": "00_TutorialDefault_Communist_Insurgent.amx",
+      "equipment": ["ArmorLeather_Outfit.ARM"]
+    },
+    {
+      "id": "Critters00_TMCommunist_Insurgent_2.CRT",
+      "model": "HumMStr",
+      "team": 2,
+      "level": 3,
+      "max_hp": 36,
+      "special": { "strength": 7, "perception": 6, "endurance": 7, "charisma": 4, "intelligence": 4, "agility": 5, "luck": 5 },
+      "script": "00_TutorialDefault_Communist_Insurgent.amx",
+      "equipment": ["WeaponsCombatKnife.WEA", "ArmorLeather_Outfit_Biohazard.ARM"]
+    },
+    {
+      "id": "Critters00_TMCommunist_Insurgent_F1.CRT",
+      "model": "HumFWir",
+      "team": 2,
+      "level": 3,
+      "max_hp": 27,
+      "special": { "strength": 4, "perception": 6, "endurance": 4, "charisma": 5, "intelligence": 6, "agility": 7, "luck": 5 },
+      "script": "00_TutorialDefault_Communist_Insurgent.amx",
+      "equipment": ["ArmorLeather_Outfit.ARM", "WeaponsFlamethrower.WEA"]
+    },
+    {
+      "id": "Critters00_TMCommunist_Insurgent_Shiv.CRT",
+      "model": "HumMStr",
+      "team": 2,
+      "level": 3,
+      "max_hp": 36,
+      "special": { "strength": 7, "perception": 6, "endurance": 7, "charisma": 4, "intelligence": 4, "agility": 5, "luck": 5 },
+      "script": "00_TutorialDefault_Communist_Insurgent.amx",
+      "equipment": ["ArmorLeather_Outfit_Biohazard.ARM", "WeaponsCombatKnife.WEA"]
+    },
+    {
+      "id": "Critters00_TMCpl_Armstrong.CRT",
+      "name": "GMC Soldier",
+      "model": "HumMStr",
+      "team": 1,
+      "level": 1,
+      "special": { "strength": 7, "perception": 7, "endurance": 7, "charisma": 5, "intelligence": 6, "agility": 6, "luck": 5 },
+      "script": "CaptainArmstrong.amx",
+      "dialog": "00 Corporal Armstrong",
+      "equipment": ["ArmorPower_Armor.ARM", "Weapons223_Minigun.WEA"],
+      "inventory": ["Ammo223.AMO", "Ammo223.AMO", "Ammo223.AMO", "Ammo44.AMO", "Ammo44.AMO", "Ammo44.AMO", "Weapons44_Revolver.WEA"]
+    },
+    {
+      "id": "Critters00_TMFrank.CRT",
+      "name": "Frank",
+      "model": "HumMNor",
+      "team": 3,
+      "level": 1,
+      "special": { "strength": 5, "perception": 5, "endurance": 5, "charisma": 5, "intelligence": 5, "agility": 5, "luck": 5 },
+      "script": "00_TutorialFrank.amx",
+      "dialog": "00 Frank",
+      "equipment": ["ClothingVault_Suit.ARM"]
+    },
+    {
+      "id": "Critters00_TMVault_Dweller_F_B.CRT",
+      "name": "Female Vault Dweller",
+      "model": "HumFNor",
+      "team": 3,
+      "level": 1,
+      "special": { "strength": 5, "perception": 5, "endurance": 5, "charisma": 5, "intelligence": 5, "agility": 5, "luck": 5 },
+      "script": "00_VaultDweller_Female_01.amx",
+      "equipment": ["ClothingVault_Suit.ARM"]
+    },
+    {
+      "id": "Critters00_TMVault_Dweller_M_B.CRT",
+      "name": "Male Vault Dweller",
+      "model": "HumMNor",
+      "team": 3,
+      "level": 1,
+      "special": { "strength": 5, "perception": 5, "endurance": 5, "charisma": 5, "intelligence": 5, "agility": 5, "luck": 5 },
+      "script": "00_VaultDweller_Male_01.amx",
+      "equipment": ["ClothingVault_Suit.ARM"]
+    },
+    {
+      "id": "Critters00_TMVault_Dweller_M_C.CRT",
+      "name": "Male Vault Dweller",
+      "model": "HumMNor",
+      "team": 3,
+      "level": 1,
+      "special": { "strength": 5, "perception": 5, "endurance": 5, "charisma": 5, "intelligence": 5, "agility": 5, "luck": 5 },
+      "script": "00_VaultDweller_Male_02.amx",
+      "equipment": ["ClothingVault_Suit.ARM"]
+    },
+    {
+      "id": "CrittersCoyote.CRT",
+      "model": "CR_Dog",
+      "team": 0,
+      "level": 1,
+      "special": { "strength": 5, "perception": 5, "endurance": 5, "charisma": 5, "intelligence": 5, "agility": 5, "luck": 5 },
+      "script": "00_Animals_Coyote.amx"
+    },
+    {
+      "id": "CrittersDog_Stray.CRT",
+      "name": "Dog",
+      "model": "CR_Dog",
+      "team": 0,
+      "level": 1,
+      "special": { "strength": 6, "perception": 5, "endurance": 5, "charisma": 5, "intelligence": 5, "agility": 5, "luck": 5 },
+      "script": "00_Animals_Dog_Stray01.amx"
+    },
+    {
+      "id": "CrittersFloatingEyeBot.CRT",
+      "name": "Floating Eye Bot",
+      "model": "CR_FloatingEyeBot",
+      "team": 0,
+      "level": 1
+    },
+    {
+      "id": "CrittersRadscorpion_Small.CRT",
+      "name": "Small Radscorpion",
+      "model": "HumFWir",
+      "team": 0,
+      "level": 1,
+      "special": { "strength": 3, "perception": 4, "endurance": 6, "charisma": 1, "intelligence": 1, "agility": 7, "luck": 5 },
+      "script": "00_Radscorpion_Small.amx"
+    },
+    {
+      "id": "Default_PC.CRT",
+      "model": "HumMNor",
+      "team": 0,
+      "level": 1,
+      "special": { "strength": 6, "perception": 6, "endurance": 6, "charisma": 6, "intelligence": 6, "agility": 6, "luck": 6 },
+      "inventory": ["WeaponsCattleProd.WEA"]
+    }
+  ]
+}

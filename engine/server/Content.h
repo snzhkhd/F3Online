@@ -50,6 +50,7 @@ struct PerkReq {
 
 struct PerkDef {
     std::string id, name, desc, hook, file;
+    bool placeholder = false;      // numbers are placeholders (the demo has no perk data); documentation only
     int ranks = 1;
     PerkReq req;
     std::vector<StatMod> effects;  // per rank
@@ -59,6 +60,47 @@ struct QuestDef {
     std::string id, title, text, file;
     int xp = 0;
     std::vector<std::pair<std::string, int>> items;   // reward: proto key, count
+};
+
+// ---- data dialogs (data/dialogs, docs/dialogs.md): graph of nodes with text, answers, conditions and effects
+struct DlgCond {
+    enum Kind { Skill, Stat, Item, Quest, Flag, Lua, All, Any, Not };
+    enum Op { Ge, Le, Eq, Ne, Gt, Lt };
+    Kind kind = All;
+    std::string name;                // skill / stat / item key / quest id / flag name / Lua function
+    Op op = Ge;
+    int value = 0;                   // quest: -1 none, 0 active, 1 done, 2 failed
+    bool neg = false;                // leading '!'
+    std::vector<DlgCond> kids;       // All / Any / Not
+};
+struct DlgEffect {
+    enum Kind { Give, Take, Quest, Flag, Xp, Trade, Attack, End, Door, Lua };
+    Kind kind = End;
+    std::string s;                   // item key / quest id / flag name / Lua function
+    int n = 1;                       // count / flag value / xp
+    int x = 0, y = 0;                // Door: cell on the speaker's map
+    std::string action;              // Quest: add | done | fail | reopen; Door: open | close | lock | unlock
+};
+struct DlgAnswer {
+    std::string id, text;            // text: our own English text; empty with stf != 0 = original English.stf string
+    int stf = 0;
+    bool hasCond = false;
+    DlgCond cond;
+    std::vector<DlgEffect> effects;
+    std::string gotoNode;            // node id, empty / "end" = the conversation ends
+};
+struct DlgNode {
+    std::string id, text;
+    int stf = 0;
+    std::vector<DlgEffect> onEnter;
+    std::vector<DlgAnswer> answers;
+};
+struct DlgRoute { bool hasCond = false; DlgCond cond; std::string gotoNode; };
+struct DialogDef {
+    std::string id, speaker, file;
+    std::vector<DlgRoute> start;     // first route whose condition holds picks the first node
+    std::vector<DlgNode> nodes;
+    const DlgNode* FindNode(const std::string& nodeId) const;
 };
 
 struct SkillDef {   // base value = constant + sum(coef[i] * SPECIAL[i]) (S P E C I A L)
@@ -77,13 +119,16 @@ struct ItemRec {
     std::optional<float> dmgMin, dmgMax;
     std::optional<std::vector<int>> armor;       // 7 values
     std::optional<int> ammoDmgMin, ammoDmgMax;
+    std::optional<std::string> model, heldModel;
+    std::optional<int> caliber, ammoCaliber, ammoArmorAdj, ammoAccuracyAdj;
+    std::optional<std::vector<AttackModeDef>> modes;   // weapon.modes (replaces the attack modes as a whole)
 };
 
 struct NpcSpawn { std::string map; int x = 0, y = 0; int count = 1; };
 
 struct NpcRec {
     std::string file, path, id, base;
-    std::optional<std::string> name, script, dialog;
+    std::optional<std::string> name, script, dialog, model;
     std::optional<int> team, level, maxHp, xp;
     int special[kSpecialCount] = {0, 0, 0, 0, 0, 0, 0};   // 0 = not set
     std::optional<std::vector<std::string>> equipment, inventory;
@@ -113,6 +158,7 @@ public:
     std::vector<TraitDef> traits;
     std::vector<PerkDef> perks;
     std::vector<QuestDef> quests;
+    std::vector<DialogDef> dialogs;
     std::vector<ItemRec> items;
     std::vector<NpcRec> npcs;
     SkillDef skills[kSkillSlots];              // built-in defaults, overridden by data/skills
@@ -128,6 +174,7 @@ public:
     const PerkDef* FindPerk(const std::string& id) const;
     const QuestDef* FindQuest(const std::string& id) const;
     const NpcRec* FindNpc(const std::string& protoKey) const;
+    const DialogDef* FindDialog(const std::string& id) const;
 
     // "perks: +1 -0 ~2 (added: a; changed: b, c)" lines for kinds that differ, empty when nothing changed.
     static std::vector<std::string> Diff(const ContentDb& before, const ContentDb& after);
@@ -136,6 +183,8 @@ public:
 
 // f3_server --validate-data: loads gamedata (when given) and the content folder, prints the report, returns the exit code.
 int RunCheckLocale(const std::filesystem::path& contentDir, const std::filesystem::path& localeDir, const std::string& srcDir, const std::filesystem::path& exePath, bool strict);
+// f3_server --export-data: writes data/items, data/npcs and data/skills from the original data (see docs/data-format.md, "Exporter").
+int RunExportData(const std::filesystem::path& gamedataDir, const std::filesystem::path& contentDir, const std::filesystem::path& outDir, bool force, bool check);
 int RunValidateData(const std::filesystem::path& gamedataDir, const std::filesystem::path& contentDir, bool lenient);
 
 std::filesystem::path FindContentDir(const std::filesystem::path& exePath);

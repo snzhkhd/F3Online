@@ -175,7 +175,7 @@ const json* OpenEnvelope(Ctx& c, const fs::path& p, const char* kind, json& doc,
     if (kd == doc.end()) { c.rep.Error(c.file, "kind", std::string("missing required field (expected \"") + kind + "\")"); ok = false; }
     else if (!kd->is_string() || kd->get<std::string>() != kind) { c.rep.Error(c.file, "kind", std::string("expected \"") + kind + "\" (the folder this file is in), got " + kd->dump()); ok = false; }
     for (auto it = doc.begin(); it != doc.end(); ++it)
-        if (it.key() != "schema" && it.key() != "kind" && it.key() != "records" && !extraKeys.count(it.key())) { c.rep.Error(c.file, it.key(), "unknown top-level field"); ok = false; }
+        if (it.key() != "schema" && it.key() != "kind" && it.key() != "records" && it.key() != "generator" && it.key() != "note" && !extraKeys.count(it.key())) { c.rep.Error(c.file, it.key(), "unknown top-level field"); ok = false; }
     auto rec = doc.find("records");
     if (rec == doc.end()) { c.rep.Error(c.file, "records", "missing required field"); return nullptr; }
     if (!rec->is_array()) { c.rep.Error(c.file, "records", std::string("expected array, got ") + TypeName(*rec)); return nullptr; }
@@ -194,6 +194,218 @@ std::vector<fs::path> ListJson(const fs::path& dir) {
     }
     std::sort(v.begin(), v.end());
     return v;
+}
+
+
+// ------------------------------------------------------------------ dialogs (data/dialogs, docs/dialogs.md)
+
+const char* const kDlgStats[] = {"strength", "perception", "endurance", "charisma", "intelligence", "agility", "luck", "level", "hp", "max_hp", "xp"};
+
+std::string Trim(const std::string& s) {
+    size_t b = s.find_first_not_of(" \t"), e = s.find_last_not_of(" \t");
+    return b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
+}
+
+bool ValidName(const std::string& s, size_t maxLen = 64) {   // flag / node / answer names
+    if (s.empty() || s.size() > maxLen) return false;
+    for (unsigned char c : s) if (!(std::isalnum(c) || c == '_' || c == '.' || c == '-')) return false;
+    return true;
+}
+
+// "skill:Barter>=40", "stat:strength>=6", "item:Junk.ITM>=2", "quest:id==done", "flag:name", "flag:count>=3", "lua:fn_name"; leading '!' negates.
+std::optional<DlgCond> ParseCondString(Ctx& c, const std::string& path, const std::string& in) {
+    DlgCond d;
+    std::string s = Trim(in);
+    while (!s.empty() && s[0] == '!') { d.neg = !d.neg; s = Trim(s.substr(1)); }
+    const size_t colon = s.find(':');
+    if (colon == std::string::npos) { c.Err(path, "condition '" + in + "' must look like kind:argument (skill, stat, item, quest, flag, lua)"); return std::nullopt; }
+    const std::string kind = Low(Trim(s.substr(0, colon)));
+    std::string rest = Trim(s.substr(colon + 1));
+    bool haveOp = false;
+    std::string name = rest, rhs;
+    for (size_t i = 0; i < rest.size(); ++i) {
+        const char ch = rest[i], nx = i + 1 < rest.size() ? rest[i + 1] : 0;
+        DlgCond::Op op = DlgCond::Ge;
+        size_t len = 0;
+        if (ch == '>' && nx == '=') { op = DlgCond::Ge; len = 2; }
+        else if (ch == '<' && nx == '=') { op = DlgCond::Le; len = 2; }
+        else if (ch == '=' && nx == '=') { op = DlgCond::Eq; len = 2; }
+        else if (ch == '!' && nx == '=') { op = DlgCond::Ne; len = 2; }
+        else if (ch == '>') { op = DlgCond::Gt; len = 1; }
+        else if (ch == '<') { op = DlgCond::Lt; len = 1; }
+        else if (ch == '=') { op = DlgCond::Eq; len = 1; }
+        else continue;
+        d.op = op;
+        haveOp = true;
+        name = Trim(rest.substr(0, i));
+        rhs = Trim(rest.substr(i + len));
+        break;
+    }
+    if (name.empty()) { c.Err(path, "condition '" + in + "': missing name after '" + kind + ":'"); return std::nullopt; }
+    auto number = [&](int lo, int hi, int& out) {
+        if (rhs.empty() || rhs.size() > 9 || rhs.find_first_not_of("-0123456789") != std::string::npos || rhs.find('-', 1) != std::string::npos) { c.Err(path, "condition '" + in + "': '" + rhs + "' is not a number"); return false; }
+        const int v = std::atoi(rhs.c_str());
+        if (v < lo || v > hi) { c.Err(path, "condition '" + in + "': " + std::to_string(v) + " out of range " + std::to_string(lo) + ".." + std::to_string(hi)); return false; }
+        out = v;
+        return true;
+    };
+    if (kind == "skill") {
+        d.kind = DlgCond::Skill;
+        int idx = -1;
+        for (int i = 0; i < kSkillCount; ++i) if (Low(kSkillNames[i]) == Low(name)) idx = i;
+        if (idx < 0) { c.Err(path, "condition '" + in + "': unknown skill '" + name + "'"); return std::nullopt; }
+        d.name = kSkillNames[idx];
+        if (!haveOp) { c.Err(path, "condition '" + in + "': needs a comparison, e.g. skill:" + d.name + ">=40"); return std::nullopt; }
+        if (!number(0, 300, d.value)) return std::nullopt;
+    } else if (kind == "stat") {
+        d.kind = DlgCond::Stat;
+        const std::string n = Low(name);
+        bool ok = false;
+        for (const char* k : kDlgStats) if (n == k) ok = true;
+        if (!ok) { c.Err(path, "condition '" + in + "': unknown stat '" + name + "' (valid: strength, perception, endurance, charisma, intelligence, agility, luck, level, hp, max_hp, xp)"); return std::nullopt; }
+        d.name = n;
+        if (!haveOp) { c.Err(path, "condition '" + in + "': needs a comparison, e.g. stat:" + n + ">=5"); return std::nullopt; }
+        if (!number(0, 1000000, d.value)) return std::nullopt;
+    } else if (kind == "item") {
+        d.kind = DlgCond::Item;
+        d.name = name;
+        if (!haveOp) { d.op = DlgCond::Ge; d.value = 1; }
+        else if (!number(0, 100000, d.value)) return std::nullopt;
+    } else if (kind == "quest") {
+        d.kind = DlgCond::Quest;
+        d.name = name;
+        if (!ValidName(name, 48)) { c.Err(path, "condition '" + in + "': invalid quest id"); return std::nullopt; }
+        if (!haveOp || (d.op != DlgCond::Eq && d.op != DlgCond::Ne)) { c.Err(path, "condition '" + in + "': use quest:<id>==state or !=state (none, active, done, failed)"); return std::nullopt; }
+        const std::string st = Low(rhs);
+        if (st == "none") d.value = -1;
+        else if (st == "active") d.value = 0;
+        else if (st == "done") d.value = 1;
+        else if (st == "failed") d.value = 2;
+        else { c.Err(path, "condition '" + in + "': unknown quest state '" + rhs + "' (none, active, done, failed)"); return std::nullopt; }
+    } else if (kind == "flag") {
+        d.kind = DlgCond::Flag;
+        d.name = name;
+        if (!ValidName(name)) { c.Err(path, "condition '" + in + "': invalid flag name '" + name + "' (letters, digits, _ . -)"); return std::nullopt; }
+        if (!haveOp) { d.op = DlgCond::Ne; d.value = 0; }
+        else if (!number(-1000000, 1000000, d.value)) return std::nullopt;
+    } else if (kind == "lua") {
+        d.kind = DlgCond::Lua;
+        d.name = name;
+        if (haveOp || !ValidHook(name)) { c.Err(path, "condition '" + in + "': lua:<function_name> expects a Lua function name"); return std::nullopt; }
+    } else {
+        c.Err(path, "condition '" + in + "': unknown kind '" + kind + "' (skill, stat, item, quest, flag, lua)");
+        return std::nullopt;
+    }
+    return d;
+}
+
+std::optional<DlgCond> ParseCond(Ctx& c, const std::string& path, const json& j, int depth = 0) {
+    if (depth > 6) { c.Err(path, "conditions nested too deeply"); return std::nullopt; }
+    if (j.is_string()) return ParseCondString(c, path, j.get<std::string>());
+    DlgCond d;
+    if (j.is_array()) {
+        d.kind = DlgCond::All;
+        if (j.size() > 16) { c.Err(path, "more than 16 conditions"); return std::nullopt; }
+        for (size_t i = 0; i < j.size(); ++i)
+            if (auto k = ParseCond(c, path + "[" + std::to_string(i) + "]", j[i], depth + 1)) d.kids.push_back(std::move(*k));
+        return d;
+    }
+    if (j.is_object() && j.size() == 1) {
+        const std::string key = j.begin().key();
+        const json& v = j.begin().value();
+        if (key == "all" || key == "any") {
+            d.kind = key == "all" ? DlgCond::All : DlgCond::Any;
+            if (!v.is_array() || v.empty() || v.size() > 16) { c.Err(path + "." + key, "expected a non-empty array (at most 16 conditions)"); return std::nullopt; }
+            for (size_t i = 0; i < v.size(); ++i)
+                if (auto k = ParseCond(c, path + "." + key + "[" + std::to_string(i) + "]", v[i], depth + 1)) d.kids.push_back(std::move(*k));
+            return d;
+        }
+        if (key == "not") {
+            d.kind = DlgCond::Not;
+            if (auto k = ParseCond(c, path + ".not", v, depth + 1)) d.kids.push_back(std::move(*k));
+            else return std::nullopt;
+            return d;
+        }
+    }
+    c.Err(path, std::string("expected a condition string, an array (all of) or {\"any\": [...]} / {\"all\": [...]} / {\"not\": cond}, got ") + TypeName(j));
+    return std::nullopt;
+}
+
+void ParseDlgEffects(Ctx& c, const std::string& path, const json* arr, std::vector<DlgEffect>& out) {
+    if (!arr) return;
+    if (arr->size() > 16) { c.Err(path, "more than 16 effects"); return; }
+    static const char* const kActs[] = {"give", "take", "quest", "flag", "xp", "trade", "attack", "end", "door", "lua"};
+    for (size_t i = 0; i < arr->size(); ++i) {
+        const std::string ep = path + "[" + std::to_string(i) + "]";
+        const json& j = (*arr)[i];
+        if (!j.is_object()) { c.Err(ep, std::string("expected object, got ") + TypeName(j)); continue; }
+        std::vector<std::string> present;
+        for (const char* a : kActs) if (j.contains(a)) present.push_back(a);
+        if (present.size() != 1) { c.Err(ep, "an effect needs exactly one of: give, take, quest, flag, xp, trade, attack, end, door, lua"); continue; }
+        Obj e(c, j, ep);
+        DlgEffect fx;
+        const std::string& a = present[0];
+        if (a == "give" || a == "take") {
+            fx.kind = a == "give" ? DlgEffect::Give : DlgEffect::Take;
+            if (auto s = e.Str(a.c_str(), true, 128)) fx.s = *s;
+            fx.n = e.Int("count", 1, 9999).value_or(1);
+        } else if (a == "quest") {
+            fx.kind = DlgEffect::Quest;
+            if (auto s = e.Str("quest", true, 48)) fx.s = *s;
+            if (auto st = e.Str("state", true, 16)) {
+                fx.action = Low(*st);
+                if (fx.action != "add" && fx.action != "done" && fx.action != "fail" && fx.action != "reopen") c.Err(ep + ".state", "expected add, done, fail or reopen");
+            }
+            if (!fx.s.empty() && !ValidName(fx.s, 48)) c.Err(ep + ".quest", "invalid quest id");
+        } else if (a == "flag") {
+            fx.kind = DlgEffect::Flag;
+            if (auto s = e.Str("flag", true, 64)) { fx.s = *s; if (!ValidName(fx.s)) c.Err(ep + ".flag", "invalid flag name (letters, digits, _ . -)"); }
+            fx.n = 1;
+            if (const json* v = e.Get("set")) {
+                if (v->is_boolean()) fx.n = v->get<bool>() ? 1 : 0;
+                else if (v->is_number_integer() && v->get<long long>() >= -1000000 && v->get<long long>() <= 1000000) fx.n = v->get<int>();
+                else c.Err(ep + ".set", "expected true, false or an integer");
+            }
+        } else if (a == "xp") {
+            fx.kind = DlgEffect::Xp;
+            fx.n = e.Int("xp", 1, 100000, true).value_or(0);
+        } else if (a == "trade" || a == "attack" || a == "end") {
+            fx.kind = a == "trade" ? DlgEffect::Trade : a == "attack" ? DlgEffect::Attack : DlgEffect::End;
+            auto b = e.Bool(a.c_str());
+            if (b && !*b) c.Err(ep + "." + a, "expected true");
+        } else if (a == "door") {
+            fx.kind = DlgEffect::Door;
+            const json* cell = e.Get("door");
+            if (!cell || !cell->is_array() || cell->size() != 2 || !(*cell)[0].is_number_integer() || !(*cell)[1].is_number_integer() || (*cell)[0].get<int>() < 0 || (*cell)[1].get<int>() < 0)
+                c.Err(ep + ".door", "expected [x, y] (a cell of the speaker's map)");
+            else { fx.x = (*cell)[0].get<int>(); fx.y = (*cell)[1].get<int>(); }
+            if (auto act = e.Str("action", true, 16)) {
+                fx.action = Low(*act);
+                if (fx.action != "open" && fx.action != "close" && fx.action != "lock" && fx.action != "unlock") c.Err(ep + ".action", "expected open, close, lock or unlock");
+            }
+        } else {
+            fx.kind = DlgEffect::Lua;
+            if (auto s = e.Str("lua", true, 64)) { fx.s = *s; if (!ValidHook(fx.s)) c.Err(ep + ".lua", "'" + fx.s + "' is not a valid Lua function name"); }
+        }
+        e.Done();
+        out.push_back(std::move(fx));
+    }
+}
+
+// text / stf of a node or answer: exactly one of the two
+void ParseDlgText(Obj& o, const std::string& path, std::string& text, int& stf) {
+    auto t = o.Str("text", false, 1500);
+    auto s = o.Int("stf", 1, 1000000);
+    if (o.Has("text") && o.Has("stf")) o.c.Err(path, "give either \"text\" or \"stf\", not both");
+    else if (!o.Has("text") && !o.Has("stf")) o.c.Err(path, "missing \"text\" (our own text) or \"stf\" (id of an original English.stf string)");
+    if (t) text = *t;
+    if (s) stf = *s;
+    if (t && Trim(*t).empty()) o.c.Err(path + ".text", "must not be empty");
+}
+
+void CollectCondRefs(const DlgCond& d, std::vector<const DlgCond*>& out) {
+    out.push_back(&d);
+    for (const DlgCond& k : d.kids) CollectCondRefs(k, out);
 }
 
 struct Loader {
@@ -240,6 +452,12 @@ struct Loader {
             auto id = o.Str("id", true, 64);
             auto desc = o.Str("desc", false, 600);
             const json* base = o.ObjField("base");
+            if (const json* orig = o.ObjField("original")) {   // the original game's bonus formula, reference only (never applied)
+                Obj oo(c, *orig, path + ".original");
+                oo.Int("const", -1000, 1000);
+                for (int i = 0; i < kSpecialCount; ++i) oo.Int(kSpecialKeys[i], -100, 100);
+                oo.Done();
+            }
             SkillDef d;
             if (desc) d.desc = *desc;
             bool haveBase = false;
@@ -305,6 +523,7 @@ struct Loader {
             auto desc = o.Str("desc", false, 800);
             auto ranks = o.Int("ranks", 1, 10);
             auto hook = o.Str("hook", false, 64);
+            auto placeholder = o.Bool("placeholder");
             PerkDef p;
             p.effects = ParseEffects(o);
             if (const json* r = o.ObjField("requires")) {
@@ -334,7 +553,7 @@ struct Loader {
             if (hook && !hook->empty() && !ValidHook(*hook)) c.Err(path + ".hook", "'" + *hook + "' is not a valid Lua function name");
             if (!id || !name) return;
             if (Dup(c, "perks", *id, path) || c.bad) return;
-            p.id = *id; p.name = *name; p.desc = desc.value_or(""); p.ranks = ranks.value_or(1); p.hook = hook.value_or(""); p.file = c.file;
+            p.id = *id; p.name = *name; p.desc = desc.value_or(""); p.ranks = ranks.value_or(1); p.hook = hook.value_or(""); p.placeholder = placeholder.value_or(false); p.file = c.file;
             db.fingerprint["perks:" + Low(p.id)] = j.dump();
             db.perks.push_back(std::move(p));
         });
@@ -400,6 +619,137 @@ struct Loader {
         });
     }
 
+    // ---- dialogs (needs the quests: references are checked against data/quests; item / speaker / stf references in CheckDialogs)
+    void LoadDialogs() {
+        EachFile("dialogs", {}, [&](Ctx& c, const json& j, const std::string& path) {
+            Obj o(c, j, path);
+            DialogDef d;
+            auto id = o.Str("id", true, 64);
+            if (auto v = o.Str("speaker", false, 128)) d.speaker = *v;
+            std::optional<std::string> startStr;
+            const json* startArr = nullptr;
+            if (const json* s = o.Get("start")) {
+                if (s->is_string()) startStr = s->get<std::string>();
+                else if (s->is_array()) startArr = s;
+                else c.Err(path + ".start", std::string("expected a node id or an array of {if, goto}, got ") + TypeName(*s));
+            }
+            const json* nodes = o.ArrField("nodes");
+            if (nodes && nodes->empty()) c.Err(path + ".nodes", "a dialog needs at least one node");
+            else if (!nodes && !o.Has("nodes")) c.Err(path + ".nodes", "missing required field");
+            else if (nodes && nodes->size() > 200) c.Err(path + ".nodes", "more than 200 nodes");
+            std::set<std::string> nodeIds;
+            if (nodes && nodes->size() <= 200)
+                for (size_t i = 0; i < nodes->size(); ++i) {
+                    const std::string np = path + ".nodes[" + std::to_string(i) + "]";
+                    if (!(*nodes)[i].is_object()) { c.Err(np, std::string("expected object, got ") + TypeName((*nodes)[i])); continue; }
+                    Obj n(c, (*nodes)[i], np);
+                    DlgNode node;
+                    auto nid = n.Str("id", true, 48);
+                    ParseDlgText(n, np, node.text, node.stf);
+                    ParseDlgEffects(c, np + ".on_enter", n.ArrField("on_enter"), node.onEnter);
+                    if (const json* as = n.ArrField("answers")) {
+                        if (as->size() > 24) c.Err(np + ".answers", "more than 24 answers");
+                        std::set<std::string> answerIds;
+                        for (size_t k = 0; k < as->size() && k < 24; ++k) {
+                            const std::string ap = np + ".answers[" + std::to_string(k) + "]";
+                            if (!(*as)[k].is_object()) { c.Err(ap, std::string("expected object, got ") + TypeName((*as)[k])); continue; }
+                            Obj a(c, (*as)[k], ap);
+                            DlgAnswer ans;
+                            if (auto aid = a.Str("id", false, 48)) {
+                                ans.id = *aid;
+                                if (!ValidName(ans.id, 48)) c.Err(ap + ".id", "invalid id (letters, digits, _ . -)");
+                                else if (!answerIds.insert(Low(ans.id)).second) c.Err(ap + ".id", "duplicate answer id '" + ans.id + "' in this node");
+                            }
+                            ParseDlgText(a, ap, ans.text, ans.stf);
+                            if (const json* cj = a.Get("if")) {
+                                if (auto cd = ParseCond(c, ap + ".if", *cj)) { ans.hasCond = true; ans.cond = std::move(*cd); }
+                            }
+                            ParseDlgEffects(c, ap + ".do", a.ArrField("do"), ans.effects);
+                            if (auto g = a.Str("goto", false, 48)) ans.gotoNode = *g;
+                            a.Done();
+                            node.answers.push_back(std::move(ans));
+                        }
+                    }
+                    n.Done();
+                    if (!nid) continue;
+                    node.id = *nid;
+                    if (!ValidName(node.id, 48)) { c.Err(np + ".id", "invalid node id '" + node.id + "' (letters, digits, _ . -)"); continue; }
+                    if (Low(node.id) == "end") { c.Err(np + ".id", "'end' is reserved (goto \"end\" closes the dialog)"); continue; }
+                    if (!nodeIds.insert(Low(node.id)).second) { c.Err(np + ".id", "duplicate node id '" + node.id + "'"); continue; }
+                    d.nodes.push_back(std::move(node));
+                }
+            if (startArr) {
+                if (startArr->empty() || startArr->size() > 16) c.Err(path + ".start", "expected 1..16 routes");
+                for (size_t i = 0; i < startArr->size() && i < 16; ++i) {
+                    const std::string sp = path + ".start[" + std::to_string(i) + "]";
+                    if (!(*startArr)[i].is_object()) { c.Err(sp, std::string("expected object, got ") + TypeName((*startArr)[i])); continue; }
+                    Obj r(c, (*startArr)[i], sp);
+                    DlgRoute rt;
+                    if (const json* cj = r.Get("if")) {
+                        if (auto cd = ParseCond(c, sp + ".if", *cj)) { rt.hasCond = true; rt.cond = std::move(*cd); }
+                    }
+                    if (auto g = r.Str("goto", true, 48)) rt.gotoNode = *g;
+                    r.Done();
+                    d.start.push_back(std::move(rt));
+                }
+            } else if (startStr) {
+                DlgRoute rt;
+                rt.gotoNode = *startStr;
+                d.start.push_back(rt);
+            } else if (!d.nodes.empty()) {   // default: the node called "start", else the first one
+                DlgRoute rt;
+                rt.gotoNode = d.nodes.front().id;
+                for (const DlgNode& n : d.nodes) if (Low(n.id) == "start") rt.gotoNode = n.id;
+                d.start.push_back(rt);
+            }
+            o.Done();
+            if (id && !ValidId(*id)) c.Err(path + ".id", "invalid id '" + *id + "' (letters, digits, _ . - only, max 64)");
+            if (!id) return;
+            // references inside the dialog
+            auto nodeList = [&] { std::string s; for (const DlgNode& n : d.nodes) s += (s.empty() ? "" : ", ") + n.id; return s; };
+            auto checkGoto = [&](const std::string& g, const std::string& where) {
+                if (g.empty() || Low(g) == "end") return;
+                if (!nodeIds.count(Low(g))) c.Err(where, "unknown node '" + g + "' (nodes of this dialog: " + nodeList() + ")");
+            };
+            for (size_t i = 0; i < d.start.size(); ++i) {
+                const std::string sp = path + ".start[" + std::to_string(i) + "].goto";
+                if (Low(d.start[i].gotoNode) == "end") c.Err(sp, "a dialog cannot start with 'end'");
+                else checkGoto(d.start[i].gotoNode, sp);
+            }
+            std::set<std::string> reach;
+            for (const DlgRoute& r : d.start) reach.insert(Low(r.gotoNode));
+            std::vector<const DlgCond*> conds;
+            auto scanFx = [&](const std::vector<DlgEffect>& fx, const std::string& where) {
+                for (const DlgEffect& e : fx)
+                    if (e.kind == DlgEffect::Quest && !db.FindQuest(e.s)) c.Err(where, "unknown quest '" + e.s + "' (define it in data/quests)");
+            };
+            for (size_t i = 0; i < d.nodes.size(); ++i) {
+                const std::string np = path + ".nodes[" + std::to_string(i) + "]";
+                scanFx(d.nodes[i].onEnter, np + ".on_enter");
+                for (size_t k = 0; k < d.nodes[i].answers.size(); ++k) {
+                    const DlgAnswer& a = d.nodes[i].answers[k];
+                    const std::string ap = np + ".answers[" + std::to_string(k) + "]";
+                    checkGoto(a.gotoNode, ap + ".goto");
+                    reach.insert(Low(a.gotoNode));
+                    scanFx(a.effects, ap + ".do");
+                    if (a.hasCond) CollectCondRefs(a.cond, conds);
+                    for (const DlgCond* cd : conds)
+                        if (cd->kind == DlgCond::Quest && !db.FindQuest(cd->name)) c.Err(ap + ".if", "unknown quest '" + cd->name + "' (define it in data/quests)");
+                    conds.clear();
+                }
+            }
+            for (const DlgRoute& r : d.start) if (r.hasCond) CollectCondRefs(r.cond, conds);
+            for (const DlgCond* cd : conds)
+                if (cd->kind == DlgCond::Quest && !db.FindQuest(cd->name)) c.Err(path + ".start", "unknown quest '" + cd->name + "' (define it in data/quests)");
+            if (Dup(c, "dialogs", *id, path) || c.bad) return;
+            for (const DlgNode& n : d.nodes) if (!reach.count(Low(n.id))) rep.Warn(c.file, path, "dialog '" + *id + "': node '" + n.id + "' is never reached");
+            d.id = *id;
+            d.file = c.file;
+            db.fingerprint["dialogs:" + Low(d.id)] = j.dump();
+            db.dialogs.push_back(std::move(d));
+        });
+    }
+
     // ---- items / npcs (structure only; applied to the prototypes in BuildProtoSet)
     void LoadItems() {
         EachFile("items", {}, [&](Ctx& c, const json& j, const std::string& path) {
@@ -412,11 +762,35 @@ struct Loader {
             r.desc = o.Str("desc", false, 1200);
             r.weight = o.Int("weight", 0, 10000);
             r.headArmor = o.Bool("head_armor");
+            r.model = o.Str("model", false, 128);
+            r.heldModel = o.Str("held_model", false, 128);
             if (const json* w = o.ObjField("weapon")) {
                 Obj wo(c, *w, path + ".weapon");
                 r.range = wo.Int("range", 1, 200);
                 r.dmgMin = wo.Num("dmg_min", 0, 10000);
                 r.dmgMax = wo.Num("dmg_max", 0, 10000);
+                r.caliber = wo.Int("caliber", -1, 200);
+                if (const json* ms = wo.ArrField("modes")) {
+                    std::vector<AttackModeDef> modes;
+                    if (ms->size() > 8) c.Err(path + ".weapon.modes", "more than 8 attack modes");
+                    for (size_t i = 0; i < ms->size() && i < 8; ++i) {
+                        const std::string mp = path + ".weapon.modes[" + std::to_string(i) + "]";
+                        if (!(*ms)[i].is_object()) { c.Err(mp, std::string("expected object, got ") + TypeName((*ms)[i])); continue; }
+                        Obj mo(c, (*ms)[i], mp);
+                        AttackModeDef a;
+                        auto type = mo.Int("type", 0, 99, true);
+                        auto cost = mo.Int("cost", 0, 10000, true);
+                        a.dmgMin = mo.Int("dmg_min", 0, 10000).value_or(0);
+                        a.dmgMax = mo.Int("dmg_max", 0, 10000).value_or(0);
+                        a.apRef = mo.Int("ap", 0, 100).value_or(-1);
+                        a.shots = mo.Int("shots", 0, 50).value_or(0);
+                        a.damageType = mo.Int("damage_type", 0, 5).value_or(0);
+                        mo.Done();
+                        if (a.dmgMin > a.dmgMax) c.Err(mp, "dmg_min is larger than dmg_max");
+                        if (type && cost) { a.type = *type; a.ap = *cost; modes.push_back(a); }
+                    }
+                    r.modes = std::move(modes);
+                }
                 wo.Done();
                 if (r.dmgMin && r.dmgMax && *r.dmgMin > *r.dmgMax) c.Err(path + ".weapon", "dmg_min is larger than dmg_max");
             }
@@ -437,6 +811,9 @@ struct Loader {
                 Obj ao(c, *w, path + ".ammo");
                 r.ammoDmgMin = ao.Int("dmg_min", 0, 10000);
                 r.ammoDmgMax = ao.Int("dmg_max", 0, 10000);
+                r.ammoCaliber = ao.Int("caliber", 0, 200);
+                r.ammoArmorAdj = ao.Int("armor_adj", -1000, 1000);
+                r.ammoAccuracyAdj = ao.Int("accuracy_adj", -1000, 1000);
                 ao.Done();
                 if (r.ammoDmgMin && r.ammoDmgMax && *r.ammoDmgMin > *r.ammoDmgMax) c.Err(path + ".ammo", "dmg_min is larger than dmg_max");
             }
@@ -459,6 +836,7 @@ struct Loader {
             r.name = o.Str("name", false, 120);
             r.script = o.Str("script", false, 128);
             r.dialog = o.Str("dialog", false, 128);
+            r.model = o.Str("model", false, 128);
             r.team = o.Int("team", 0, 255);
             r.level = o.Int("level", 1, 99);
             r.maxHp = o.Int("max_hp", 1, 9999);
@@ -551,7 +929,8 @@ void BuildProtoSet(const DataStore& ds, ContentDb& db, ContentReport& rep) {
         Ctx c{rep, r.file};
         Proto* p = target(c, r.path, r.id, r.base, false, "item");
         if (!p) continue;
-        const bool wantsWeapon = r.range || r.dmgMin || r.dmgMax, wantsArmor = r.armor.has_value() || r.headArmor.has_value(), wantsAmmo = r.ammoDmgMin || r.ammoDmgMax;
+        const bool wantsWeapon = r.range || r.dmgMin || r.dmgMax || r.caliber || r.modes, wantsArmor = r.armor.has_value() || r.headArmor.has_value(),
+                   wantsAmmo = r.ammoDmgMin || r.ammoDmgMax || r.ammoCaliber || r.ammoArmorAdj || r.ammoAccuracyAdj;
         if (wantsWeapon && p->cls != PClass::Weapon) c.Err(r.path + ".weapon", "'" + r.id + "' is not a weapon");
         if (wantsArmor && p->cls != PClass::Armor) c.Err(r.path + (r.armor ? ".armor" : ".head_armor"), "'" + r.id + "' is not armor");
         if (wantsAmmo && p->cls != PClass::Ammo) c.Err(r.path + ".ammo", "'" + r.id + "' is not ammunition");
@@ -569,6 +948,13 @@ void BuildProtoSet(const DataStore& ds, ContentDb& db, ContentReport& rep) {
         if (r.armor) for (int i = 0; i < 7; ++i) p->armor[i] = (*r.armor)[i];
         if (r.ammoDmgMin) p->ammoDmgMin = *r.ammoDmgMin;
         if (r.ammoDmgMax) p->ammoDmgMax = *r.ammoDmgMax;
+        if (r.model) p->model = *r.model;
+        if (r.heldModel) p->heldModel = *r.heldModel;
+        if (r.caliber) p->caliber = *r.caliber;
+        if (r.modes) p->modes = *r.modes;
+        if (r.ammoCaliber) p->ammoCaliber = *r.ammoCaliber;
+        if (r.ammoArmorAdj) p->ammoArmorAdj = *r.ammoArmorAdj;
+        if (r.ammoAccuracyAdj) p->ammoAccuracyAdj = *r.ammoAccuracyAdj;
     }
     // pass 2: npcs (their inventory / equipment may use items added in pass 1)
     const std::vector<std::string>& mapNames = ds.MapNames();
@@ -593,6 +979,7 @@ void BuildProtoSet(const DataStore& ds, ContentDb& db, ContentReport& rep) {
         if (r.name) p->name = *r.name;
         if (r.script) p->script = *r.script;
         if (r.dialog) p->dialog = *r.dialog;
+        if (r.model) p->model = *r.model;
         if (r.team) p->team = *r.team;
         if (r.level) p->level = *r.level;
         if (r.maxHp) p->maxHpFixed = *r.maxHp;
@@ -617,6 +1004,47 @@ void CheckQuestItems(ContentDb& db, ContentReport& rep, bool haveProtos) {
         else db.fingerprint.erase("quests:" + Low(q.id));
     }
     db.quests = std::move(keep);
+}
+
+// dialogs: items, speaker prototype and original stf strings must exist (only checkable with gamedata); a dialog with a broken reference is dropped
+void CheckDialogs(ContentDb& db, const DataStore* base, ContentReport& rep, bool haveProtos) {
+    if (!haveProtos) return;
+    std::vector<DialogDef> keep;
+    for (DialogDef& d : db.dialogs) {
+        Ctx c{rep, d.file};
+        const std::string dp = "dialog '" + d.id + "'";
+        auto item = [&](const std::string& key, const std::string& where) {
+            auto it = db.protoSet.byKey.find(Low(key));
+            if (it == db.protoSet.byKey.end()) c.Err(where, "unknown item '" + key + "'");
+            else if (db.protoSet.protos[it->second].cls == PClass::Critter) c.Err(where, "'" + key + "' is a critter, not an item");
+        };
+        auto stf = [&](int id, const std::string& where) { if (id > 0 && base && base->String(id).empty()) c.Err(where, "unknown English.stf string id " + std::to_string(id)); };
+        std::function<void(const DlgCond&, const std::string&)> cond = [&](const DlgCond& cd, const std::string& where) {
+            if (cd.kind == DlgCond::Item) item(cd.name, where);
+            for (const DlgCond& k : cd.kids) cond(k, where);
+        };
+        auto fx = [&](const std::vector<DlgEffect>& v, const std::string& where) { for (const DlgEffect& e : v) if (e.kind == DlgEffect::Give || e.kind == DlgEffect::Take) item(e.s, where); };
+        if (!d.speaker.empty()) {
+            auto it = db.protoSet.byKey.find(Low(d.speaker));
+            if (it == db.protoSet.byKey.end()) c.Err(dp + ".speaker", "unknown prototype '" + d.speaker + "'");
+            else if (db.protoSet.protos[it->second].cls != PClass::Critter) c.Err(dp + ".speaker", "'" + d.speaker + "' is not a critter");
+        }
+        for (const DlgRoute& r : d.start) if (r.hasCond) cond(r.cond, dp + ".start");
+        for (const DlgNode& n : d.nodes) {
+            const std::string np = dp + ".nodes['" + n.id + "']";
+            stf(n.stf, np + ".stf");
+            fx(n.onEnter, np + ".on_enter");
+            for (size_t k = 0; k < n.answers.size(); ++k) {
+                const std::string ap = np + ".answers[" + std::to_string(k) + "]";
+                stf(n.answers[k].stf, ap + ".stf");
+                fx(n.answers[k].effects, ap + ".do");
+                if (n.answers[k].hasCond) cond(n.answers[k].cond, ap + ".if");
+            }
+        }
+        if (!c.bad) keep.push_back(d);
+        else db.fingerprint.erase("dialogs:" + Low(d.id));
+    }
+    db.dialogs = std::move(keep);
 }
 
 std::string JoinIds(const std::vector<std::string>& v, size_t maxN = 6) {
@@ -701,6 +1129,16 @@ const QuestDef* ContentDb::FindQuest(const std::string& id) const {
     for (const QuestDef& q : quests) if (Low(q.id) == l) return &q;
     return nullptr;
 }
+const DialogDef* ContentDb::FindDialog(const std::string& id) const {
+    const std::string l = Low(id);
+    for (const DialogDef& d : dialogs) if (Low(d.id) == l) return &d;
+    return nullptr;
+}
+const DlgNode* DialogDef::FindNode(const std::string& nodeId) const {
+    const std::string l = Low(nodeId);
+    for (const DlgNode& n : nodes) if (Low(n.id) == l) return &n;
+    return nullptr;
+}
 const NpcRec* ContentDb::FindNpc(const std::string& protoKey) const {
     const std::string l = Low(protoKey);
     for (const NpcRec& n : npcs) if (Low(n.id) == l) return &n;
@@ -709,12 +1147,12 @@ const NpcRec* ContentDb::FindNpc(const std::string& protoKey) const {
 
 std::string ContentDb::Summary() const {
     return std::to_string(traits.size()) + " traits, " + std::to_string(perks.size()) + " perks, " + std::to_string(items.size()) + " item records, " +
-           std::to_string(npcs.size()) + " npc records, " + std::to_string(quests.size()) + " quests, " + std::to_string(files.size()) + " files";
+           std::to_string(npcs.size()) + " npc records, " + std::to_string(quests.size()) + " quests, " + std::to_string(dialogs.size()) + " dialogs, " + std::to_string(files.size()) + " files";
 }
 
 std::vector<std::string> ContentDb::Diff(const ContentDb& a, const ContentDb& b) {
     std::vector<std::string> lines;
-    static const char* const kinds[] = {"skills", "traits", "perks", "items", "npcs", "quests"};
+    static const char* const kinds[] = {"skills", "traits", "perks", "items", "npcs", "quests", "dialogs"};
     for (const char* k : kinds) {
         const std::string pre = std::string(k) + ":";
         std::vector<std::string> added, removed, changed;
@@ -765,7 +1203,7 @@ bool ContentDb::Build(const fs::path& dir, const DataStore* base, bool lenient, 
         }
         for (auto& e : fs::directory_iterator(dir, ec)) {
             const std::string n = e.path().filename().string();
-            if (e.is_directory() && n != "skills" && n != "traits" && n != "perks" && n != "items" && n != "npcs" && n != "quests")
+            if (e.is_directory() && n != "skills" && n != "traits" && n != "perks" && n != "items" && n != "npcs" && n != "quests" && n != "dialogs" && n != "locale")
                 rep.Warn(L.root + "/" + n, "$", "unknown folder ignored");
         }
     }
@@ -775,11 +1213,13 @@ bool ContentDb::Build(const fs::path& dir, const DataStore* base, bool lenient, 
     L.LoadItems();
     L.LoadNpcs();
     L.LoadQuests();
+    L.LoadDialogs();
     const bool haveBase = base && base->Loaded();
     if (haveBase) BuildProtoSet(*base, out, rep);
     else if (!out.items.empty() || !out.npcs.empty() || std::any_of(out.quests.begin(), out.quests.end(), [](const QuestDef& q) { return !q.items.empty(); }))
         rep.Warn(L.root, "$", "no gamedata loaded: item / npc records and quest reward items are not validated or applied");
     CheckQuestItems(out, rep, haveBase);
+    CheckDialogs(out, base, rep, haveBase);
     std::sort(out.files.begin(), out.files.end());
     out.loaded = true;
     if (!rep.errors.empty() && lenient) {

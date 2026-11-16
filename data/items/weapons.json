@@ -1,0 +1,453 @@
+{
+  "schema": 1,
+  "kind": "items",
+  "generator": "f3_server --export-data",
+  "note": "Generated from the original prototypes by f3_server --export-data. Edit the numbers freely; remove the \"generator\" key to keep the file from being overwritten. Reference-only fields are explained in docs/data-format.md.",
+  "records": [
+    {
+      "id": "Weapons15mm_Artemis_Railgun.WEA",
+      "name": "15mm ARTEMIS Rail Gun",
+      "model": "GD_WP_15mmArtemisRailGun",
+      "held_model": "WP_15mmArtemisRailGun",
+      "weapon": {
+        "caliber": 1,
+        "range": 15,
+        "dmg_min": 0,
+        "dmg_max": 3,
+        "modes": [
+          { "type": 2, "cost": 0, "dmg_min": 0, "dmg_max": 0, "ap": 0, "shots": 1, "damage_type": 0 }
+        ]
+      }
+    },
+    {
+      "id": "Weapons223_Autoloader.WEA",
+      "name": ".223 Autoloader",
+      "model": "GD_WP_223Autoloader",
+      "held_model": "WP_223Autoloader",
+      "weapon": {
+        "caliber": 2,
+        "range": 15,
+        "dmg_min": 0,
+        "dmg_max": 8,
+        "modes": [
+          { "type": 2, "cost": 10, "dmg_min": 0, "dmg_max": 0, "ap": 15, "shots": 1, "damage_type": 0 }
+        ]
+      }
+    },
+    {
+      "id": "Weapons223_Autoloader_wSilencer.WEA",
+      "name": ".223 Autoloader",
+      "model": "GD_WP_223Autoloader",
+      "held_model": "WP_223Autoloader_GunSilencer"
+    },
+    {
+      "id": "Weapons223_Minigun.WEA",
+      "name": ".223 Minigun",
+      "model": "GD_WP_223Minigun",
+      "held_model": "minigun",
+      "weapon": {
+        "caliber": 2,
+        "range": 20,
+        "dmg_min": 54,
+        "dmg_max": 54,
+        "modes": [
+          { "type": 1, "cost": 50, "dmg_min": 0, "dmg_max": 0, "ap": 18, "shots": 12, "damage_type": 0 }
+        ]
+      }
+    },
+    {
+      "id": "Weapons22_Autoloader.WEA",
+      "name": ".22 Autoloader",
+      "model": "GD_WP_22Autoloader",
+      "held_model": "WP_22Autoloader",
+      "weapon": {
+        "caliber": 3,
+        "range": 15,
+        "dmg_min": 0,
+        "dmg_max": 12,
+        "modes": [
+          { "type": 2, "cost": 10, "dmg_min": 0, "dmg_max": 0, "ap": 15, "shots": 1, "damage_type": 0 }
+        ]
+      }
+    },
+    {
+      "id": "Weapons22_Autoloader_wSilencer.WEA",
+      "name": ".22 Autoloader",
+      "model": "GD_WP_22Autoloader",
+      "held_model": "WP_22Autoloader_GunSilencer"
+    },
+    {
+      "id": "Weapons44_Revolver.WEA",
+      "name": ".44 Revolver",
+      "model": "GD_WP_44Revolver",
+      "held_model": "WP_44Revolver",
+      "weapon": {
+        "caliber": 8,
+        "range": 20,
+        "dmg_min": 6,
+        "dmg_max": 6,
+        "modes": [
+          { "type": 2, "cost": 40, "dmg_min": 0, "dmg_max": 0, "ap": 15, "shots": 1, "damage_type": 0 },
+          { "type": 9, "cost": 4, "dmg_min": 4, "dmg_max": 10, "ap": 9, "damage_type": 4 }
+        ]
+      }
+    },
+    {
+      "id": "Weapons45_Autoloader.WEA",
+      "name": ".45 Autoloader",
+      "model": "GD_WP_45Autoloader",
+      "held_model": "WP_45Autoloader",
+      "weapon": {
+        "caliber": 9,
+        "range": 15,
+        "dmg_min": 0,
+        "dmg_max": 7,
+        "modes": [
+          { "type": 2, "cost": 10, "dmg_min": 0, "dmg_max": 0, "ap": 15, "shots": 1, "damage_type": 0 }
+        ]
+      }
+    },
+    {
+      "id": "Weapons45_Autoloader_wClip.WEA",
+      "name": ".45 Autoloader",
+      "model": "GD_WP_45Autoloader",
+      "held_model": "WP_45Autoloader_GunExtClip"
+    },
+    {
+      "id": "Weapons45_Autoloader_wClip_Silencer.WEA",
+      "name": ".45 Autoloader",
+      "model": "GD_WP_45Autoloader",
+      "held_model": "WP_45Autoloader_GunExtClip_GunSilencer"
+    },
+    {
+      "id": "Weapons45_Autoloader_wSilencer.WEA",
+      "name": ".45 Autoloader",
+      "model": "GD_WP_45Autoloader",
+      "held_model": "WP_45Autoloader_GunSilencer"
+    },
+    {
+      "id": "Weapons45_Revolver.WEA",
+      "name": ".45 Revolver",
+      "model": "GD_WP_45Revolver",
+      "held_model": "WP_45Revolver",
+      "weapon": {
+        "caliber": 9,
+        "range": 15,
+        "dmg_min": 6,
+        "dmg_max": 6,
+        "modes": [
+          { "type": 2, "cost": 0, "dmg_min": 0, "dmg_max": 0, "ap": 15, "shots": 1, "damage_type": 0 }
+        ]
+      }
+    },
+    {
+      "id": "Weapons50_Revolver.WEA",
+      "name": ".50 Revolver",
+      "model": "GD_WP_50Revolver",
+      "held_model": "WP_50Revolver",
+      "weapon": {
+        "caliber": 10,
+        "range": 15,
+        "dmg_min": 5,
+        "dmg_max": 5,
+        "modes": [
+          { "type": 2, "cost": 10, "dmg_min": 0, "dmg_max": 0, "ap": 15, "shots": 1, "damage_type": 0 }
+        ]
+      }
+    },
+    {
+      "id": "Weapons9mm_Autoloader.WEA",
+      "name": "9mm Autoloader",
+      "model": "GD_WP_9mmAutoloader",
+      "held_model": "WP_9mmAutoloader",
+      "weapon": {
+        "caliber": 12,
+        "range": 15,
+        "dmg_min": 9,
+        "dmg_max": 9,
+        "modes": [
+          { "type": 2, "cost": 20, "dmg_min": 0, "dmg_max": 0, "ap": 15, "shots": 1, "damage_type": 0 },
+          { "type": 1, "cost": 20, "dmg_min": 0, "dmg_max": 0, "ap": 20, "shots": 9, "damage_type": 0 }
+        ]
+      }
+    },
+    {
+      "id": "Weapons9mm_Autoloader_wClip.WEA",
+      "name": "9mm Autoloader",
+      "model": "GD_WP_9mmAutoloader",
+      "held_model": "WP_9mmAutoloader_GunExtClip"
+    },
+    {
+      "id": "Weapons9mm_Autoloader_wClip_Silencer.WEA",
+      "name": "9mm Autoloader",
+      "model": "GD_WP_9mmAutoloader",
+      "held_model": "WP_9mmAutoloader_GunExtClip_GunSilencer"
+    },
+    {
+      "id": "Weapons9mm_Autoloader_wSilencer.WEA",
+      "name": "9mm Autoloader",
+      "model": "GD_WP_9mmAutoloader",
+      "held_model": "WP_9mmAutoloader_GunSilencer"
+    },
+    {
+      "id": "Weapons9mmMachinePistol.WEA",
+      "name": "9mm Machine Pistol",
+      "model": "GD_WP_9mmMachinePistol",
+      "held_model": "WP_9mmMachinePistol",
+      "weapon": {
+        "caliber": 12,
+        "range": 15,
+        "dmg_min": 24,
+        "dmg_max": 24,
+        "modes": [
+          { "type": 2, "cost": 50, "dmg_min": 0, "dmg_max": 0, "ap": 15, "shots": 1, "damage_type": 0 },
+          { "type": 1, "cost": 50, "dmg_min": 0, "dmg_max": 0, "ap": 18, "shots": 6, "damage_type": 0 }
+        ]
+      }
+    },
+    {
+      "id": "Weapons9mmMachinePistol_wClip.WEA",
+      "name": "9mm Machine Pistol",
+      "model": "GD_WP_9mmMachinePistol",
+      "held_model": "WP_9mmMachinePistol_GunExtClip"
+    },
+    {
+      "id": "Weapons9mmMachinePistol_wClip_Silencer.WEA",
+      "name": "9mm Machine Pistol",
+      "model": "GD_WP_9mmMachinePistol",
+      "held_model": "WP_9mmMachinePistol_GunExtClip_GunSilencer"
+    },
+    {
+      "id": "Weapons9mmMachinePistol_wClip_Suppressor.WEA",
+      "name": "9mm Machine Pistol",
+      "model": "GD_WP_9mmMachinePistol",
+      "held_model": "WP_9mmMachinePistol_GunExtClip_GunSuppressor"
+    },
+    {
+      "id": "Weapons9mmMachinePistol_wSilencer.WEA",
+      "name": "9mm Machine Pistol",
+      "model": "GD_WP_9mmMachinePistol",
+      "held_model": "WP_9mmMachinePistol_GunSilencer"
+    },
+    {
+      "id": "Weapons9mmMachinePistol_wSuppressor.WEA",
+      "name": "9mm Machine Pistol",
+      "model": "GD_WP_9mmMachinePistol",
+      "held_model": "WP_9mmMachinePistol_GunSuppressor"
+    },
+    {
+      "id": "WeaponsAPOLLOLaserPistol.WEA",
+      "name": "APOLLO Laser Pistol",
+      "model": "GD_WP_APOLLOLaserPistol",
+      "held_model": "WP_APOLLOLaserPistol",
+      "weapon": {
+        "caliber": 19,
+        "range": 10,
+        "dmg_min": 0,
+        "dmg_max": 30,
+        "modes": [
+          { "type": 2, "cost": 30, "dmg_min": 0, "dmg_max": 0, "ap": 10, "shots": 1, "damage_type": 5 }
+        ]
+      }
+    },
+    {
+      "id": "WeaponsArcWelder.WEA",
+      "name": "Arc Welder",
+      "model": "GD_WP_ArcWelder",
+      "held_model": "WP_ArcWelder"
+    },
+    {
+      "id": "WeaponsBaseballBat.WEA",
+      "name": "Baseball Bat",
+      "model": "GD_WP_Baseballbat",
+      "held_model": "WP_Baseballbat"
+    },
+    {
+      "id": "WeaponsCattleProd.WEA",
+      "name": "Cattle Prod",
+      "model": "GD_WP_CattleProd",
+      "held_model": "WP_CattleProd",
+      "weapon": {
+        "caliber": 19,
+        "range": 15,
+        "dmg_min": 20,
+        "dmg_max": 20,
+        "modes": [
+          { "type": 8, "cost": 6, "dmg_min": 0, "dmg_max": 0, "ap": 12, "shots": 1, "damage_type": 2 }
+        ]
+      }
+    },
+    {
+      "id": "WeaponsCombatKnife.WEA",
+      "name": "Combat Knife",
+      "model": "GD_WP_CombatKnife",
+      "held_model": "WP_CombatKnife",
+      "weapon": {
+        "modes": [
+          { "type": 8, "cost": 5, "dmg_min": 4, "dmg_max": 8, "ap": 9, "damage_type": 4 },
+          { "type": 6, "cost": 5, "dmg_min": 6, "dmg_max": 10, "ap": 12, "damage_type": 4 }
+        ]
+      }
+    },
+    {
+      "id": "WeaponsCrowbar.WEA",
+      "name": "Crowbar",
+      "model": "GD_WP_Crowbar",
+      "held_model": "WP_Crowbar"
+    },
+    {
+      "id": "WeaponsDynamite.WEA",
+      "name": "Dynamite",
+      "model": "GD_WP_Dynamite",
+      "held_model": "WP_Dynamite"
+    },
+    {
+      "id": "WeaponsFlamethrower.WEA",
+      "name": "Flamethrower",
+      "model": "GD_WP_Flamethrower",
+      "held_model": "WP_Flamethrower",
+      "weapon": {
+        "caliber": 15,
+        "range": 20,
+        "dmg_min": 30,
+        "dmg_max": 30,
+        "modes": [
+          { "type": 2, "cost": 30, "dmg_min": 0, "dmg_max": 0, "ap": 15, "shots": 1, "damage_type": 5 }
+        ]
+      }
+    },
+    {
+      "id": "WeaponsFlamethrower_wTank.WEA",
+      "name": "Flamethrower",
+      "model": "GD_WP_Flamethrower",
+      "held_model": "WP_Flamethrower_FlamerExtTank"
+    },
+    {
+      "id": "WeaponsFlare.WEA",
+      "name": "Flare",
+      "model": "GD_WP_Flare",
+      "held_model": "WP_Flare"
+    },
+    {
+      "id": "WeaponsGrenade_Bio.WEA",
+      "name": "Bio Grenade",
+      "model": "GD_WP_GrenadeBio",
+      "held_model": "WP_GrenadeBio"
+    },
+    {
+      "id": "WeaponsGrenade_EMP.WEA",
+      "name": "EMP Grenade",
+      "model": "GD_WP_GrenadeEMP",
+      "held_model": "WP_GrenadeEMP"
+    },
+    {
+      "id": "WeaponsGrenade_Frag.WEA",
+      "name": "Frag Grenade",
+      "model": "GD_WP_GrenadeFrag",
+      "held_model": "WP_GrenadeFrag"
+    },
+    {
+      "id": "WeaponsGrenade_Plasma.WEA",
+      "name": "Plasma Grenade",
+      "model": "GD_WP_GrenadePlasma",
+      "held_model": "WP_GrenadePlasma"
+    },
+    {
+      "id": "WeaponsHandFlamer.WEA",
+      "name": "Hand Flamer",
+      "model": "GD_WP_HandFlamer",
+      "held_model": "WP_HandFlamer"
+    },
+    {
+      "id": "WeaponsHatchet.WEA",
+      "name": "Hatchet",
+      "model": "GD_WP_Hatchet",
+      "held_model": "WP_Hatchet"
+    },
+    {
+      "id": "WeaponsHeavyWrench.WEA",
+      "name": "Heavy Wrench",
+      "model": "GD_WP_HeavyWrench",
+      "held_model": "WP_HeavyWrench"
+    },
+    {
+      "id": "WeaponsKitchenKnife.WEA",
+      "name": "Kitchen Knife",
+      "model": "GD_WP_KitchenKnife",
+      "held_model": "WP_KitchenKnife"
+    },
+    {
+      "id": "WeaponsLaserArraygun.WEA",
+      "name": "Laser Arraygun",
+      "model": "GD_WP_LaserArraygun",
+      "held_model": "WP_LaserArraygun"
+    },
+    {
+      "id": "WeaponsLaserPistol.WEA",
+      "name": "Laser Pistol",
+      "model": "GD_WP_LaserPistol",
+      "held_model": "WP_LaserPistol",
+      "weapon": {
+        "caliber": 19,
+        "range": 20,
+        "dmg_min": 20,
+        "dmg_max": 20,
+        "modes": [
+          { "type": 2, "cost": 50, "dmg_min": 0, "dmg_max": 0, "ap": 12, "shots": 1, "damage_type": 5 }
+        ]
+      }
+    },
+    {
+      "id": "WeaponsLeadPipe.WEA",
+      "name": "Lead Pipe",
+      "model": "GD_WP_LeadPipe",
+      "held_model": "WP_LeadPipe"
+    },
+    {
+      "id": "WeaponsMachete.WEA",
+      "model": "GD_WP_Machete",
+      "held_model": "WP_Machete"
+    },
+    {
+      "id": "WeaponsNightStick.WEA",
+      "name": "Night Stick",
+      "model": "GD_WP_NightStick",
+      "held_model": "WP_NightStick"
+    },
+    {
+      "id": "WeaponsRock.WEA",
+      "name": "Rock",
+      "model": "GD_WP_Rock",
+      "held_model": "WP_Rock"
+    },
+    {
+      "id": "WeaponsShiv.WEA",
+      "name": "Shiv",
+      "model": "GD_WP_Shiv",
+      "held_model": "WP_Shiv",
+      "weapon": {
+        "modes": [
+          { "type": 8, "cost": 5, "dmg_min": 3, "dmg_max": 5, "ap": 8, "damage_type": 4 }
+        ]
+      }
+    },
+    {
+      "id": "WeaponsSwitchblade.WEA",
+      "name": "Switchblade",
+      "model": "GD_WP_Switchblade",
+      "held_model": "WP_Switchblade"
+    },
+    {
+      "id": "WeaponsTableLeg.WEA",
+      "name": "Table Leg",
+      "model": "GD_WP_TableLeg",
+      "held_model": "WP_TableLeg"
+    },
+    {
+      "id": "WeaponsThrowingKnife.WEA",
+      "name": "Throwing Knife",
+      "model": "GD_WP_ThrowingKnife",
+      "held_model": "WP_ThrowingKnife"
+    }
+  ]
+}
