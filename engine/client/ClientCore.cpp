@@ -271,7 +271,7 @@ void ClientCore::Handle(const uint8_t* data, size_t len) {
             ClientItem it;
             it.id = m.id; it.pid = m.pid; it.name = m.name; it.pos = TilePos{m.x, m.y};
             if (auto pi = pendingInfo_.find(m.id); pi != pendingInfo_.end()) {
-                it.kind = pi->second.kind; it.open = pi->second.open != 0;
+                it.kind = pi->second.kind; it.open = pi->second.open != 0; it.locked = pi->second.locked != 0; it.flags = pi->second.flags;
                 pendingInfo_.erase(pi);
             }
             items_[m.id] = std::move(it);
@@ -356,7 +356,7 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
             gnet::ObjectInfo m;
             if (!m.Read(b)) return;
             auto it = items_.find(m.id);
-            if (it != items_.end()) { it->second.kind = m.kind; it->second.open = m.open != 0; }
+            if (it != items_.end()) { it->second.kind = m.kind; it->second.open = m.open != 0; it->second.locked = m.locked != 0; it->second.flags = m.flags; }
             else pendingInfo_[m.id] = m;
             break;
         }
@@ -576,6 +576,10 @@ void ClientCore::SwapHands() {
 }
 
 void ClientCore::Equip(uint32_t invId, bool on, uint32_t slot) { gnet::Equip m; m.id = invId; m.on = on ? 1 : 0; m.slot = static_cast<uint8_t>(slot); SendG(m); }
+void ClientCore::CloseContainer() {
+    if (containerOwner_ != 0 && !containerCritter_ && state_ == State::InGame) { gnet::CloseObj m; m.id = containerOwner_; SendG(m); }
+    containerOwner_ = 0; containerCritter_ = false; containerName_.clear(); container_.clear();
+}
 void ClientCore::Use(uint32_t objectId) { gnet::Use m; m.id = objectId; SendG(m); }
 void ClientCore::Attack(CritterId id) { gnet::Attack m; m.id = id; SendG(m); }
 void ClientCore::Take(uint32_t container, uint32_t entry) { gnet::Take m; m.container = container; m.entry = entry; m.isCritter = (container == containerOwner_ && containerCritter_) ? 1 : 0; SendG(m); }

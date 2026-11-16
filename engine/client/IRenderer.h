@@ -117,7 +117,8 @@ struct LoginLayout {
 struct UiCommand {
     enum Type { SetMode, ToggleInventory, ToggleChar, Equip, Drop, Take, Put, CloseContainer, DialogChoose, DialogClose,
                 CharCreate, SpendSkill, UseSkill, SwapHands, Quit, SelectSkill, PipOp } type = SetMode;   // SpendSkill/UseSkill: a = skill index, b = points; CharCreate sends UiState::draft; SelectSkill: a = skill (enters the skill cursor, closes the sheet); Quit: leave the game (Cancel on the creation screen)
-    uint32_t a = 0, b = 0, c = 0;   // PipOp: a = gnet::PipOp, b = mail id, s = friend name. Equip: a = inventory id, b = on, c = EquipSlot (0 = automatic)
+    uint32_t a = 0, b = 0, c = 0;   // PipOp: a = gnet::PipOp, b = mail id, s = friend name. Equip: a = inventory id, b = on, c = EquipSlot (0 = automatic)
+
     std::string s;
 };
 
@@ -159,6 +160,14 @@ struct PickResult {
     float fx = 0, fy = 0;  // ground position, tile units (tile centre = integer)
     TilePos tile;
 };
+
+// What using a door / container does right now, from its state (ObjectInfo): Open, Close, Locked, Jammed or Sealed (cannot be opened).
+inline const char* ObjectActionLabel(const ClientItem& o) {
+    if (o.open) return o.kind == gnet::ObjectKind::Door ? "Close" : "Open";
+    if (o.flags & kLockNoOpen) return "Sealed";
+    if (o.flags & kLockJammed) return "Jammed";
+    return o.locked ? "Locked" : "Open";
+}
 
 // The cursor the game shows (and acts with) for the thing under the mouse, given the cursor the player selected.
 // Attack and Examine are sticky and apply to everything; the Move cursor adapts to the target:

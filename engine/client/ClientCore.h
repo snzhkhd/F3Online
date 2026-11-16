@@ -60,7 +60,11 @@ struct ClientItem {
     std::string name;
     TilePos pos;
     gnet::ObjectKind kind = gnet::ObjectKind::Ground;
-    bool open = false;
+    bool open = false;     // doors / containers
+    bool locked = false;   // lock block of ObjectInfo
+    uint8_t flags = 0;     // LockFlag bits (types.h)
+    // State shown to the player: 0 Closed, 1 Open, 2 Locked (docs/research/doors.md)
+    int State() const { return open ? 1 : locked ? 2 : 0; }
 };
 
 struct ClientMap {
@@ -165,7 +169,7 @@ public:
     const std::vector<gnet::InvEntry>& container() const { return container_; }
     bool containerIsCorpse() const { return containerCritter_; }
     const std::string& containerName() const { return containerName_; }
-    void CloseContainer() { containerOwner_ = 0; containerCritter_ = false; containerName_.clear(); container_.clear(); }
+    void CloseContainer();   // closes the loot window; a container object (not a corpse) is told to close as well (C2S_CloseObj)
 
     // ---- real-time timing (FOnline-like wait / AP) --------------------------------------------------------
     bool serverTiming() const { return serverTiming_; }       // the server sent MovePath/WaitState/CritterStop at least once

@@ -88,6 +88,7 @@ bool Server::Init() {
     }
     if (cfg_.savesDir.empty()) cfg_.savesDir = cfg_.scriptsDir.parent_path() / "saves";
     accounts_.Init(cfg_.savesDir, cfg_.pbkdf2Iterations);
+    LoadWorldState();   // door / container state per map (<saves>/world/)
     accounts_.ConfigureLimit(cfg_.maxLoginFails, 300, 30);
     if (cfg_.devKit) cfg_.allowGuest = true;
     nextSaveTick_ = static_cast<uint64_t>(std::max(0, cfg_.saveIntervalSec)) * cfg_.tickRate;
@@ -120,6 +121,7 @@ void Server::Run() {
         if (cfg_.maxRunSeconds > 0 && now - start > std::chrono::seconds(cfg_.maxRunSeconds)) break;
     }
     SaveAllPlayers();
+    SaveWorldState();
     log::Info("server stopping");
 }
 
@@ -199,7 +201,7 @@ void Server::HandlePacket(ENetPeer* peer, const uint8_t* data, size_t len) {
                 gnet::Auth m;
                 ok = m.Read(b);
                 if (ok && !c) OnAuth(peer, m);
-            } else if (static_cast<uint8_t>(id) >= 20 && static_cast<uint8_t>(id) < 40) {
+            } else if (static_cast<uint8_t>(id) >= 20 && static_cast<uint8_t>(id) < 48) {
                 if (c) HandleGamePacket(peer, c, static_cast<GMsg>(id), b, ok);
             } else {
                 ok = false;
@@ -643,6 +645,7 @@ void Server::DoTick() {
     if (cfg_.saveIntervalSec > 0 && tick_ >= nextSaveTick_) {
         nextSaveTick_ = tick_ + static_cast<uint64_t>(cfg_.saveIntervalSec) * cfg_.tickRate;
         SaveAllPlayers();
+        SaveWorldState();
     }
     std::vector<CritterId> ids;
     ids.reserve(world_.Critters().size());
@@ -671,9 +674,9 @@ void Server::DoTick() {
         Critter* c = world_.GetCritter(id);
         if (c && c->IsNpc() && c->mapId != 0 && !c->dead && active.count(c->mapId)) scripting_->OnNpcTick(*c, tick_);
     }
-    if (tick_ % 5 == 0)
+    if (tick_ % 10 == 0)
         for (MapId mid : active)
-            if (Map* dm = world_.GetMap(mid)) TickDoors(*dm);
+            if (Map* dm = world_.GetMap(mid)) TickObjects(*dm);
     if (amx_) amx_->Tick(tick_, active);
     scripting_->OnTick(tick_);
     if (tick_ % static_cast<uint64_t>(cfg_.tickRate) == 0) scripting_->PollConfig();  // hot reload of config.lua

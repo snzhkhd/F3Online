@@ -1,6 +1,7 @@
 #include "DataStore.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -84,9 +85,21 @@ bool DataStore::Load(const fs::path& dir, std::string& err) {
         p.dialog = j.value("dialog", std::string());
         p.team = j.value("team", 0);
         p.isStatic = j.value("static", false);
-        {   // GDOR (12 bytes): byte 1 is 1 only for DS_DoorsVault13Door02 (guess: initially locked)
+        {   // GDOR (12 bytes) / GCON (14 bytes): u8 open, u8 locked, u16 len + key resource, i32 lockDC, i32 randomRange (docs/research/doors.md)
             std::string gd = j.value("gdor_hex", std::string());
-            p.doorLocked = gd.size() >= 4 && gd.compare(2, 2, "00") != 0;
+            if (gd.empty()) gd = j.value("gcon_hex", std::string());
+            std::vector<uint8_t> by;
+            for (size_t i = 0; i + 1 < gd.size(); i += 2) by.push_back(static_cast<uint8_t>(std::strtoul(gd.substr(i, 2).c_str(), nullptr, 16)));
+            if (by.size() >= 4) {
+                p.doorOpen = by[0] != 0;
+                p.doorLocked = by[1] != 0;
+                size_t pos = 2;
+                const size_t len = by[2] | (by[3] << 8);
+                pos = 4;
+                if (pos + len <= by.size()) { p.keyId.assign(by.begin() + pos, by.begin() + pos + len); pos += len; }
+                auto i32 = [&](size_t at) { return static_cast<int>(by[at] | (by[at + 1] << 8) | (by[at + 2] << 16) | (static_cast<uint32_t>(by[at + 3]) << 24)); };
+                if (pos + 8 <= by.size()) { p.lockDC = i32(pos); p.lockRange = i32(pos + 4); }
+            }
         }
         p.inventory = StrArray(j, "inventory");
         if (j.contains("critter")) {

@@ -102,9 +102,7 @@ All numbers below are placeholders unless noted; formulas of the original game a
   (all SPECIAL 6, 33 HP), team 1. A new character owns and wears NOTHING (base body). The dev starter kit (Lua `on_login`: 9mm autoloader in hand 1, 30 x 9mm, leather outfit worn, .44 revolver) is only given when the server runs with `--dev-kit` (`f3_gametest` expects it; `f3_gametest --expect-empty` checks the default).
 * Inventory: stackable ammo/misc, one equipped weapon and one armor, carry weight limit for players, drop to ground, pick up (the server walks
   the player next to the item first, then picks up; pending actions are cancelled by a new move), take from containers.
-* Doors: `Use` toggles; unlocked doors also open by proximity (a critter within 5 cells) and auto-close after 3 s with nobody near (`TickDoors`, every 5 ticks).
-  A locked door (`doorLocked` from GDOR byte 1, or `LockDoor`/`UnlockDoor` from scripts, `IsLocked`) refuses to open with a message and blocks its footprint.
-  `CellsSet` is sent to every player on the map; closing is refused while a critter stands in the doorway.
+* Doors and containers: server-owned state (open / locked / lock flags / lockDC / keyId), see `docs/research/doors.md`. A closed door blocks its footprint (`Map::blocked`, also LOS); doors open on `Use` or automatically along a walk path if the walker may operate them (no auto-close); `C2S_CloseObj` closes. Locked: key in inventory, Security lockpick via UseSkill, or script. State persists in `<saves>/world/<map>.json`.
 * Combat is **real time**, not the original 6 s rounds (sys.ini `Seconds Per Round = 6`): `Attack(target)` makes the critter approach until the
   weapon range (ranged: `range * 2` cells and line of sight on the grid; melee: adjacent) and fire once per cooldown. Action duration (see section 9) in seconds =
   `clamp(GWAM cost / 10, 0.5, 4)` (guess). Hit chance `45 + 4A (+2S melee) - AC - 2 * max(0, distance_units - P)` clamped 5..95; damage = ammo
@@ -125,6 +123,7 @@ server messages. `ItemAdd` now also carries doors, containers and usables; an `O
 | C 20 | PickUp | `u32 groundItemId` |
 | C 21 | Drop | `u32 invId` |
 | C 22 | Equip | `u32 invId, u8 on` |
+| C 40 | CloseObj | `u32 objectId` (close an open door / container) |
 | C 23 | Use | `u32 objectId` (door toggle / container list / usable) |
 | C 24 | Attack | `u32 critterId` (0 = stop) |
 | C 25 | Take | `u32 containerId, u32 invId (0 = all), u8 isCritter` (isCritter 1: containerId is a corpse) |
@@ -134,7 +133,7 @@ server messages. `ItemAdd` now also carries doors, containers and usables; an `O
 | C 27 | ReqState | resend Stats + Inventory |
 | S 120 | Stats | `u32 critterId, u8 special[7], u8 level, i16 hp, i16 maxHp, u8 armorClass, u8 sequence, u8 meleeBonus, u16 carryWeight, u16 carried` |
 | S 121 | Inventory | `u32 owner, u16 n, n x {u32 id, u16 pid, u16 count, u8 equipped, str name}` |
-| S 122 | ObjectInfo | `u32 id, u8 kind (0 ground,1 door,2 container,3 usable), u8 open` |
+| S 122 | ObjectInfo | `u32 id, u8 kind (0 ground,1 door,2 container,3 usable), u8 open, u8 locked, u8 flags` (last two optional for old peers) |
 | S 123 | CritterState | `u32 id, i16 hp, i16 maxHp, u8 dead, u8 appear` (appear 1 = sent while the critter enters the view: a dead critter is shown in its final pose, no death animation) |
 | S 124 | CombatEvent | `u32 attacker, u32 target, u8 result (0 miss,1 hit,2 crit,3 kill), i16 damage, i16 targetHp` |
 | S 125 | Container | same list layout as Inventory, `owner` = container id / corpse critter id, then `u8 isCritter, string name` |

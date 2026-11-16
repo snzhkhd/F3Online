@@ -246,6 +246,8 @@ void MapView::BuildEntities(GameAssets& assets) {
                 }
             }
         }
+        inst.isDoor = e.type == "DOR";
+        inst.sinkH = (m->bmax.y - m->bmin.y) * sc + 0.15f;
         Matrix r = MatrixRotateY(-e.yaw);
         Matrix t = MatrixTranslate(e.pos[0], e.pos[1], -e.pos[2]);
         inst.transform = MatrixMultiply(MatrixMultiply(s, r), t);
@@ -282,8 +284,9 @@ void MapView::Draw(GameAssets& assets, const DrawOptions& opt) {
     if (opt.entities) {
         for (size_t i = 0; i < entities_.size(); ++i) {
             const MapEntityInstance& e = entities_[i];
-            if (e.hidden) continue;
-            DrawModel(assets, e.rig ? e.rig->asset() : *e.model, e.transform, static_cast<int>(i) == tintIdx_ ? tintCol_ : WHITE, e.skin, opt, true);
+            if (e.sink >= 0.999f) continue;   // fully open skeleton-less door: below the floor
+            const Matrix tr = e.sink > 0 ? MatrixMultiply(e.transform, MatrixTranslate(0, -e.sinkH * e.sink, 0)) : e.transform;
+            DrawModel(assets, e.rig ? e.rig->asset() : *e.model, tr, static_cast<int>(i) == tintIdx_ ? tintCol_ : WHITE, e.skin, opt, true);
             ++entitiesDrawn_;
         }
     }
@@ -307,22 +310,47 @@ void MapView::SetEntityTint(const Vector3& p, Color tint) {
     tintCol_ = tint;
 }
 
-void MapView::SetDoorOpen(const Vector3& p, bool open) {
-    MapEntityInstance* best = nullptr;
+int MapView::FindDoor(const Vector3& p) const {
+    int best = -1;
     float bd = 2.5f;
-    for (MapEntityInstance& e : entities_) {
-        if (e.src.type != "DOR") continue;
+    for (size_t i = 0; i < entities_.size(); ++i) {
+        const MapEntityInstance& e = entities_[i];
+        if (!e.isDoor) continue;
         const float dx = e.src.pos[0] - p.x, dz = -e.src.pos[2] - p.z;
         const float d = std::sqrt(dx * dx + dz * dz);
-        if (d < bd) { bd = d; best = &e; }
+        if (d < bd) { bd = d; best = static_cast<int>(i); }
     }
-    if (!best) return;
-    if (best->rig) best->doorOpen = open; else best->hidden = open;
+    return best;
+}
+
+void MapView::SetDoorState(int door, bool open, bool instant) {
+    if (door < 0 || door >= static_cast<int>(entities_.size())) return;
+    MapEntityInstance& e = entities_[static_cast<size_t>(door)];
+    e.doorOpen = open;
+    if (!instant) return;
+    if (e.rig && e.openClip) {
+        e.doorT = open ? e.openClip->duration : 0.0f;
+        if (e.doorT != e.posedT) { e.rig->Pose(e.openClip, e.doorT, nullptr, 0.0f, 1.0f); e.posedT = e.doorT; }
+    } else {
+        e.sink = open ? 1.0f : 0.0f;
+    }
+}
+
+float MapView::DoorProgress(int door) const {
+    if (door < 0 || door >= static_cast<int>(entities_.size())) return 0;
+    const MapEntityInstance& e = entities_[static_cast<size_t>(door)];
+    if (e.rig && e.openClip && e.openClip->duration > 0) return e.doorT / e.openClip->duration;
+    return e.sink;
 }
 
 void MapView::Update(float dt) {
     for (MapEntityInstance& e : entities_) {
-        if (!e.rig || !e.openClip) continue;
+        if (!e.isDoor) continue;
+        if (!e.rig || !e.openClip) {   // no clip: the slab sinks into the floor in 0.9 s (like the Open_In clip of the rigged doors)
+            const float goal = e.doorOpen ? 1.0f : 0.0f;
+            if (e.sink != goal) e.sink = e.sink < goal ? std::min(goal, e.sink + dt / 0.9f) : std::max(goal, e.sink - dt / 0.9f);
+            continue;
+        }
         const float dur = e.openClip->duration;
         const float goal = e.doorOpen ? dur : 0.0f;
         if (e.doorT == goal) continue;

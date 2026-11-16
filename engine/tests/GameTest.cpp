@@ -131,6 +131,13 @@ struct Bot {
             case (uint8_t)GMsg::S2C_Inventory: { gnet::Inventory m; if (m.Read(b)) { inv = m.items; ++invUpdates; } break; }
             case (uint8_t)GMsg::S2C_Container: { gnet::Container m; if (m.Read(b)) cons.push_back(m); break; }
             case (uint8_t)GMsg::S2C_ObjectInfo: { gnet::ObjectInfo m; m.Read(b); objInfo[m.id] = m; break; }
+            case (uint8_t)GMsg::S2C_CellsSet: {   // door opened / closed: the bot keeps its grid in sync like the client does
+                gnet::CellsSet m;
+                if (m.Read(b))
+                    for (auto& c : m.cells)
+                        if (c.x >= 0 && c.y >= 0 && c.x < map.width && c.y < map.height) map.blocked[static_cast<size_t>(c.y) * map.width + c.x] = c.blocked;
+                break;
+            }
             case (uint8_t)GMsg::S2C_CritterState: { gnet::CritterState m; m.Read(b); states[m.id] = m; break; }
             case (uint8_t)GMsg::S2C_CombatEvent: { gnet::CombatEvent m; m.Read(b); combat.push_back(m); combatMs.push_back(LocalMs()); break; }
             case (uint8_t)GMsgRt::S2C_MovePath: { gnet::MovePath m; if (m.Read(b)) paths.push_back(m); break; }
@@ -610,6 +617,224 @@ static int RunTutorialTests(uint16_t port) {
     return g_failed ? 1 : 0;
 }
 
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Door / container suite: f3_gametest --doors 1|2 against `f3_server --data ... --dev-kit` (saves dir shared by both phases, server RESTARTED
+// in between). Phase 1: states closed / open / locked, pathing through closed doors, locked doors block pathing, flags (no-open, no-pick,
+// jammed), key in the inventory, Security lockpick success / failure, containers (loot only while open), then /saveworld.
+// Phase 2: the saved state is back after the restart.
+// ---------------------------------------------------------------------------------------------------------------------
+static int RunDoorTests(uint16_t port, int phase, const std::string& stateFile) {
+    int contentsLeft = -1;
+    Bot a;
+    if (!a.Connect(port)) { std::printf("FAIL: cannot connect\n"); return 1; }
+    a.Login("DoorBot");
+    CHECK(WaitFor({&a}, 8, [&] { return a.loggedIn && a.havePos && a.haveStats; }), "logged in");
+    if (!a.loggedIn) return 1;
+    auto say = [&](const std::string& t) { net::ChatReq c; c.text = t; a.Send(net::Pack(c)); };
+    auto idle = [&](double sec) { WaitFor({&a}, sec, [] { return false; }); };
+    auto said = [&](size_t from, const char* needle) { for (size_t i = from; i < a.chat.size(); ++i) if (a.chat[i].find(needle) != std::string::npos) return true; return false; };
+    auto objAt = [&](int x, int y) -> ItemId {
+        for (auto& [id, it] : a.items)
+            if (it.x == x && it.y == y && a.objInfo.count(id) && a.objInfo[id].kind != gnet::ObjectKind::Ground) return id;
+        return 0;
+    };
+    auto objWait = [&](int x, int y) -> ItemId { WaitFor({&a}, 4, [&] { return objAt(x, y) != 0; }); return objAt(x, y); };
+    auto tp = [&](int x, int y) {
+        say("/tp Tutorial_Vault " + std::to_string(x) + " " + std::to_string(y));
+        WaitFor({&a}, 6, [&] { return a.pos == TilePos{(int16_t)x, (int16_t)y} && a.map.name == "00_04_Tutorial_Vault"; });
+        idle(0.8);
+    };
+    auto tpNear = [&](int x, int y) {   // the first walkable cell around (x, y) that /tp accepts
+        for (int r = 0; r <= 6; ++r)
+            for (int dy = -r; dy <= r; ++dy)
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (std::max(std::abs(dx), std::abs(dy)) != r || !Walkable(a, x + dx, y + dy)) continue;
+                    say("/tp Tutorial_Vault " + std::to_string(x + dx) + " " + std::to_string(y + dy));
+                    if (WaitFor({&a}, 1.5, [&] { return a.pos == TilePos{(int16_t)(x + dx), (int16_t)(y + dy)}; })) { idle(0.8); return; }
+                }
+    };
+    auto use = [&](ItemId id) { gnet::Use u; u.id = id; a.Send(gnet::PackG(u)); };
+    say("/amxattacks off");
+    idle(0.3);
+    const int doorAx = 152, doorAy = 219;    // Door01 between the corridors west (143,220) and east (162,220)
+    const int doorBx = 111, doorBy = 200;    // second Door01, used for the persistence check
+    tp(143, 220);
+    ItemId A = objAt(doorAx, doorAy);
+    CHECK(A != 0 && a.objInfo[A].kind == gnet::ObjectKind::Door, "Vault Door01 at %d,%d is in view (id %u)", doorAx, doorAy, A);
+    if (!A) return 1;
+    auto st = [&](ItemId id) -> gnet::ObjectInfo { return a.objInfo.count(id) ? a.objInfo[id] : gnet::ObjectInfo{}; };
+    auto is = [&](ItemId id, int open, int locked, int flags) { gnet::ObjectInfo o = st(id); return o.open == open && o.locked == locked && o.flags == flags; };
+
+    if (phase == 1) {
+        CHECK(is(A, 0, 0, 0), "state Closed: open 0, locked 0, flags 0");
+        CHECK(!Walkable(a, doorAx, doorAy), "a closed door blocks its doorway cell %d,%d in the map grid", doorAx, doorAy);
+
+        // ---- walking through a closed unlocked door opens it on the way
+        net::MoveToReq mv; mv.x = 162; mv.y = 220;
+        a.Send(net::Pack(mv));
+        CHECK(WaitFor({&a}, 12, [&] { return a.pos == TilePos{162, 220}; }), "pathfinding goes through a closed unlocked door (bot at %d,%d)", a.pos.x, a.pos.y);
+        CHECK(st(A).open == 1, "the door was opened by walking into it (state Open)");
+        CHECK(Walkable(a, doorAx, doorAy), "the open door released its doorway cell (CellsSet)");
+        idle(0.8);
+        use(A);   // the bot stands east of it: Use closes it again
+        CHECK(WaitFor({&a}, 8, [&] { return st(A).open == 0; }), "Use closes an open door");
+        CHECK(!Walkable(a, doorAx, doorAy), "the closed door blocks again");
+
+        // ---- locked door: Use refuses, pathing is blocked
+        say("/lock " + std::to_string(A) + " locked=1");
+        CHECK(WaitFor({&a}, 4, [&] { return is(A, 0, 1, 0); }), "state Locked announced (ObjectInfo locked 1)");
+        idle(0.8);
+        size_t n0 = a.chat.size();
+        use(A);
+        CHECK(WaitFor({&a}, 8, [&] { return said(n0, "locked"); }) && st(A).open == 0, "Use on a locked door says it is locked and keeps it closed");
+        mv.x = 143; mv.y = 220;
+        a.Send(net::Pack(mv));
+        idle(4.0);
+        CHECK(a.pos.x > 150 && st(A).open == 0, "a locked door blocks pathing: no way to the west side (bot at %d,%d, door still closed)", a.pos.x, a.pos.y);
+
+        // ---- flags
+        say("/lock " + std::to_string(A) + " locked=0 flags=1");
+        CHECK(WaitFor({&a}, 4, [&] { return is(A, 0, 0, 1); }), "flag no-open announced");
+        idle(0.8);
+        n0 = a.chat.size();
+        use(A);
+        CHECK(WaitFor({&a}, 8, [&] { return said(n0, "cannot be opened"); }) && st(A).open == 0, "a no-open door refuses with 'cannot be opened'");
+        say("/lock " + std::to_string(A) + " flags=4");
+        CHECK(WaitFor({&a}, 4, [&] { return is(A, 0, 0, 4); }), "flag jammed announced");
+        idle(0.8);
+        n0 = a.chat.size();
+        use(A);
+        CHECK(WaitFor({&a}, 8, [&] { return said(n0, "jammed"); }) && st(A).open == 0, "a jammed door refuses with 'jammed'");
+
+        // ---- keys: the key in the inventory unlocks and opens
+        say("/lock " + std::to_string(A) + " locked=1 flags=0 key=ItemsKeystest");
+        CHECK(WaitFor({&a}, 4, [&] { return is(A, 0, 1, 0); }), "door locked with key 'ItemsKeystest'");
+        idle(0.8);
+        n0 = a.chat.size();
+        use(A);
+        CHECK(WaitFor({&a}, 8, [&] { return said(n0, "locked"); }) && st(A).open == 0, "without the key the door stays locked");
+        say("/give ItemsKeystest.ITM");
+        CHECK(WaitFor({&a}, 4, [&] { return said(n0, "given"); }), "key given");
+        idle(0.8);
+        n0 = a.chat.size();
+        use(A);
+        CHECK(WaitFor({&a}, 8, [&] { return st(A).open == 1; }) && st(A).locked == 0 && said(n0, "opened the door with the"), "the key unlocks and opens the door (message from the original string 1358)");
+        idle(0.8);
+        use(A);   // close again
+        WaitFor({&a}, 8, [&] { return st(A).open == 0; });
+
+        // ---- lockpicking (Security skill through UseSkill)
+        say("/lock " + std::to_string(A) + " locked=1 flags=0 key=");
+        say("/lockroll 0");
+        CHECK(WaitFor({&a}, 4, [&] { return is(A, 0, 1, 0); }), "door locked for the lockpick tests");
+        idle(1.0);
+        auto skill = [&](ItemId id) { gnet::UseSkill us; us.skill = 10; us.kind = 2; us.target = id; a.Send(gnet::PackG(us)); };   // 10 = Security
+        n0 = a.chat.size();
+        skill(A);
+        CHECK(WaitFor({&a}, 6, [&] { return said(n0, "fail to pick"); }) && st(A).locked == 1, "Security: a failed pick leaves the door locked");
+        idle(1.2);
+        say("/lockroll 1");
+        idle(1.0);
+        say("/lock " + std::to_string(A) + " flags=2");
+        WaitFor({&a}, 4, [&] { return is(A, 0, 1, 2); });
+        idle(1.0);
+        n0 = a.chat.size();
+        skill(A);
+        CHECK(WaitFor({&a}, 6, [&] { return said(n0, "cannot be picked"); }) && st(A).locked == 1, "Security: a no-pick lock cannot be picked even on a sure roll");
+        say("/lock " + std::to_string(A) + " flags=0");
+        WaitFor({&a}, 4, [&] { return is(A, 0, 1, 0); });
+        idle(1.2);
+        n0 = a.chat.size();
+        skill(A);
+        CHECK(WaitFor({&a}, 6, [&] { return st(A).locked == 0; }) && said(n0, "unlock"), "Security: a successful pick unlocks the door (ObjectInfo locked 0)");
+        idle(1.2);
+        n0 = a.chat.size();
+        skill(A);
+        CHECK(WaitFor({&a}, 6, [&] { return said(n0, "not locked"); }), "Security on an unlocked door: 'not locked'");
+        say("/lockroll off");
+
+        // ---- containers: loot only while open, lock, pick
+        tpNear(182, 250);
+        ItemId C = objWait(182, 246);
+        CHECK(C != 0 && a.objInfo[C].kind == gnet::ObjectKind::Container, "vault storage shelf (container) in view (id %u)", C);
+        if (C) {
+            CHECK(is(C, 0, 0, 0), "container starts Closed");
+            size_t nc = a.cons.size();
+            gnet::Take tk; tk.container = C; tk.entry = 0;
+            a.Send(gnet::PackG(tk));
+            idle(1.5);
+            CHECK(a.cons.size() == nc, "a closed container cannot be looted (Take refused)");
+            say("/lock " + std::to_string(C) + " locked=1");
+            WaitFor({&a}, 4, [&] { return is(C, 0, 1, 0); });
+            idle(0.8);
+            n0 = a.chat.size();
+            use(C);
+            CHECK(WaitFor({&a}, 8, [&] { return said(n0, "locked"); }) && a.cons.size() == nc && st(C).open == 0, "Use on a locked container: told it is locked, no window");
+            say("/lockroll 1");
+            idle(1.0);
+            skill(C);
+            CHECK(WaitFor({&a}, 6, [&] { return st(C).locked == 0; }), "Security picks the container lock");
+            say("/lockroll off");
+            idle(1.0);
+            use(C);
+            CHECK(WaitFor({&a}, 8, [&] { return st(C).open == 1 && a.cons.size() > nc; }) && a.cons.back().owner == C, "Use opens the unlocked container (state Open) and lists its contents");
+            if (a.cons.size() > nc && !a.cons.back().items.empty()) {
+                const size_t had = a.cons.back().items.size();
+                idle(0.8);
+                size_t nc2 = a.cons.size();
+                gnet::Take t1; t1.container = C; t1.entry = a.cons.back().items[0].id;
+                a.Send(gnet::PackG(t1));
+                CHECK(WaitFor({&a}, 8, [&] { return a.cons.size() > nc2; }) && a.cons.back().items.size() == had - 1, "an open container can be looted (%zu -> %zu entries)", had, a.cons.back().items.size());
+                contentsLeft = static_cast<int>(a.cons.back().items.size());
+            }
+            gnet::CloseObj co; co.id = C;
+            a.Send(gnet::PackG(co));
+            CHECK(WaitFor({&a}, 6, [&] { return st(C).open == 0; }), "closing the loot window closes the container (C2S_CloseObj)");
+        }
+
+        // ---- persistence: door B (set open) and door A's lock settings
+        tp(104, 200);
+        ItemId B = objWait(doorBx, doorBy);
+        CHECK(B != 0, "second door at %d,%d in view (id %u)", doorBx, doorBy, B);
+        if (B) {
+            say("/lock " + std::to_string(B) + " open=1 dc=33 key=VaultKey");
+            CHECK(WaitFor({&a}, 4, [&] { return st(B).open == 1; }), "door B set open");
+        }
+        say("/lock " + std::to_string(A) + " open=0 locked=1 flags=2 dc=21");
+        idle(1.0);
+        say("/saveworld");
+        CHECK(WaitFor({&a}, 4, [&] { return said(0, "world state saved"); }), "world state saved");
+        if (FILE* f = std::fopen(stateFile.c_str(), "w")) { std::fprintf(f, "%d\n", contentsLeft); std::fclose(f); }
+    } else {
+        // after the server restart: door A was left locked + no-pick, door B open, the container closed (one item lighter)
+        CHECK(is(A, 0, 1, 2), "persisted: door A is still locked with the no-pick flag (open %u, locked %u, flags %u)", st(A).open, st(A).locked, st(A).flags);
+        CHECK(!Walkable(a, doorAx, doorAy), "persisted: door A still blocks its doorway");
+        tp(104, 200);
+        ItemId B = objWait(doorBx, doorBy);
+        CHECK(B != 0 && st(B).open == 1 && st(B).locked == 0, "persisted: door B is still open");
+        CHECK(Walkable(a, doorBx, doorBy), "persisted: the open door B releases its doorway cell");
+        tpNear(182, 250);
+        ItemId C = objWait(182, 246);
+        if (!C) for (auto& [id, it] : a.items) std::printf("note: item %u '%s' at %d,%d objInfo %d (bot at %d,%d)\n", id, it.name.c_str(), it.x, it.y, (int)a.objInfo.count(id), a.pos.x, a.pos.y);
+        CHECK(C != 0 && is(C, 0, 0, 0), "persisted: the container is closed again (open %u, locked %u, flags %u)", st(C).open, st(C).locked, st(C).flags);
+        if (C) {
+            idle(0.8);
+            size_t nc = a.cons.size();
+            use(C);
+            CHECK(WaitFor({&a}, 8, [&] { return a.cons.size() > nc; }), "the container opens again after the restart");
+            int expect = -2;
+            if (FILE* f = std::fopen(stateFile.c_str(), "r")) { if (std::fscanf(f, "%d", &expect) != 1) expect = -2; std::fclose(f); }
+            const int left = a.cons.empty() ? -1 : static_cast<int>(a.cons.back().items.size());
+            CHECK(expect >= 0 && left == expect, "persisted: the looted container keeps its remaining entries (%d, expected %d)", left, expect);
+        }
+    }
+    for (auto& t : a.chat) std::printf("chat: %s\n", t.c_str());
+    std::printf(g_failed ? "DOORTEST %d FAILED (%d)\n" : "DOORTEST %d PASSED\n", phase, g_failed);
+    enet_deinitialize();
+    return g_failed ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
     uint16_t port = 4048;
     std::string expectMap = "00_03_Tutorial_Junktown";
@@ -627,6 +852,7 @@ int main(int argc, char** argv) {
     }
     if (enet_initialize() != 0) return 2;
     if (accountPhase) return RunAccountTests(port, accountPhase, stateFile);
+    for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--doors")) return RunDoorTests(port, std::atoi(argv[i + 1]), stateFile);
     for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--tutorial")) return RunTutorialTests(port);
 
     Bot a, b;
@@ -1438,10 +1664,11 @@ int main(int argc, char** argv) {
                     size_t nc4 = a.cons.size();
                     gnet::Take all; all.container = corpse; all.entry = 0; all.isCritter = 1;
                     a.Send(gnet::PackG(all));
-                    WaitFor({&a, &b}, 8, [&] { return a.cons.size() > nc4; });
+                    const bool alreadyEmpty = !a.cons.empty() && a.cons.back().items.empty();   // a one-item corpse is empty after the single Take: no update follows
+                    if (!alreadyEmpty) WaitFor({&a, &b}, 8, [&] { return a.cons.size() > nc4; });
                     bool heavy = false;
                     for (auto& t : a.chat) if (t.find("cannot carry") != std::string::npos) heavy = true;
-                    CHECK(a.cons.size() > nc4 && (a.cons.back().items.empty() || heavy), "Take All empties the corpse (%zu left)", a.cons.back().items.size());
+                    CHECK((alreadyEmpty || a.cons.size() > nc4) && (a.cons.back().items.empty() || heavy), "Take All empties the corpse (%zu left)", a.cons.back().items.size());
                 }
             }
             // a live NPC cannot be looted (no container comes backc)
@@ -1476,8 +1703,9 @@ int main(int argc, char** argv) {
         WaitFor({&a}, 1, [] { return false; });
         CHECK(Walkable(a, a.pos.x, a.pos.y), "arrival cell %d,%d is walkable", a.pos.x, a.pos.y);
         // grid alignment: the mapdata grid starts at the tre root bbox min (44, 4) in the Vault. Door01 at world (78.89, 39.97) stands in a
-        // doorway (walkable, unlocked) between two wall cells; Door02 at (141, 45) is initially locked and blocks its doorway.
-        CHECK(Walkable(a, 69, 71) && !Walkable(a, 60, 71) && !Walkable(a, 82, 71), "Vault grid origin: Door01 doorway (69,71) walkable between wall cells");
+        // doorway (closed: blocks its cells until somebody opens it) between two wall cells; Door02 at (141, 45) is initially locked and blocks its doorway.
+        // (a closed door blocks its doorway cells; the door suite, --doors, opens it and walks through)
+        CHECK(!Walkable(a, 69, 71) && !Walkable(a, 60, 71) && !Walkable(a, 82, 71), "Vault grid origin: Door01 doorway (69,71) is blocked while the door is closed, wall cells beside it too");
         {
             bool lockedBlocked = false;
             for (int dy = -2; dy <= 2; ++dy) for (int dx = -2; dx <= 2; ++dx) lockedBlocked = lockedBlocked || !Walkable(a, 194 + dx, 82 + dy);

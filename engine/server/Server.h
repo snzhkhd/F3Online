@@ -76,7 +76,26 @@ public:
     bool EquipItem(Critter& c, ItemId invId, bool on, uint8_t slot = 0);
     bool UseObject(Critter& c, ItemId objId);
     Item* FindObject(ItemId id, Map** mapOut = nullptr);
-    void SetDoorLocked(Item& door, bool locked);   // script API (UnlockDoor / LockDoor)
+    // ---- doors and containers (Doors.cpp): states Open / Closed / Locked + LockFlag bits, key, lock DC; see docs/research/doors.md
+    enum class OperateResult : uint8_t { Opened, OpenedWithKey, Closed, AlreadyOpen, AlreadyClosed, Locked, NoOpen, Jammed, Blocked, Vetoed, NotOperable };
+    static const char* OperateResultName(OperateResult r);
+    // want: 1 open, 0 close, -1 toggle. Checks flags, lock and key (the actor's inventory), runs the OnOpen / OnClose script veto.
+    OperateResult Operate(Critter* actor, Map& m, Item& o, int want);
+    void ReportOperate(Critter* actor, const Item& o, OperateResult r);   // the player-visible message of an Operate result
+    bool HasKey(const Critter& c, const Item& o, std::string* keyName = nullptr) const;
+    bool CanOperate(const Critter& c, const Item& o) const;               // a closed door the critter may open right now
+    bool DoorPassable(const Critter& c, Map& m, int cellIndex);           // pathing: closed operable door cell
+    void OpenDoorAt(Critter& c, Map& m, int x, int y, bool report);
+    void OpenDoorsAhead(Critter& c, Map& m);                              // doors on the next cells of the critter's path start opening
+    int LockChance(const Critter& c, const Item& o, int* dc = nullptr);   // Security skill vs lock DC, percent
+    bool Lockpick(Critter& c, Item& o);                                   // Security skill on a locked door / container (true = handled)
+    void SetDoorLocked(Item& door, bool locked, const char* reason = "script");   // script API (UnlockDoor / LockDoor), doors and containers
+    void SetLockFlags(Item& o, uint8_t flags, const char* reason = "script");
+    void SetLockDC(Item& o, int dc);
+    void SetLockKey(Item& o, const std::string& keyId);
+    int ObjDist(const Item& o, TilePos from) const;                       // distance to the object or its doorway cells
+    void LoadWorldState();                                                // <saves>/world/<map>.json: door / container state per map
+    void SaveWorldState(bool force = false);
     bool TakeFrom(Critter& c, ItemId containerId, ItemId entry, bool corpse = false);
     bool PutInto(Critter& c, ItemId containerId, ItemId entry, bool corpse);   // move one of c's items into a container / corpse
     bool OpenLoot(Critter& c, ItemId id, bool corpse);                          // send the contents (S2C_Container)
@@ -209,8 +228,11 @@ private:
     void SendObjectInfo(Critter& to, const Item& it);
     void DropAllToGround(Critter& c);
     void Respawn(Critter& c);
-    void TickDoors(Map& m);
+    void TickObjects(Map& m);
     void ApplyDoorBlock(Map& m, Item& door);
+    void NotifyObject(Map& m, const Item& o);   // ObjectInfo to every player that sees the object
+    void LockChanged(Item& o, const char* reason);
+    void SetOpen(Map& m, Item& o, bool open);
     void PlaceCritter(Critter& c, Map& m, TilePos pos);
     void UnplaceCritter(Critter& c);
     void SendMapInfo(Critter& player, const Map& m);

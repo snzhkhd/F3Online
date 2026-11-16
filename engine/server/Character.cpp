@@ -165,6 +165,12 @@ bool Server::UseSkill(Critter& c, int skill, int kind, uint32_t target) {
     const uint8_t action = static_cast<uint8_t>(GMsgChar::C2S_UseSkill);
     if (CheckAction(c, action, cost) != gnet::ActionResult::Ok) return false;
     CommitAction(c, action, cost, rt_.Breaktime);
+    // Security on a door / container: the engine's lockpick (Doors.cpp); the hooks lockpick_chance / door_use / lock_changed can adjust it
+    if (kind == 2 && std::string(kSkillNames[skill]) == "Security") {
+        Map* m = world_.GetMap(c.mapId);
+        auto it = m ? m->items.find(static_cast<ItemId>(target)) : decltype(m->items.end()){};
+        if (m && it != m->items.end() && Lockpick(c, it->second)) return true;
+    }
     if (!scripting_) return true;
     // hook: use_skill(cr, skill_name, skill_value, kind, target_id) -> true when handled
     const bool handled = scripting_->CallHandled("use_skill", &c, std::string(kSkillNames[skill]), SkillValue(c, skill), kind, static_cast<int>(target));

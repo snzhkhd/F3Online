@@ -87,6 +87,7 @@ are annotated with the string. Debug records (`line`, `symbol`) are hidden. Read
 | `MessageArgCount` | 80 | 78 | 0 | no | () -> int (inside OnMessage) |
 | `GetMaxHP` | 80 | 78 | 1 | yes | (entity) -> int |
 | `floatround` | 79 | 79 | 2 | yes | (a[, mode]) 1 floor, 2 ceil, 3 toward zero, default floor(x+.5) |
+| `GetLockDC` | - | - | 1 | yes | (door/container) -> lock difficulty; `OnOpen` runs after the key unlock and may veto |
 | `UnlockDoor` | 78 | 78 | 1 | yes | (door) |
 | `floatfract` | 78 | 78 | 1 | yes | (a) |
 | `Distance` | 67 | 48 | 2 | yes | (entityA, entityB) -> int, truncated world units (2 args exactly) |

@@ -27,7 +27,10 @@ struct Proto {
     int nameId = 0, descId = 0;
     int team = 0;
     bool isStatic = false;  // barrels, windows (critter-class props)
-    bool doorLocked = false;  // doors: GDOR byte 1 (guess: starts locked)
+    // doors / containers: GDOR / GCON game record = u8 open, u8 locked, u16 len + key resource, i32 lockDC, i32 randomRange (+ GCON string)
+    bool doorLocked = false, doorOpen = false;
+    int lockDC = 0, lockRange = 0;
+    std::string keyId;
     std::vector<std::string> inventory;  // EEOV default inventory
     // critter
     int special[7] = {5, 5, 5, 5, 5, 5, 5};

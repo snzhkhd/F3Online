@@ -112,7 +112,7 @@ Vault: 47 k triangles. All geometry is static GPU meshes; no per-frame allocatio
 ## Known gaps
 
 * Critters are drawn as base body (plus skin override) only: no outfit/hair parts, no weapon-specific clips.
-* Talk mode only examines (no dialogue); doors with a skeleton play `<model>_Open_In_01` (the slab sinks into the floor), doors without one are hidden while open.
+* Talk mode only examines (no dialogue); doors with a skeleton play `<model>_Open_In_01` (the slab sinks into the floor), doors without one sink into the floor (0.9 s) and are hidden once sunk; hover label [Open]/[Close]/[Locked]; test flag `--autouse`.
 * The server does not send `S2C_CritterProto` yet, so NPC models come from the name lookup.
 * No particles, VFX, decals, water; no per-light dynamic lighting (baked lightmaps plus a sun term on props).
 * Ground picking uses up-facing triangles only; multi-storey interiors pick the first hit from the camera.

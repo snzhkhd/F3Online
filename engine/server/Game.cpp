@@ -215,13 +215,19 @@ ItemId Server::SpawnObjectProto(MapId mapId, const Proto& p, TilePos pos, uint16
     switch (p.cls) {
         case PClass::Door:
             it.kind = ObjKind::Door;
-            it.locked = p.doorLocked;
+            it.open = p.doorOpen;
+            it.locked = p.doorLocked && !p.doorOpen;
+            it.lockDC = p.lockDC;
+            it.keyId = p.keyId;
             it.footprint = DoorFootprint(*m, pos, it.id);
-            if (it.locked)
+            if (!it.open)   // a closed door blocks its doorway (critters that may operate it open it on the way)
                 for (TilePos t : it.footprint) m->blocked[static_cast<size_t>(t.y) * m->width + t.x] = 1;
             break;
         case PClass::Container: {
             it.kind = ObjKind::Container;
+            it.locked = p.doorLocked;
+            it.lockDC = p.lockDC;
+            it.keyId = p.keyId;
             std::vector<std::string> keys = p.inventory;
             if (inst) keys.insert(keys.end(), inst->inventory.begin(), inst->inventory.end());
             for (auto& k : keys)
@@ -349,6 +355,8 @@ void Server::SendObjectInfo(Critter& to, const Item& it) {
     o.id = it.id;
     o.kind = static_cast<gnet::ObjectKind>(it.kind);
     o.open = it.open ? 1 : 0;
+    o.locked = it.locked ? 1 : 0;
+    o.flags = it.lockFlags;
     Send(to, gnet::PackG(o));
 }
 
@@ -488,7 +496,8 @@ std::vector<InvItem>* Server::LootTarget(Critter& c, ItemId id, bool corpse, std
         return &t->inventory;
     }
     auto it = m->items.find(id);
-    if (it == m->items.end() || it->second.kind != ObjKind::Container || TileDist(it->second.pos, c.pos) > 3) return nullptr;
+    if (it == m->items.end() || it->second.kind != ObjKind::Container || ObjDist(it->second, c.pos) > rt_.DoorOpenRange) return nullptr;
+    if (!it->second.open || it->second.locked) return nullptr;   // loot only while the container is open
     if (name) {
         const Proto* op = data_.GetProto(it->second.pid);
         *name = op ? op->ReadableName() : it->second.name;
@@ -570,46 +579,6 @@ bool Server::PutInto(Critter& c, ItemId containerId, ItemId entry, bool corpse) 
     return true;
 }
 
-// Doors. The doorway of a door entity is the 8-connected group of 0x1b cells nearest to its position (the doorway is wider than the
-// entity: Vault13 doors are 13x3..5 cells). Rules: a closed door that is not locked lets critters walk through (it opens by
-// itself when somebody comes close and closes again 3 s after the last one left, like the original proximity doors); a locked
-// door keeps its doorway cells blocked until it is unlocked (UnlockDoor in the original scripts). Doors that do not stand on 0x1b
-// cells (outdoor entrance doors, hatches) have no footprint: they animate but never block.
-void Server::ApplyDoorBlock(Map& m, Item& door) {
-    const uint8_t want = (door.locked && !door.open) ? 1 : 0;
-    gnet::CellsSet cs;
-    for (TilePos t : door.footprint) {
-        uint8_t& b = m.blocked[static_cast<size_t>(t.y) * m.width + t.x];
-        if (b != want) { b = want; cs.cells.push_back({t.x, t.y, want}); }
-    }
-    if (cs.cells.empty()) return;
-    ByteBuffer cb = gnet::PackG(cs);
-    for (Critter* p : m.critters)
-        if (p->IsPlayer()) Send(*p, cb);
-}
-
-void Server::SetDoor(Map& m, Item& door, bool open) {
-    if (open == door.open) return;
-    if (!open)
-        for (TilePos t : door.footprint)
-            if (m.CritterAt(t)) return;  // something stands in the doorway: refuse to close
-    door.open = open;
-    door.nearTick = tick_;
-    ApplyDoorBlock(m, door);
-    gnet::ObjectInfo oi;
-    oi.id = door.id; oi.kind = gnet::ObjectKind::Door; oi.open = open ? 1 : 0;
-    ByteBuffer ob = gnet::PackG(oi);
-    for (Critter* p : m.critters)
-        if (p->IsPlayer()) Send(*p, ob);
-    if (amx_) amx_->CallObject(door.id, open ? "OnOpen" : "OnClose");
-}
-
-void Server::SetDoorLocked(Item& door, bool locked) {
-    if (door.kind != ObjKind::Door || door.locked == locked) return;
-    door.locked = locked;
-    if (Map* m = world_.GetMap(door.mapId)) ApplyDoorBlock(*m, door);
-}
-
 Item* Server::FindObject(ItemId id, Map** mapOut) {
     for (auto& m : world_.Maps()) {
         auto it = m->items.find(id);
@@ -618,76 +587,39 @@ Item* Server::FindObject(ItemId id, Map** mapOut) {
     return nullptr;
 }
 
-void Server::TickDoors(Map& m) {
-    const int kNear = 5;   // cells around the doorway that make an unlocked door open
-    const uint64_t closeAfter = static_cast<uint64_t>(cfg_.tickRate) * 3;
-    for (auto& [id, it] : m.items) {
-        if (it.kind != ObjKind::Door) continue;
-        int x0 = it.pos.x, x1 = it.pos.x, y0 = it.pos.y, y1 = it.pos.y;
-        for (TilePos t : it.footprint) { x0 = std::min<int>(x0, t.x); x1 = std::max<int>(x1, t.x); y0 = std::min<int>(y0, t.y); y1 = std::max<int>(y1, t.y); }
-        bool nearby = false;
-        for (Critter* c : m.critters)
-            if (!c->dead && c->pos.x >= x0 - kNear && c->pos.x <= x1 + kNear && c->pos.y >= y0 - kNear && c->pos.y <= y1 + kNear) { nearby = true; break; }
-        if (nearby) {
-            it.nearTick = tick_;
-            if (!it.open && !it.locked) SetDoor(m, it, true);
-        } else if (it.open && tick_ - it.nearTick > closeAfter) {
-            SetDoor(m, it, false);
-        }
-    }
-}
-
-bool Server::UseObject(Critter& c, ItemId objId) {
-    Map* m = world_.GetMap(c.mapId);
-    if (!m || c.dead) return false;
-    auto it = m->items.find(objId);
-    if (it == m->items.end()) return false;
-    Item& o = it->second;
-    if (TileDist(o.pos, c.pos) > 3) return false;
-    switch (o.kind) {
-        case ObjKind::Door:
-            if (o.locked && !o.open) { if (c.IsPlayer()) Tell(c, "The door is locked."); break; }
-            SetDoor(*m, o, !o.open);
-            break;
-        case ObjKind::Container:
-            SendContainer(c, o.id, false);
-            break;
-        case ObjKind::Usable: break;
-        case ObjKind::Ground: return false;
-    }
-    const Proto* p = data_.GetProto(o.pid);
-    if (scripting_) scripting_->Call("on_use", &c, static_cast<int>(objId), p ? p->key : std::string(), o.script);
-    return true;
-}
-
 // Reach of the walk-then-act interactions in cells. The walk stops on a cell within this distance and the action re-checks the
 // same limit on arrival: a pickup needs 2 (PickUp), use / take / put / loot 3. (Before, the walk went up to 3 cells away and
 // PickUp then failed with "invalid" when the player came from afar.)
-static int InteractRange(PendingType t) { return t == PendingType::Pickup ? 2 : 3; }
+static int InteractRange(PendingType t, int use) { return t == PendingType::Pickup ? 2 : use; }
 
 void Server::BeginInteract(Critter& c, PendingType type, ItemId id, ItemId sub, bool critter) {
     Map* m = world_.GetMap(c.mapId);
     if (!m || c.dead) return;
-    TilePos op;
+    std::vector<TilePos> refs;   // reference cells of the target: the object cell and, for doors, its doorway cells
     if (critter) {
         Critter* t = world_.GetCritter(static_cast<CritterId>(id));
         if (!t || t->mapId != c.mapId) return;
-        op = t->pos;
+        refs.push_back(t->pos);
     } else {
         auto it = m->items.find(id);
         if (it == m->items.end()) return;
-        op = it->second.pos;
+        refs.push_back(it->second.pos);
+        refs.insert(refs.end(), it->second.footprint.begin(), it->second.footprint.end());
     }
     c.pending = Pending{type, id, sub, critter};
-    const int range = InteractRange(type);
-    if (TileDist(op, c.pos) <= range) { StopMove(c); RunPending(c); return; }
-    // stand on a free cell within reach of the object, nearest to us first (the object may sit inside a wall)
+    const int range = InteractRange(type, rt_.DoorOpenRange);
+    for (TilePos r : refs)
+        if (TileDist(r, c.pos) <= range) { StopMove(c); RunPending(c); return; }
+    // stand on a free cell within reach of the object, nearest to us first (the object may sit inside a wall; a closed door blocks
+    // its own doorway cells, so the player stops next to the doorway)
     std::vector<TilePos> spots;
-    for (int dy = -range; dy <= range; ++dy)
-        for (int dx = -range; dx <= range; ++dx) {
-            TilePos t{static_cast<int16_t>(op.x + dx), static_cast<int16_t>(op.y + dy)};
-            if (m->IsFree(t)) spots.push_back(t);
-        }
+    std::unordered_set<int> seen;
+    for (TilePos op : refs)
+        for (int dy = -range; dy <= range; ++dy)
+            for (int dx = -range; dx <= range; ++dx) {
+                TilePos t{static_cast<int16_t>(op.x + dx), static_cast<int16_t>(op.y + dy)};
+                if (m->InBounds(t.x, t.y) && m->IsFree(t) && seen.insert(t.y * m->width + t.x).second) spots.push_back(t);
+            }
     std::sort(spots.begin(), spots.end(), [&](TilePos a, TilePos b) { return TileDist(a, c.pos) < TileDist(b, c.pos); });
     bool ok = false;
     for (size_t i = 0; i < spots.size() && i < 6 && !ok; ++i) ok = MoveCritterTo(c, spots[i]);
@@ -740,12 +672,12 @@ void Server::RunPending(Critter& c) {
     // interrupted) the interaction is dropped with a message instead of failing later as "invalid"
     {
         Map* pm = world_.GetMap(c.mapId);
-        TilePos tp;
+        int dist = 0;
         bool have = false;
-        if (p.critter) { if (Critter* t = world_.GetCritter(static_cast<CritterId>(p.id)); t && t->mapId == c.mapId) { tp = t->pos; have = true; } }
-        else if (pm) { auto it = pm->items.find(p.id); if (it != pm->items.end()) { tp = it->second.pos; have = true; } }
+        if (p.critter) { if (Critter* t = world_.GetCritter(static_cast<CritterId>(p.id)); t && t->mapId == c.mapId) { dist = TileDist(t->pos, c.pos); have = true; } }
+        else if (pm) { auto it = pm->items.find(p.id); if (it != pm->items.end()) { dist = ObjDist(it->second, c.pos); have = true; } }
         if (!have) { c.pending = Pending{}; return; }
-        if (TileDist(tp, c.pos) > InteractRange(p.type)) {
+        if (dist > InteractRange(p.type, rt_.DoorOpenRange)) {
             if (!c.mv.active) { c.pending = Pending{}; if (c.IsPlayer()) Tell(c, "You cannot reach that."); }
             return;
         }
@@ -1123,6 +1055,17 @@ void Server::HandleGamePacket(ENetPeer*, Critter* c, GMsg id, ByteBuffer& b, boo
             gnet::Use m; ok = m.Read(b);
             if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok)
                 BeginInteract(*c, PendingType::Use, m.id, 0);
+            break;
+        }
+        case GMsg::C2S_CloseObj: {   // the loot window of a container was closed: the container closes again
+            gnet::CloseObj m; ok = m.Read(b);
+            if (ok && budget()) {
+                Map* cm = world_.GetMap(c->mapId);
+                auto it = cm ? cm->items.find(m.id) : decltype(cm->items.end()){};
+                if (cm && it != cm->items.end() && it->second.kind == ObjKind::Container && it->second.open &&
+                    ObjDist(it->second, c->pos) <= rt_.DoorOpenRange + 3)
+                    Operate(c, *cm, it->second, 0);
+            }
             break;
         }
         case GMsg::C2S_Attack: {

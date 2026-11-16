@@ -107,7 +107,7 @@ public:
         if (!assets_) { if (err) *err = "no game data"; return false; }
         auto t0 = GetTime();
         visuals_.clear();
-        doorState_.clear();
+        doorVis_.clear();
         if (opt_.network) map_.SetNetworkMode(opt_.protos);
         map_.SetRigs(rigs_.get());
         if (!map_.Load(*assets_, name, err)) return false;
@@ -781,6 +781,7 @@ private:
             for (auto it = visuals_.begin(); it != visuals_.end();) {
                 if (!seen.count(it->first)) it = visuals_.erase(it); else ++it;
             }
+            SyncDoors(s, tw, th);
             for (const ClientItem* it : s.items) DrawItem(s, *it, tw, th);
         }
         EndMode3D();
@@ -944,6 +945,22 @@ private:
     float kHeldModelScale = 1.0f;
     float kHeldScale = 0.5f, kHeldRotX = 0, kHeldRotY = 0, kHeldRotZ = 0, kHeldOffX = 0, kHeldOffY = 0, kHeldOffZ = 0;
 
+    // Server doors -> baked DOR entities. The entity is resolved once per door (nearest within 2.5 units) and remembered, the state is
+    // applied for every door the server told us about, also those outside the fog radius (they used to miss state changes there and
+    // showed a closed door that was open on the server). A door first seen already open snaps open, later changes animate.
+    void SyncDoors(const SceneView& s, int tw, int th) {
+        for (const ClientItem* it : s.items) {
+            if (it->kind != gnet::ObjectKind::Door) continue;
+            DoorVis& v = doorVis_[it->id];
+            if (v.ent == -2) continue;   // no entity near this door
+            if (v.ent == -1) {
+                v.ent = map_.FindDoor(OnGround(map_.TileToWorld(static_cast<float>(it->pos.x), static_cast<float>(it->pos.y), tw, th)));
+                if (v.ent < 0) { v.ent = -2; continue; }
+            }
+            if (!v.known || v.open != it->open) { map_.SetDoorState(v.ent, it->open, !v.known); v.known = true; v.open = it->open; }
+        }
+    }
+
     void DrawItem(const SceneView& s, const ClientItem& it, int tw, int th) {
         const ProtoInfo* proto = s.protos ? s.protos->ByPid(it.pid) : nullptr;
         Vector3 w = OnGround(map_.TileToWorld(static_cast<float>(it.pos.x), static_cast<float>(it.pos.y), tw, th));
@@ -962,11 +979,7 @@ private:
             }
             if (!drawn) DrawCube(Vector3{w.x, w.y + 0.5f, w.z}, 1.0f, 1.0f, 1.0f, Color{240, 210, 70, 255});
         } else {
-            // doors, containers and usables are baked into the map; a door has no open pose, so hide it while open
-            auto d = doorState_.find(it.id);
-            const bool wasOpen = d != doorState_.end() && d->second;
-            if (it.kind == gnet::ObjectKind::Door && wasOpen != it.open) { map_.SetDoorOpen(w, it.open); doorState_[it.id] = it.open; }
-            else if (d == doorState_.end()) doorState_[it.id] = false;
+            // doors, containers and usables are baked into the map; the door state itself is synced for every known door in SyncDoors
             height = 4.5f;
         }
         const bool hovered = hoverItem_ == it.id;
@@ -1421,7 +1434,12 @@ private:
                 }
             } else if (pr.kind == PickResult::Item) {
                 auto it = ui.core->items().find(pr.item);
-                if (it != ui.core->items().end()) t += " " + it->second.name;
+                if (it != ui.core->items().end()) {
+                    const ClientItem& o = it->second;
+                    if (mode == CursorMode::Use && (o.kind == gnet::ObjectKind::Door || o.kind == gnet::ObjectKind::Container))
+                        t = std::string("[") + ObjectActionLabel(o) + "]";   // [Open] / [Close] / [Locked] / [Jammed] instead of [Use]
+                    t += " " + o.name;
+                }
             }
         }
         const int fs = 14;
@@ -1471,7 +1489,8 @@ private:
     std::unordered_map<CritterId, Visual> visuals_;
     std::unordered_map<CritterId, Vector3> critterWorld_;
     std::unordered_map<CritterId, Vector3> critterHead_;   // nameplate anchor of the critters drawn this frame (speech sits above it)
-    std::unordered_map<ItemId, bool> doorState_;
+    struct DoorVis { int ent = -1; bool known = false, open = false; };
+    std::unordered_map<ItemId, DoorVis> doorVis_;
     float fogR_ = 0;            // fog radius in world units this frame (0 = no fog)
     Vector3 fogC_{0, 0, 0};
     CritterId hoverCrit_ = 0;

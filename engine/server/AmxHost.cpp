@@ -100,11 +100,12 @@ void AmxHost::BindNatives() {
     auto doorOf = [this](AmxCell h) -> Item* {
         if (!(h & 0x40000000)) return nullptr;
         Item* it = server_.FindObject(static_cast<ItemId>(h & 0x3FFFFFFF));
-        return it && it->kind == ObjKind::Door ? it : nullptr;
+        return it && (it->kind == ObjKind::Door || it->kind == ObjKind::Container) ? it : nullptr;
     };
     N["UnlockDoor"] = [this, doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { if (Item* d = n > 0 ? doorOf(a[0]) : nullptr) { server_.SetDoorLocked(*d, false); return 1; } return 0; };
     N["LockDoor"] = [this, doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { if (Item* d = n > 0 ? doorOf(a[0]) : nullptr) { server_.SetDoorLocked(*d, true); return 1; } return 0; };
     N["IsLocked"] = [doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { Item* d = n > 0 ? doorOf(a[0]) : nullptr; return d && d->locked ? 1 : 0; };
+    N["GetLockDC"] = [doorOf](AmxInstance&, const AmxCell* a, int n) -> AmxCell { Item* d = n > 0 ? doorOf(a[0]) : nullptr; return d ? static_cast<AmxCell>(d->lockDC) : 0; };
     for (const char* n : {"AddToTeam", "AttachSound", "RemoveSound", "SetValue"})
         N[n] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };
 
@@ -389,10 +390,12 @@ void AmxHost::Tick(uint64_t tick, const std::unordered_set<MapId>& active) {
     graveyard_.clear();
 }
 
-void AmxHost::CallObject(ItemId id, const char* pub) {
+bool AmxHost::CallObject(ItemId id, const char* pub, CritterId actor) {
     auto it = instances_.find(id | kObjectBit);
-    if (it == instances_.end() || !it->second.created || !it->second.inst->Script().HasPublic(pub)) return;
-    it->second.inst->Call(pub);
+    if (it == instances_.end() || !it->second.created || !it->second.inst->Script().HasPublic(pub)) return true;
+    AmxCell ret = 1;
+    const bool ok = it->second.inst->Call(pub, {static_cast<AmxCell>(actor)}, &ret);
+    return !ok || ret != 0;
 }
 
 int AmxHost::RandomRange(int lo, int hi) {

@@ -28,7 +28,7 @@ static const char* kUsage =
     "game data: --gamedir, env F3_GAMEDIR, client.cfg (gamedir=...), else auto-detected (F:\\_work\\F3_Demo, ..\\F3_Demo)\n"
     "options:   --no-assets (flat placeholder view)  --size W,H\n"
     "test:      --shot FILE.png [--shot-frame N] [--shot-exit]   --shots PREFIX --shot-times t0,t1,.. [--shot-exit]\n"
-    "           --autowalk (random walks)  --trace FILE.csv  --run-seconds N\n"
+    "           --autouse (use the nearest door / container once)  --autowalk (random walks)  --trace FILE.csv  --run-seconds N\n"
     "           --cam AZ,EL,FOV  --target X,Z  --clipy Y  --noentities  --modelscale S\n"
     "controls:  LMB act, RMB click toggles Move/Examine cursor (A = attack cursor, RMB/Esc back) or drag to orbit;\n"
     "           pickup / use / talk cursors switch by themselves over items / usable objects / NPCs,\n"
@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
     int pipTab = 1;
     int toggleStep = 0;
     double lastToggle = 0;
-    bool noAssets = false, autowalk = false, hostGiven = false, legacy = false, autoattack = false, autopickup = false, autoloot = false, autotalk = false;
+    bool noAssets = false, autowalk = false, hostGiven = false, legacy = false, autoattack = false, autopickup = false, autoloot = false, autotalk = false, autouse = false;
     std::vector<std::string> sayList;
     std::string traceFile;
     double runSeconds = 0;
@@ -138,6 +138,7 @@ int main(int argc, char** argv) {
         else if (a == "--autoattack") autoattack = true;
         else if (a == "--autopickup") autopickup = true;
         else if (a == "--autotalk") autotalk = true;     // testing: talk to the nearest living NPC once (open the dialogue window)
+        else if (a == "--autouse") autouse = true;       // testing: use the nearest door / container once, 4 s after entering the world
         else if (a == "--autoloot") autoloot = true;     // testing: loot the nearest corpse once (open the loot window)
         else if (a == "--legacy") legacy = true;
         else if (a == "--say") sayList.push_back(next());
@@ -456,6 +457,17 @@ int main(int argc, char** argv) {
                     if (d < bd) { bd = d; best = &c; }
                 }
                 if (best) core.Talk(best->id);
+            }
+            if (me && autouse && now - inGameSince > 4.0) {
+                autouse = false;
+                const CritterPose mp = core.Pose(*me, now);
+                const ClientItem* best = nullptr; float bd = 1e9f;
+                for (auto& [id, it] : core.items()) {
+                    if (it.kind != gnet::ObjectKind::Door && it.kind != gnet::ObjectKind::Container) continue;
+                    const float d = std::hypot(it.pos.x - mp.x, it.pos.y - mp.y);
+                    if (d < bd) { bd = d; best = &it; }
+                }
+                if (best) { log::Info("autouse: %s (%.1f tiles, state %d)", best->name.c_str(), bd, best->State()); core.Use(best->id); }
             }
             if (me && autoloot && !core.hasContainer() && now - inGameSince > 3.5 && now - lastAutoAct > 2.0) {
                 lastAutoAct = now;

@@ -158,6 +158,8 @@ void Scripting::BindApi(sol::state& L) {
                 sol::table e = sv.create_table();
                 e["id"] = it.id; e["name"] = it.name; e["kind"] = kinds[(int)it.kind]; e["x"] = it.pos.x; e["y"] = it.pos.y;
                 e["proto"] = p ? p->key : std::string(); e["open"] = it.open; e["count"] = it.count; e["script"] = it.script; e["locked"] = it.locked;
+                e["flags"] = (int)it.lockFlags; e["lock_dc"] = it.lockDC; e["key"] = it.keyId;
+                e["state"] = it.open ? "open" : it.locked ? "locked" : "closed";
                 t[n++] = e;
             }
             return t;
@@ -259,12 +261,49 @@ void Scripting::BindApi(sol::state& L) {
     L["amx_native"] = [&S](int owner, const std::string& program) -> std::string { return S.Amx() ? S.Amx()->NativeTest(static_cast<CritterId>(owner), program) : std::string("amx not available"); };
     L["amx_attacks"] = [&S](bool on) { if (S.Amx()) S.Amx()->SetAttacksEnabled(on); };   // dev / test only
     L["stf"] = [&S](int id) { return S.Data().String(id); };   // English.stf text by id
-    L["set_door_locked"] = [&S](int objId, bool locked) { Item* d = S.FindObject((ItemId)objId); if (!d || d->kind != ObjKind::Door) return false; S.SetDoorLocked(*d, locked); return true; };
+    L["set_door_locked"] = [&S](int objId, bool locked) { Item* d = S.FindObject((ItemId)objId); if (!d || (d->kind != ObjKind::Door && d->kind != ObjKind::Container)) return false; S.SetDoorLocked(*d, locked); return true; };
     L["set_door_open"] = [&S](int objId, bool open) {
         Map* m = nullptr; Item* d = S.FindObject((ItemId)objId, &m);
         if (!d || !m || d->kind != ObjKind::Door) return false;
         S.SetDoor(*m, *d, open); return true;
     };
+    // Door / container lock API (docs/research/doors.md). Flags: LOCK_NO_OPEN 1, LOCK_NO_PICK 2, LOCK_JAMMED 4, LOCK_KEY_ONLY 8.
+    // get_lock(id) -> { kind, state ("open" | "closed" | "locked"), open, locked, flags, dc, key, no_open, no_pick, jammed, key_only } or nil
+    // set_lock(id, { locked =, flags =, dc =, key =, open = }) changes only the given fields; true when the object exists
+    L["LOCK_NO_OPEN"] = (int)kLockNoOpen; L["LOCK_NO_PICK"] = (int)kLockNoPick; L["LOCK_JAMMED"] = (int)kLockJammed; L["LOCK_KEY_ONLY"] = (int)kLockKeyOnly;
+    L["get_lock"] = [&S](int objId, sol::this_state ts) -> sol::object {
+        sol::state_view sv(ts);
+        Item* d = S.FindObject((ItemId)objId);
+        if (!d || (d->kind != ObjKind::Door && d->kind != ObjKind::Container)) return sol::make_object(sv, sol::nil);
+        sol::table t = sv.create_table();
+        t["kind"] = d->kind == ObjKind::Door ? "door" : "container";
+        t["state"] = d->open ? "open" : d->locked ? "locked" : "closed";
+        t["open"] = d->open; t["locked"] = d->locked; t["flags"] = (int)d->lockFlags; t["dc"] = d->lockDC; t["key"] = d->keyId;
+        t["no_open"] = (d->lockFlags & kLockNoOpen) != 0; t["no_pick"] = (d->lockFlags & (kLockNoPick | kLockKeyOnly)) != 0;
+        t["jammed"] = (d->lockFlags & kLockJammed) != 0; t["key_only"] = (d->lockFlags & kLockKeyOnly) != 0;
+        return sol::make_object(sv, t);
+    };
+    L["set_lock"] = [&S](int objId, sol::table t) {
+        Map* m = nullptr; Item* d = S.FindObject((ItemId)objId, &m);
+        if (!d || !m || (d->kind != ObjKind::Door && d->kind != ObjKind::Container)) return false;
+        if (sol::optional<int> f = t["flags"]) S.SetLockFlags(*d, (uint8_t)*f);
+        if (sol::optional<int> dc = t["dc"]) S.SetLockDC(*d, *dc);
+        if (sol::optional<std::string> k = t["key"]) S.SetLockKey(*d, *k);
+        if (sol::optional<bool> l = t["locked"]) S.SetDoorLocked(*d, *l);
+        if (sol::optional<bool> o = t["open"]) {
+            if (d->kind == ObjKind::Door) S.SetDoor(*m, *d, *o);
+            else if (*o != d->open) { d->open = *o; S.SetDoorLocked(*d, d->locked); m->objDirty = true; }
+        }
+        return true;
+    };
+    L["operate_object"] = [&S](int objId, int want, sol::optional<Critter*> by, sol::this_state ts) -> sol::object {   // want 1 open, 0 close, -1 toggle; honours locks / keys of `by`
+        sol::state_view sv(ts);
+        Map* m = nullptr; Item* d = S.FindObject((ItemId)objId, &m);
+        if (!d || !m) return sol::make_object(sv, sol::nil);
+        return sol::make_object(sv, std::string(Server::OperateResultName(S.Operate(by.value_or(nullptr), *m, *d, want))));
+    };
+    L["save_world"] = [&S]() { S.SaveWorldState(true); };   // writes <saves>/world/*.json now (also done periodically and at shutdown)
+    L["set_lock_roll"] = [&S](int force) { S.Rt().ForceLockRoll = force; };   // dev/test only: 1 picks always succeed, 0 always fail, -1 random
     L["get_global"] = [&S](const std::string& k) { return S.GetGlobal(k); };
     L["set_global"] = [&S](const std::string& k, double v) { S.SetGlobal(k, v); };
     L["spawn_item"] = [&S](int map, int pid, const std::string& name, int x, int y) {
@@ -348,6 +387,7 @@ void Scripting::ApplyConfig(sol::state_view L) {
     F3_CFG_INT(RequireCharacterCreation); F3_CFG_INT(SpecialBase); F3_CFG_INT(CharPoints); F3_CFG_INT(SpecialMin); F3_CFG_INT(SpecialMax);
     F3_CFG_INT(TagCount); F3_CFG_INT(TraitMax); F3_CFG_INT(SkillUseRange); F3_CFG_INT(TagBonus); F3_CFG_INT(SkillMax); F3_CFG_INT(StartSkillPoints);
     F3_CFG_INT(ViewBase); F3_CFG_INT(ViewPerPerception); F3_CFG_INT(SkillRateBase); F3_CFG_INT(SkillRatePerInt); F3_CFG_INT(XpBase); F3_CFG_INT(MaxLevel); F3_CFG_INT(PerkRate);
+    F3_CFG_INT(LockDefaultDC); F3_CFG_INT(LockpickMinChance); F3_CFG_INT(LockpickMaxChance); F3_CFG_INT(LockpickNeedsKit); F3_CFG_INT(LockpickXp); F3_CFG_INT(DoorOpenRange);
     F3_CFG_INT(HpBase); F3_CFG_INT(HpPerLevelBase); F3_CFG_INT(KillXpBase); F3_CFG_INT(KillXpPerHp);
 #undef F3_CFG_INT
 #undef F3_CFG_NUM
@@ -368,6 +408,9 @@ void Scripting::ApplyConfig(sol::state_view L) {
     g.TagCount = std::clamp(g.TagCount, 0, kSkillCount);
     g.TraitMax = std::clamp(g.TraitMax, 0, 16);
     g.SkillUseRange = std::clamp(g.SkillUseRange, 1, 40);
+    g.DoorOpenRange = std::clamp(g.DoorOpenRange, 1, 12);
+    g.LockpickMinChance = std::clamp(g.LockpickMinChance, 0, 100);
+    g.LockpickMaxChance = std::clamp(g.LockpickMaxChance, g.LockpickMinChance, 100);
     g.MaxLevel = std::clamp(g.MaxLevel, 1, 99);
     g.SkillMax = std::clamp(g.SkillMax, 1, 255);
     g.Breaktime = std::max(0, g.Breaktime);

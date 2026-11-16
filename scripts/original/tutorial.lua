@@ -14,14 +14,8 @@ end
 local handlers = {}
 
 -- 00_TutorialGeneratorRoomDoor01.scrb: OnCreate LockDoor(Myself); UseSkill(3 = lockpick) -> SetGlobal("00_Lock_Status", 1)
--- (OnUpdate then unlocks the door). Locked message: "GeneratorRoomDoor01:This Door is Locked".
-handlers["00_TutorialGeneratorRoomDoor01"] = function(c, id)
-    if get_global("00_Lock_Status") == 0 then
-        set_global("00_Lock_Status", 1)
-        set_door_locked(id, false)
-        c:tell("You pick the lock.")
-    end
-end
+-- (OnUpdate then unlocks the door). The engine now owns the lock (Doors.cpp): the door starts locked from GDOR, Security picks it
+-- (or the key opens it), and M.on_unlocked below sets the global like the script's UseSkill did. Locked message: stf 1299.
 
 -- 00_TutorialGenerator01.scrb: DoSkillCheck(101 = repair) -> SetGlobal("00_Generator_Status", 1); " Repairing " + smoking/active VEG.
 -- The vault computer (00_TutorialComputer01) then sets 00_Life_Support_Status; the tutorial task 3231 "Fix the Generator" is closed
@@ -48,6 +42,15 @@ handlers["00_Tutorial_Vault_Door_Console"] = function(c, id)
         end
     end
     set_global("00_Vault_Door_Seen", 1)
+end
+
+-- called by main.lua door_use when somebody picked / key-unlocked an object: the picked object's original script decides what that means
+function M.on_unlocked(c, obj_id)
+    for _, o in ipairs(get_map(c.map_id):objects()) do
+        if o.id == obj_id and (o.script or ""):gsub("%.amx$", "") == "00_TutorialGeneratorRoomDoor01" then
+            if get_global("00_Lock_Status") == 0 then set_global("00_Lock_Status", 1) end
+        end
+    end
 end
 
 function M.on_use(c, obj_id, proto_key, script)

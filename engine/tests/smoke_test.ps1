@@ -69,6 +69,27 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
         Get-Content $log3 | Select-Object -Last 12
         if ($code -ne 0) { $exit = $code; break }
     }
+
+    # ---- 4. doors/containers: state transitions, locked doors block pathing, lockpick, persistence across a server restart
+    $dstate = Join-Path $env:TEMP "f3_door_state.txt"
+    $dsaves = Join-Path $env:TEMP ("f3_smoke_door_saves_" + $PID)
+    if (Test-Path $dsaves) { Remove-Item -Recurse -Force $dsaves }
+    foreach ($phase in 1, 2) {
+        $log4 = Join-Path $env:TEMP "f3_server_smoke_doors$phase.log"
+        $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 3) --data `"$DataDir`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$dsaves`" --run-seconds 90" `
+            -RedirectStandardOutput $log4 -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
+        try {
+            Start-Sleep -Milliseconds 2500
+            & $gametest --port ($Port + 3) --doors $phase --state $dstate
+            $code = $LASTEXITCODE
+        } finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+        }
+        Write-Host "---- server log (doors, phase $phase) ----"
+        Get-Content $log4 | Select-Object -Last 8
+        if ($code -ne 0) { $exit = $code; break }
+    }
+    if (Test-Path $dsaves) { Remove-Item -Recurse -Force $dsaves }
 } else {
     Write-Host "gamedata/server not found: real-data test skipped (see docs/server-data.md)"
 }

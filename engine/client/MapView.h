@@ -29,7 +29,10 @@ struct MapEntityInstance {
     Matrix transform{};
     const Texture2D* skin = nullptr;
     gd::MapEntity src;
-    bool hidden = false;   // a door without skeleton / open animation is hidden while open
+    // doors without a skeleton / open clip (Overseer door, generator room, ...): the slab sinks into the floor like the original
+    // Open_In clip does, sink runs 0 (closed) .. 1 (fully below the floor, not drawn)
+    float sink = 0, sinkH = 0;
+    bool isDoor = false;
     // doors with a skeleton: CPU-skinned instance posed with "<model>_Open_In_01" (the door slab drops into the floor); doorT runs
     // 0 (closed) .. clip duration (open), moving towards the server state at the clip's own speed
     std::unique_ptr<SkinnedInstance> rig;
@@ -58,8 +61,12 @@ public:
     // moving critters and loose items are not baked into the scene (doors, containers, static props stay).
     // Must be called before Load.
     void SetNetworkMode(const ProtoDb* protos) { network_ = true; protos_ = protos; }
-    // Hides / shows the door entity nearest to a renderer-space position (door models have no open pose).
-    void SetDoorOpen(const Vector3& worldPos, bool open);
+    // Door entities. FindDoor = index of the DOR entity nearest to a renderer-space position (-1 = none within 2.5 units);
+    // SetDoorState moves it towards open / closed (rigged doors play Open_In_01, others sink into the floor); instant = no animation
+    // (a door that is already open when it comes into view).
+    int FindDoor(const Vector3& worldPos) const;
+    void SetDoorState(int door, bool open, bool instant);
+    float DoorProgress(int door) const;   // 0 closed .. 1 open (animation position), for tests / logging
     void SetRigs(RigLibrary* rigs) { rigs_ = rigs; }   // optional, before Load: skeletal doors
     void Update(float dt);                              // door animation
     // Colour-modulate the baked map entity (door / container / usable) nearest to `worldPos` in the next Draw() only (object highlight).

@@ -91,22 +91,20 @@ function use_skill(c, skill, value, kind, target)
         c:tell(string.format("You treat %s for %d hit points.", who, heal))
         c:give_xp(5)
         return true
-    elseif skill == "Security" and obj and obj.kind == "door" then
-        if not obj.locked then c:tell("The " .. obj.name .. " is not locked."); return true end
-        if math.random(1, 100) > math.max(value, 10) then c:tell("You fail to pick the lock."); return true end
-        set_door_locked(obj.id, false)
-        c:tell("You pick the lock of the " .. obj.name .. ".")
-        c:give_xp(10)
-        return true
-    elseif skill == "Science" and kind == 1 and t ~= c then
-        c:tell(string.format("%s: %d / %d hit points%s.", t.name, t.hp, t.max_hp, t.dead and " (dead)" or ""))
-        return true
     elseif skill == "Outdoorsman" or skill == "Science" or skill == "Mechanics" or skill == "Security" or skill == "Traps" then
         c:tell(string.format("%s (%d%%) on %s: nothing here that needs it yet.", skill, value, obj and ("the " .. obj.name) or who))
         return true
     end
     return false
 end
+
+-- Door / container hooks (engine: Doors.cpp). Lockpicking itself (Security vs lock DC, keys, flags) is done by the engine; these only react.
+-- door_use(c_or_nil, obj_id, result, used_key): result = opened, unlocked_key, closed, locked, no_open, jammed, blocked, vetoed, picked,
+--   pick_failed, pick_impossible, pick_no_kit, pick_not_needed
+function door_use(c, obj_id, result, used_key)
+    if c and (result == "picked" or result == "unlocked_key") then original_tutorial.on_unlocked(c, obj_id) end
+end
+-- lock_changed(obj_id, locked, flags, reason): reason = script, key, pick.   lockpick_chance(c, obj_id, chance) -> number overrides the percent chance.
 
 -- Pip-Boy demo quests
 function on_pickup(c, obj_id, proto_key)
@@ -159,9 +157,17 @@ end
 -- dev: /forcemiss [on|off]: every attack misses (tests NPC aggro on a miss)
 function commands.forcemiss(c, arg) set_force_miss(arg ~= "off"); c:tell("force miss " .. ((arg ~= "off") and "on" or "off")) end
 -- dev helper: /tp x y  (cell coordinates on the current map)
+-- /tp [map name part] x y: with a map name part it also changes the map (e.g. /tp Tutorial_Vault 152 228)
 function commands.tp(c, arg)
-    local x, y = (arg or ""):match("^(%d+)%s+(%d+)")
-    if not x or not c:teleport(c.map_id, tonumber(x), tonumber(y)) then c:tell("usage: /tp x y (walkable cell)") end
+    local name, x, y = (arg or ""):match("^(%S-)%s*(%d+)%s+(%d+)")
+    local mapId = c.map_id
+    if name and name ~= "" then
+        mapId = nil
+        for _, n in ipairs(map_names()) do
+            if n:lower():find(name:lower(), 1, true) then local m = get_map_by_name(n); mapId = m and m.id; break end
+        end
+    end
+    if not x or not mapId or not c:teleport(mapId, tonumber(x), tonumber(y)) then c:tell("usage: /tp [map name part] x y (walkable cell)") end
 end
 -- dev: /glob <name> prints a global; /usescript <original script name> runs the Lua port of that object script's use handler
 function commands.glob(c, arg) c:tell("global " .. tostring(arg) .. " = " .. tostring(get_global(arg or ""))) end
@@ -243,6 +249,56 @@ end
 function commands.spawn(c, arg)
     if not arg or not data_loaded() then c:tell("usage: /spawn Weapons44_Revolver.WEA"); return end
     if spawn_item_proto(c.map_id, arg, c.x + 2, c.y, 1) == 0 then c:tell("unknown prototype: " .. arg) end
+end
+-- doors / containers (engine/server/Doors.cpp). /doors lists the doors and containers within 12 cells with their state;
+-- dev (--dev-kit): /lock <id|near> [locked=0|1] [flags=N] [dc=N] [key=ProtoKey] [open=0|1] changes the lock state (flags: 1 no-open, 2 no-pick, 4 jammed, 8 key-only);
+-- /lockroll 1|0|off forces lockpick rolls; /saveworld writes the door / container state now; /give <proto key> adds an item to you.
+local function lock_objects_near(c, radius)
+    local out = {}
+    for _, o in ipairs(get_map(c.map_id):objects()) do
+        if (o.kind == "door" or o.kind == "container") then
+            local d = math.max(math.abs(o.x - c.x), math.abs(o.y - c.y))
+            if d <= radius then o.dist = d; out[#out + 1] = o end
+        end
+    end
+    table.sort(out, function(a, b) return a.dist < b.dist end)
+    return out
+end
+function commands.doors(c)
+    local list = lock_objects_near(c, 12)
+    if #list == 0 then c:tell("no doors or containers within 12 cells"); return end
+    for i = 1, math.min(#list, 8) do
+        local o = list[i]
+        c:tell(string.format("%d %s %s [%s] flags=%d dc=%d key=%s dist=%d", o.id, o.kind, o.name, o.state, o.flags, o.lock_dc, o.key == "" and "-" or o.key, o.dist))
+    end
+end
+function commands.lock(c, arg)
+    if not dev_kit() then c:tell("lock needs a --dev-kit server"); return end
+    local who, rest = (arg or ""):match("^(%S+)%s*(.*)$")
+    if not who then c:tell("usage: /lock <id|near> [locked=0|1] [flags=N] [dc=N] [key=X] [open=0|1]"); return end
+    local id = tonumber(who)
+    if not id then local l = lock_objects_near(c, 12); id = l[1] and l[1].id end
+    if not id or not get_lock(id) then c:tell("no such door / container"); return end
+    local t = {}
+    for k, v in rest:gmatch("(%w+)=(%S+)") do
+        if k == "locked" or k == "open" then t[k] = (v == "1") elseif k == "key" then t[k] = v else t[k] = tonumber(v) end
+    end
+    set_lock(id, t)
+    local l = get_lock(id)
+    c:tell(string.format("%d is now %s flags=%d dc=%d key=%s", id, l.state, l.flags, l.dc, l.key == "" and "-" or l.key))
+end
+function commands.lockroll(c, arg)
+    if not dev_kit() then c:tell("lockroll needs a --dev-kit server"); return end
+    set_lock_roll(arg == "1" and 1 or arg == "0" and 0 or -1)
+    c:tell("lockpick rolls: " .. (arg == "1" and "always succeed" or arg == "0" and "always fail" or "random"))
+end
+function commands.saveworld(c)
+    if not dev_kit() then c:tell("saveworld needs a --dev-kit server"); return end
+    save_world(); c:tell("world state saved")
+end
+function commands.give(c, arg)
+    if not dev_kit() then c:tell("give needs a --dev-kit server"); return end
+    if not arg or c:give(arg, 1) == 0 then c:tell("unknown prototype: " .. tostring(arg)) else c:tell("given " .. arg) end
 end
 commands["reload-info"] = function(c)
     c:tell("Admins can type 'reload' in the server console to hot-reload scripts.")

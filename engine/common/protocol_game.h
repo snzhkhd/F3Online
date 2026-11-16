@@ -25,6 +25,7 @@ enum class GMsg : uint8_t {
     C2S_Take = 25,     // container id + inventory entry id (0 = take everything)
     C2S_Examine = 26,  // id + isCritter, answered with a system chat line
     C2S_ReqState = 27, // resend Stats + Inventory
+    C2S_CloseObj = 40, // map object id: the actor closes the container it was looking into (loot window closed)
     C2S_Loot = 38,     // dead critter id (corpse): walk next to it, then open its container window (S2C_Container)
     C2S_Put = 39,      // container / corpse id + isCritter + own inventory entry id: move an item into it
     // server -> client
@@ -192,13 +193,28 @@ struct Container : ItemList {
 enum class ObjectKind : uint8_t { Ground = 0, Door = 1, Container = 2, Usable = 3 };
 
 // Sent after ItemAdd for objects that are not plain ground items, and whenever the state changes.
+// Lock block (backwards compatible: older clients stop after `open`, older servers do not send the tail):
+// locked = 1 while the door / container is locked, flags = LockFlag bits (types.h). State names: Open (open), Closed (!open, !locked), Locked.
 struct ObjectInfo {
     static constexpr GMsg kId = GMsg::S2C_ObjectInfo;
     uint32_t id = 0;
     ObjectKind kind = ObjectKind::Ground;
-    uint8_t open = 0;  // doors: 1 = open
-    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU8(static_cast<uint8_t>(kind)); b.WriteU8(open); }
-    bool Read(ByteBuffer& b) { id = b.ReadU32(); kind = static_cast<ObjectKind>(b.ReadU8()); open = b.ReadU8(); return b.Ok(); }
+    uint8_t open = 0;  // doors / containers: 1 = open
+    uint8_t locked = 0;
+    uint8_t flags = 0;
+    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU8(static_cast<uint8_t>(kind)); b.WriteU8(open); b.WriteU8(locked); b.WriteU8(flags); }
+    bool Read(ByteBuffer& b) {
+        id = b.ReadU32(); kind = static_cast<ObjectKind>(b.ReadU8()); open = b.ReadU8();
+        locked = b.Remaining() >= 2 ? b.ReadU8() : 0;
+        flags = b.Remaining() >= 1 ? b.ReadU8() : 0;
+        return b.Ok();
+    }
+};
+struct CloseObj {
+    static constexpr GMsg kId = GMsg::C2S_CloseObj;
+    uint32_t id = 0;
+    void Write(ByteBuffer& b) const { b.WriteU32(id); }
+    bool Read(ByteBuffer& b) { id = b.ReadU32(); return b.Ok(); }
 };
 
 // --- appearance block -----------------------------------------------------------------------------------------

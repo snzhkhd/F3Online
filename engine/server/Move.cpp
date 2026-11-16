@@ -5,6 +5,7 @@
 // cell it enters (walls, closed doors, other critters, AP cost per cell), so it stays authoritative.
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include "Scripting.h"
 #include "Server.h"
 #include "common/log.h"
@@ -140,11 +141,14 @@ bool Server::StartMove(Critter& c, float tx, float ty, bool run, bool exact) {
     tx = std::clamp(tx, 0.0f, static_cast<float>(m->width) - 0.001f);
     ty = std::clamp(ty, 0.0f, static_cast<float>(m->height) - 0.001f);
     TilePos target{static_cast<int16_t>(std::floor(tx)), static_cast<int16_t>(std::floor(ty))};
-    if (m->IsBlocked(target.x, target.y)) return false;
+    if (m->IsBlocked(target.x, target.y) && !DoorPassable(c, *m, target.y * m->width + target.x)) return false;
     if (run && !rt_.RunOnCombat && NowMs() < c.battleEndMs) run = false;
 
+    // closed doors this critter may operate (unlocked, or it carries the key) do not stop the pathfinder: it opens them on the way
+    // (OpenDoorsAhead); locked, jammed and scenery doors block like walls
+    std::function<bool(int)> doorPass = [&](int cell) { return DoorPassable(c, *m, cell); };
     std::deque<TilePos> cells;
-    if (!FindPath(*m, c.pos, target, cells)) return false;
+    if (!FindPath(*m, c.pos, target, cells, 120000, &doorPass)) return false;
     Critter* occupant = m->CritterAt(target);
     bool occupied = occupant && occupant != &c;
     if (occupied) {
@@ -180,6 +184,7 @@ bool Server::StartMove(Critter& c, float tx, float ty, bool run, bool exact) {
     c.dir = DirFromVec(c.mv.pts[1].x - c.mv.pts[0].x, c.mv.pts[1].y - c.mv.pts[0].y, c.dir);
     m->dirty = true;
     SendMovePath(c);
+    OpenDoorsAhead(c, *m);
     return true;
 }
 
@@ -206,6 +211,9 @@ void Server::AdvanceMove(Critter& c, uint64_t now) {
             float nx = a.x + dx * t, ny = a.y + dy * t;
             int ncx = static_cast<int>(std::floor(nx)), ncy = static_cast<int>(std::floor(ny));
             if (ncx != c.pos.x || ncy != c.pos.y) {
+                // a closed door in the way is operated first (opened when the critter may, else it blocks like a wall)
+                if (m->IsBlocked(ncx, ncy)) OpenDoorAt(c, *m, ncx, ncy, true);
+                if (ncx != c.pos.x && ncy != c.pos.y) { OpenDoorAt(c, *m, ncx, c.pos.y, false); OpenDoorAt(c, *m, c.pos.x, ncy, false); }
                 bool ok = !m->IsBlocked(ncx, ncy);
                 if (ok && ncx != c.pos.x && ncy != c.pos.y && (m->IsBlocked(ncx, c.pos.y) || m->IsBlocked(c.pos.x, ncy))) ok = false;
                 if (ok) {
@@ -222,6 +230,7 @@ void Server::AdvanceMove(Critter& c, uint64_t now) {
                 c.fx = nx; c.fy = ny;
                 m->dirty = true;
                 SendLegacyMove(c, 0);
+                OpenDoorsAhead(c, *m);   // doors a few cells ahead start opening while we walk up to them
                 CheckRegions(c);  // may move the player to another map
                 Critter* cc = world_.GetCritter(id);
                 if (!cc || cc->mapId != m->id) return;  // transferred: Teleport reset the movement

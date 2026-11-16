@@ -37,6 +37,15 @@ inline Dir DirFromDelta(int dx, int dy, Dir fallback = Dir::S) {
     return fallback;
 }
 
+// Lock flags of doors and containers (Item::lockFlags, ObjectInfo.flags). Original GDOR / GCON only carry locked, key and lock DC;
+// the flags are F3Online additions (docs/research/doors.md).
+enum LockFlag : uint8_t {
+    kLockNoOpen = 1,    // scenery: cannot be opened at all (not even with a key or by picking)
+    kLockNoPick = 2,    // the lock cannot be picked (Security skill) but a key / script still opens it
+    kLockJammed = 4,    // stuck: refuses to open until a script clears the flag
+    kLockKeyOnly = 8,   // a key is required: implies NoPick
+};
+
 enum class CritterKind : uint8_t { Player = 0, Npc = 1 };
 
 }  // namespace f3

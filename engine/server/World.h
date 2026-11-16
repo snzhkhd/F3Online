@@ -1,6 +1,7 @@
 #pragma once
 // Server-side data model: Item, Critter, Map, World. No networking, no scripting.
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -33,11 +34,15 @@ struct Item {
     TilePos pos;
     ObjKind kind = ObjKind::Ground;
     uint16_t count = 1;
-    bool open = false;                 // doors: model open (animation / script state)
-    bool locked = false;               // doors: closed AND locked blocks the footprint cells; unlocked doors open by themselves
-    uint64_t nearTick = 0;             // doors: last tick a critter was close (auto close timer)
+    // Door / container state (Doors.cpp). States: Open (open), Closed (!open && !locked), Locked (!open && locked).
+    // A closed door blocks its footprint cells (pathing, movement, line of sight); critters that may operate it open it on the way.
+    bool open = false;
+    bool locked = false;               // locked: opens with the key (or a pick / script), keeps `open` false
+    uint8_t lockFlags = 0;             // LockFlag bits (types.h)
+    int lockDC = 0;                    // lock difficulty (original GDOR / GCON v1 lockDC); 0 = GameConfig::LockDefaultDC
+    std::string keyId;                 // key item: prototype key without extension ("KeysTest") or full key; empty = no key
     std::vector<InvItem> contents;     // containers
-    std::vector<TilePos> footprint;    // doors: the 0x1b doorway cells of the grid (blocked only while closed and locked)
+    std::vector<TilePos> footprint;    // doors: the 0x1b doorway cells of the grid (blocked while the door is closed)
     std::string script;                // original AMX script name (informational / AMX host)
 };
 
@@ -168,6 +173,7 @@ struct Map {
     std::vector<Critter*> critters;
     std::unordered_map<ItemId, Item> items;
     bool dirty = true;  // visibility needs recompute
+    bool objDirty = false;  // door / container state changed since the last world-state save (Doors.cpp)
 
     bool InBounds(int x, int y) const { return x >= 0 && y >= 0 && x < width && y < height; }
     bool IsBlocked(int x, int y) const { return !InBounds(x, y) || blocked[static_cast<size_t>(y) * width + x] != 0; }
@@ -203,6 +209,8 @@ private:
 
 // A* on the 8-connected grid; diagonal steps may not cut blocked corners. Critters are
 // ignored (they are handled at step time). Returns false if unreachable or too far.
-bool FindPath(const Map& map, TilePos from, TilePos to, std::deque<TilePos>& out, int maxNodes = 120000);
+// `passable(cellIndex)` (optional) lets blocked cells through, used for closed doors the walker may open (cell index = y * width + x).
+bool FindPath(const Map& map, TilePos from, TilePos to, std::deque<TilePos>& out, int maxNodes = 120000,
+              const std::function<bool(int)>* passable = nullptr);
 
 }  // namespace f3

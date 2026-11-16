@@ -44,6 +44,13 @@ struct GameConfig {
     // fog of war / visibility: a player sees (and is sent) critters, items and speech within ViewBase + ViewPerPerception * Perception cells
     // (Euclidean, 1 cell = 0.5 world unit); the same radius goes to the client in MapInfo for the fog edge. Default PE 5 -> 48 cells.
     int ViewBase = 28, ViewPerPerception = 4;
+    // doors / containers (Doors.cpp): lockpicking = Security skill against the lock DC
+    int LockDefaultDC = 0;                    // DC of locks whose data has none (the original GDOR / GCON lockDC is 0 everywhere)
+    int LockpickMinChance = 5, LockpickMaxChance = 95;   // percent bounds of skill - DC
+    int LockpickNeedsKit = 0;                 // 1: a Security Kit item is required to pick (original skill text: "requires lockpicks")
+    int LockpickXp = 10;                      // xp for a picked lock
+    int ForceLockRoll = -1;                   // dev/test: 1 = every pick succeeds, 0 = every pick fails, -1 = random
+    int DoorOpenRange = 3;                    // cells from the door (nearest doorway cell) to operate it / open a container
     int KillXpBase = 30, KillXpPerHp = 8;              // xp for killing an NPC unless XpByProto has its prototype
     std::map<std::string, int> XpByProto;
 };

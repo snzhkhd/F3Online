@@ -34,7 +34,9 @@ public:
     // regression tests are not disturbed by the scripted NPCs of the start map (the tutorial insurgents hunt players from the first second).
     void SetAttacksEnabled(bool on) { attacksEnabled_ = on; }
     bool IsIdle(CritterId id) const;                        // action queue empty
-    void CallObject(ItemId id, const char* pub);   // runs a public (OnOpen / OnClose) of a map object script, if it has one
+    // Runs a public (OnOpen / OnClose) of a map object script, if it has one, with the actor handle. Returns false only when the script ran
+    // and returned 0 (the original vetoes the open / close then, GameDoor::Operate); no script / error = true.
+    bool CallObject(ItemId id, const char* pub, CritterId actor = 0);
     size_t Count() const { return instances_.size(); }
     // dev/test helper (Lua amx_native, chat /amxnative on a --dev-kit server): call natives by name from a tiny expression language,
     // see AmxSpatial.cpp (NativeTest). Returns a one-line result.

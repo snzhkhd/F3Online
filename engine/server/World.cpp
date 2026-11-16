@@ -97,10 +97,11 @@ Critter* World::FindPlayerByName(const std::string& name) {
 
 void World::DestroyCritter(CritterId id) { critters_.erase(id); }
 
-bool FindPath(const Map& map, TilePos from, TilePos to, std::deque<TilePos>& out, int maxNodes) {
+bool FindPath(const Map& map, TilePos from, TilePos to, std::deque<TilePos>& out, int maxNodes, const std::function<bool(int)>* passable) {
     out.clear();
     if (from == to) return true;
-    if (map.IsBlocked(to.x, to.y) || map.IsBlocked(from.x, from.y)) return false;
+    auto blocked = [&](int x, int y) { return map.IsBlocked(x, y) && !(passable && map.InBounds(x, y) && (*passable)(y * map.width + x)); };
+    if (blocked(to.x, to.y) || blocked(from.x, from.y)) return false;
 
     const int W = map.width;
     auto idx = [W](int x, int y) { return y * W + x; };
@@ -139,9 +140,9 @@ bool FindPath(const Map& map, TilePos from, TilePos to, std::deque<TilePos>& out
         int cx = n.i % W, cy = n.i / W;
         for (int d = 0; d < 8; ++d) {
             int nx = cx + kDirDx[d], ny = cy + kDirDy[d];
-            if (map.IsBlocked(nx, ny)) continue;
+            if (blocked(nx, ny)) continue;
             bool diag = kDirDx[d] != 0 && kDirDy[d] != 0;
-            if (diag && (map.IsBlocked(cx + kDirDx[d], cy) || map.IsBlocked(cx, cy + kDirDy[d]))) continue;
+            if (diag && (blocked(cx + kDirDx[d], cy) || blocked(cx, cy + kDirDy[d]))) continue;
             int ni = idx(nx, ny);
             if (closedStamp[ni] == gen) continue;
             float ng = G(n.i) + (diag ? 1.41421356f : 1.0f);
