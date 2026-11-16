@@ -77,17 +77,17 @@ bool Server::CreateCharacter(Critter& c, const gnet::CharCreate& m) {
     if (c.created || !c.IsPlayer()) return false;
     int sum = 0;
     for (int i = 0; i < 7; i++) {
-        if (m.special[i] < rt_.SpecialMin || m.special[i] > rt_.SpecialMax) { Tell(c, "Character creation: SPECIAL values must be between " + std::to_string(rt_.SpecialMin) + " and " + std::to_string(rt_.SpecialMax) + "."); return false; }
+        if (m.special[i] < rt_.SpecialMin || m.special[i] > rt_.SpecialMax) { TellK(c, "msg.create.special_range", {{"min", rt_.SpecialMin}, {"max", rt_.SpecialMax}}); return false; }
         sum += m.special[i];
     }
     const int total = 7 * rt_.SpecialBase + rt_.CharPoints;
-    if (sum != total) { Tell(c, "Character creation: distribute exactly " + std::to_string(total) + " SPECIAL points (you used " + std::to_string(sum) + ")."); return false; }
-    if (m.tagMask >> kSkillCount) { Tell(c, "Character creation: invalid tag skills."); return false; }
-    if (static_cast<int>(std::bitset<16>(m.tagMask).count()) != rt_.TagCount) { Tell(c, "Character creation: choose exactly " + std::to_string(rt_.TagCount) + " tag skills."); return false; }
-    if (static_cast<int>(std::bitset<16>(m.traitMask).count()) > TraitMaxEff()) { Tell(c, "Character creation: choose at most " + std::to_string(TraitMaxEff()) + " traits."); return false; }
+    if (sum != total) { TellK(c, "msg.create.special_sum", {{"total", total}, {"used", sum}}); return false; }
+    if (m.tagMask >> kSkillCount) { TellK(c, "msg.create.bad_tags"); return false; }
+    if (static_cast<int>(std::bitset<16>(m.tagMask).count()) != rt_.TagCount) { TellK(c, "msg.create.tag_count", {{"n", rt_.TagCount}}); return false; }
+    if (static_cast<int>(std::bitset<16>(m.traitMask).count()) > TraitMaxEff()) { TellK(c, "msg.create.trait_max", {{"n", TraitMaxEff()}}); return false; }
     if (!content_.traits.empty())   // with a trait list from data/traits only those can be chosen
         for (int i = 0; i < 16; ++i)
-            if (((m.traitMask >> i) & 1u) && !content_.TraitByIndex(i)) { Tell(c, "Character creation: unknown trait."); return false; }
+            if (((m.traitMask >> i) & 1u) && !content_.TraitByIndex(i)) { TellK(c, "msg.create.unknown_trait"); return false; }
     for (int i = 0; i < 7; i++) c.special[i] = m.special[i];
     c.tagMask = m.tagMask;
     c.traitMask = m.traitMask;
@@ -111,7 +111,7 @@ bool Server::CreateCharacter(Critter& c, const gnet::CharCreate& m) {
     if (!cc || cc->mapId == 0) return true;   // vetoed / failed: the session is gone
     SendCritterState(*cc);
     SendWaitState(*cc);
-    Tell(*cc, "Character created. Welcome to the wasteland!");
+    TellK(*cc, "msg.created");
     SavePlayer(*cc);
     Audit("character_created", cc->name, {{"level", cc->level}, {"account", cc->account}});
     return true;
@@ -133,26 +133,26 @@ bool Server::SpendSkillPoints(Critter& c, int skill, int points) {
 
 bool Server::UseSkill(Critter& c, int skill, int kind, uint32_t target) {
     if (!c.created || c.dead || skill < 0 || skill >= kSkillCount) return false;
-    if (!IsUsableSkill(skill)) { Tell(c, std::string(kSkillNames[skill]) + " is a passive skill."); return false; }
+    if (!IsUsableSkill(skill)) { TellK(c, "msg.skill.passive", {{"skill", SkillName(c, skill)}}); return false; }
     // the target is checked before anything is spent: kind 0 = self, 1 = another critter, 2 = map object (door, container, item);
     // it must be on the same map and within SkillUseRange tiles
-    if (kind < 0 || kind > 2) { Tell(c, "Invalid skill target."); return false; }
+    if (kind < 0 || kind > 2) { TellK(c, "msg.skill.bad_target"); return false; }
     if (kind == 1 && (target == 0 || target == c.id)) kind = 0;
     if (kind == 0) target = 0;
     if (kind != 0) {
         TilePos at{};
         if (kind == 1) {
             const Critter* t = world_.GetCritter(static_cast<CritterId>(target));
-            if (!t || t->mapId != c.mapId || t->mapId == 0) { Tell(c, "That target is not here."); return false; }
+            if (!t || t->mapId != c.mapId || t->mapId == 0) { TellK(c, "msg.skill.no_target"); return false; }
             at = t->pos;
         } else {
             Map* m = world_.GetMap(c.mapId);
             if (!m) return false;
             auto it = m->items.find(static_cast<ItemId>(target));
-            if (it == m->items.end()) { Tell(c, "That object is not here."); return false; }
+            if (it == m->items.end()) { TellK(c, "msg.skill.no_object"); return false; }
             at = it->second.pos;
         }
-        if (TileDist(at, c.pos) > rt_.SkillUseRange) { Tell(c, "You are too far away."); return false; }
+        if (TileDist(at, c.pos) > rt_.SkillUseRange) { TellK(c, "msg.too_far"); return false; }
     }
     const int cost = rt_.RtApCostUseSkill * 100;   // whole AP like FOnline (the other RtApCost* keys are 1/100 AP)
     const uint8_t action = static_cast<uint8_t>(GMsgChar::C2S_UseSkill);
@@ -167,7 +167,7 @@ bool Server::UseSkill(Critter& c, int skill, int kind, uint32_t target) {
     if (!scripting_) return true;
     // hook: use_skill(cr, skill_name, skill_value, kind, target_id) -> true when handled
     const bool handled = scripting_->CallHandled("use_skill", &c, std::string(kSkillNames[skill]), SkillValue(c, skill), kind, static_cast<int>(target));
-    if (!handled) Tell(c, std::string("You cannot use ") + kSkillNames[skill] + " like that.");
+    if (!handled) TellK(c, "msg.skill.cant_use", {{"skill", SkillName(c, skill)}});
     return true;
 }
 
@@ -186,7 +186,7 @@ void Server::AddXp(Critter& c, int amount) {
     if (!c.IsPlayer() || !c.created || amount <= 0) return;
     if (const int pct = Mod(c, StXpGain)) amount = std::max(1, amount * (100 + pct) / 100);
     c.xp += amount;
-    Tell(c, "You gain " + std::to_string(amount) + " experience points.");
+    TellK(c, "msg.xp_gain", {{"n", amount}});
     bool leveled = false;
     while (c.level < rt_.MaxLevel && c.xp >= XpForLevel(c.level + 1)) {
         const int oldMax = c.maxHp;
@@ -195,9 +195,9 @@ void Server::AddXp(Critter& c, int amount) {
         c.hp = std::min(c.maxHp, c.hp + (c.maxHp - oldMax));
         const int sp = SkillRate(c);
         c.skillPoints += sp;
-        std::string msg = "Level up! You are now level " + std::to_string(c.level) + ": +" + std::to_string(sp) + " skill points";
-        if (rt_.PerkRate > 0 && c.level % rt_.PerkRate == 0) { ++c.perkPoints; msg += ", +1 perk point (/perks)"; }
-        Tell(c, msg + ".");
+        const bool perk = rt_.PerkRate > 0 && c.level % rt_.PerkRate == 0;
+        if (perk) ++c.perkPoints;
+        TellK(c, perk ? "msg.level_up_perk" : "msg.level_up", {{"level", c.level}, {"points", sp}});
         leveled = true;
         if (!c.account.empty()) Audit("level_up", c.name, {{"level", c.level}, {"xp", c.xp}});
         if (scripting_) scripting_->Call("on_levelup", &c, c.level);

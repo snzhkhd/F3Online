@@ -1,4 +1,5 @@
 #include "Store.h"
+#include "common/utf8.h"
 #include <algorithm>
 #include <cctype>
 #include <ctime>
@@ -116,10 +117,7 @@ const std::vector<DbMigration>& StoreMigrations() {
 
 namespace {
 
-std::string Lower(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-}
+std::string Lower(const std::string& s) { return utf8::Lower(s); }
 std::string JStr(const json& j, const char* k, const std::string& def = std::string()) {
     auto it = j.find(k);
     return it != j.end() && it->is_string() ? it->get<std::string>() : def;

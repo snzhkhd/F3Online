@@ -15,6 +15,7 @@
 #include "DataStore.h"
 #include "GameConfig.h"
 #include "World.h"
+#include "common/Localization.h"
 #include "common/buffer.h"
 #include "common/protocol.h"
 #include "common/protocol_game.h"
@@ -46,6 +47,8 @@ public:
         std::filesystem::path contentDir;   // data/ (designer JSON, docs/data-format.md); empty = auto-detect, none found = built-in defaults
         bool lenient = false;               // --lenient: data validation errors are warnings (the bad records are dropped)
         bool devCommands = false;           // --dev-commands (implied by --dev-kit): /reload and friends from player chat
+        std::string lang = "en";            // --lang: language of system messages for players that did not announce one (and of the console)
+        std::filesystem::path localeDir;    // data/locale; empty = <content dir>/locale, else the nearest data/locale
     };
 
     explicit Server(Config cfg);
@@ -145,6 +148,12 @@ public:
     const ContentDb& Content() const { return content_; }
     bool LoadContent();                                   // startup: strict (fails on errors unless --lenient); applies items / npcs to the prototypes
     std::vector<std::string> ReloadContent();             // /reload: re-reads data/, applies on success, returns the report lines
+    std::string PerkName(const Critter& c, const PerkDef& p) const;     // localized (see LOr): perk.<id>.name / .desc, trait.<id>.name / .desc, quest.<id>.title / .text
+    std::string PerkDesc(const Critter& c, const PerkDef& p) const;
+    std::string TraitName(const Critter& c, const TraitDef& t) const;
+    std::string TraitDesc(const Critter& c, const TraitDef& t) const;
+    std::string QuestTitle(const Critter& c, const Critter::QuestEntry& q) const;
+    std::string QuestText(const Critter& c, const Critter::QuestEntry& q) const;
     int TraitMaxEff() const;                              // traits allowed at creation: data/traits max_picks, else config.lua TraitMax
     int Mod(const Critter& c, int stat) const;            // sum of the stat modifiers of the critter's traits and perks (StatId / kStatSkillBase + skill)
     int PerkRank(const Critter& c, const std::string& id) const;
@@ -152,6 +161,7 @@ public:
     bool TakePerk(Critter& c, const std::string& id);     // spends a perk point
     bool QuestStart(Critter& c, const std::string& id);   // data/quests record -> Pip-Boy task
     void SendContentDefs(Critter& c);
+    bool LangChat(Critter& c, const std::string& text);      // /lang [code]; true = handled
     bool ContentChat(Critter& c, const std::string& text);   // /perks /perk /traits /reload; true = handled
     void SpawnDataNpcs();                                    // data/npcs "spawns"
     std::string ReloadAll(const std::string& what);          // "data" | "scripts" | "all" -> report text (console and /reload)
@@ -200,6 +210,17 @@ public:
     void Say(Critter& speaker, const std::string& text);  // local chat, heard in view radius
     void Tell(Critter& player, const std::string& text);  // system message to one player
     void Broadcast(const std::string& text);              // system message to all players
+    // ---- localization (Localization.cpp of common, data/locale/<lang>/*.json; docs/localization.md). Messages are localized on the server with the
+    // language each player announced at login (Critter::lang); fallback chain: that language -> en -> the key itself.
+    const loc::Locale& Loc() const { return loc_; }
+    std::string LangOf(const Critter& c) const { return c.IsPlayer() && !c.lang.empty() ? c.lang : cfg_.lang; }
+    std::string L(const Critter& c, const std::string& key, loc::Args args = {}) const { return loc_.Format(LangOf(c), key, args); }
+    std::string LOr(const Critter& c, const std::string& key, const std::string& fallback) const { return loc_.TrOr(LangOf(c), key, fallback); }
+    std::string Stf(const Critter& c, int id) const;     // English.stf text, or its "stf.<id>" override of the player's language
+    std::string SkillName(const Critter& c, int skill) const;   // "skill.<id>.name" (the id is the English name)
+    void TellK(Critter& player, const std::string& key, loc::Args args = {}) { Tell(player, L(player, key, args)); }
+    void BroadcastK(const std::string& key, loc::Args args = {});   // every player in his own language
+    bool LoadLocale();                                    // startup: data/locale; a missing folder only warns (keys are shown instead)
     void SendBuf(Critter& to, const ByteBuffer& b) { Send(to, b); }  // raw message to one player (AMX dialogue engine)
     AmxHost* Amx() { return amx_.get(); }
     void SetDoor(Map& m, Item& door, bool open);
@@ -213,7 +234,8 @@ private:
     void OnDisconnect(struct _ENetPeer* peer);
     void OnAuth(struct _ENetPeer* peer, const gnet::Auth& a);
     // creates + places the player critter; saved = character json of an account (nullptr = guest / fresh)
-    bool StartSession(struct _ENetPeer* peer, const std::string& name, const nlohmann::json* saved, const std::string& account);
+    bool StartSession(struct _ENetPeer* peer, const std::string& name, const nlohmann::json* saved, const std::string& account, const std::string& lang);
+    std::string AnnouncedLang(const std::string& lang) const;   // client's language code, normalized; empty -> server default
     // Places a player on its map (saved position or the start entry), sends MapInfo / Stats / CharSheet / Inventory, runs on_login, saves.
     // Called at the end of StartSession for created characters and from CreateCharacter for a session that was in the "creating" state.
     void EnterWorld(Critter& c, const nlohmann::json* saved);
@@ -286,6 +308,7 @@ private:
     struct MailMsg { uint32_t id = 0; std::string from, text; int64_t time = 0; bool read = false; };
     std::vector<MailMsg> Mailbox(const std::string& accountKey);   // from the store, oldest first
     void DbCommand(const std::string& cmd, std::istringstream& args);   // console: dbinfo | events [n] [kind]
+    loc::Locale loc_;
     std::mutex cmdMutex_;
     std::vector<std::string> commands_;
 };

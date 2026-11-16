@@ -6,6 +6,7 @@
 #include "Scripting.h"
 #include "Server.h"
 #include "common/log.h"
+#include "common/utf8.h"
 
 namespace f3 {
 
@@ -150,15 +151,16 @@ static std::string PeerIp(ENetPeer* peer) {
 
 void Server::OnAuth(ENetPeer* peer, const gnet::Auth& a) {
     using gnet::AuthCode;
+    const std::string lang = AnnouncedLang(a.lang);
     auto reply = [&](AuthCode code, bool isNew = false) {
         gnet::AuthResult r;
         r.code = static_cast<uint8_t>(code);
         r.isNew = isNew;
-        r.text = gnet::AuthCodeText(code);
+        r.text = loc_.TrOr(lang, gnet::AuthCodeKey(code), gnet::AuthCodeText(code));
         SendRaw(peer, gnet::PackG(r));
         if (code != AuthCode::Ok) {
-            log::Info("auth '%s' rejected: %s", a.name.c_str(), r.text.c_str());
-            if (code == AuthCode::BadCredentials || code == AuthCode::RateLimited) Audit("login_failed", a.name.substr(0, 32), {{"ip", PeerIp(peer)}, {"reason", r.text}});
+            log::Info("auth '%s' rejected: %s", a.name.c_str(), gnet::AuthCodeText(code));
+            if (code == AuthCode::BadCredentials || code == AuthCode::RateLimited) Audit("login_failed", utf8::Truncate(a.name, 32), {{"ip", PeerIp(peer)}, {"reason", gnet::AuthCodeText(code)}});
             enet_peer_disconnect_later(peer, 0);
         }
     };
@@ -193,14 +195,14 @@ void Server::OnAuth(ENetPeer* peer, const gnet::Auth& a) {
         Audit("kick", name, {{"reason", "duplicate login"}, {"ip", ip}});
         if (old->peer) {
             ENetPeer* op = old->peer;
-            SendRaw(op, net::Pack(net::LoginFail{"logged in from another location"}));
+            SendRaw(op, net::Pack(net::LoginFail{L(*old, "auth.other_location")}));
             OnDisconnect(op);   // saves, removes the critter
             enet_peer_disconnect_later(op, 0);
         }
     }
     reply(AuthCode::Ok, isNew);
     Audit(isNew ? "register" : "login", name, {{"ip", ip}});
-    if (!StartSession(peer, name, &ch, name)) {
+    if (!StartSession(peer, name, &ch, name, lang)) {
         enet_peer_disconnect_later(peer, 0);
     }
 }

@@ -20,6 +20,24 @@ static bool SafeRelPath(const std::string& rel) {
     return true;
 }
 
+// Lua tr(): {name = value} table -> placeholders; numbers print as integers when they are whole.
+static std::string LuaTr(Server& S, const Critter& c, const std::string& key, const sol::optional<sol::table>& args) {
+    loc::ArgList list;
+    if (args)
+        for (const auto& kv : *args) {
+            if (!kv.first.is<std::string>()) continue;
+            const std::string k = kv.first.as<std::string>();
+            std::string v;
+            if (kv.second.is<std::string>()) v = kv.second.as<std::string>();
+            else if (kv.second.is<double>()) {
+                const double d = kv.second.as<double>();
+                v = d == static_cast<long long>(d) ? std::to_string(static_cast<long long>(d)) : std::to_string(d);
+            } else continue;
+            list.emplace_back(k.c_str(), v);
+        }
+    return S.Loc().FormatList(S.LangOf(c), key, list);
+}
+
 void Scripting::BindApi(sol::state& L) {
     Server& S = server_;
     World& W = S.GetWorld();
@@ -126,6 +144,8 @@ void Scripting::BindApi(sol::state& L) {
         "teleport", [&S](Critter& c, int map, int x, int y) { return S.Teleport(c, (MapId)map, TilePos{(int16_t)x, (int16_t)y}); },
         "say", [&S](Critter& c, const std::string& t) { S.Say(c, t); },
         "tell", [&S](Critter& c, const std::string& t) { S.Tell(c, t); },
+        "tell_key", [&S](Critter& c, const std::string& key, sol::optional<sol::table> args) { S.Tell(c, LuaTr(S, c, key, args)); },
+        "lang", [&S](Critter& c) { return S.LangOf(c); },
         "distance_to", [](Critter& c, Critter& o) { return c.mapId == o.mapId ? TileDist(c.pos, o.pos) : 9999; },
         "get_var", [](Critter& c, const std::string& k) { auto it = c.vars.find(k); return it == c.vars.end() ? 0.0 : it->second; },
         "set_var", [](Critter& c, const std::string& k, double v) { c.vars[k] = v; },
@@ -274,6 +294,7 @@ void Scripting::BindApi(sol::state& L) {
     L["amx_native"] = [&S](int owner, const std::string& program) -> std::string { return S.Amx() ? S.Amx()->NativeTest(static_cast<CritterId>(owner), program) : std::string("amx not available"); };
     L["amx_attacks"] = [&S](bool on) { if (S.Amx()) S.Amx()->SetAttacksEnabled(on); };   // dev / test only
     L["stf"] = [&S](int id) { return S.Data().String(id); };   // English.stf text by id
+    L["stf_for"] = [&S](Critter& c, int id) { return S.Stf(c, id); };   // same, with the "stf.<id>" override of the critter's language
     L["set_door_locked"] = [&S](int objId, bool locked) { Item* d = S.FindObject((ItemId)objId); if (!d || (d->kind != ObjKind::Door && d->kind != ObjKind::Container)) return false; S.SetDoorLocked(*d, locked); return true; };
     L["set_door_open"] = [&S](int objId, bool open) {
         Map* m = nullptr; Item* d = S.FindObject((ItemId)objId, &m);
@@ -326,6 +347,14 @@ void Scripting::BindApi(sol::state& L) {
     L["say"] = [&S](Critter& c, const std::string& t) { S.Say(c, t); };
     L["tell"] = [&S](Critter& c, const std::string& t) { S.Tell(c, t); };
     L["broadcast"] = [&S](const std::string& t) { S.Broadcast(t); };
+    // localization (data/locale): tr(critter, "key", {name = value, ...}) -> text in the player's language; broadcast_key sends it to everybody in their own language;
+    // skill_name(critter, "Medic") -> localized skill name (the id is the English name)
+    L["tr"] = [&S](Critter& c, const std::string& key, sol::optional<sol::table> args) { return LuaTr(S, c, key, args); };
+    L["skill_name"] = [&S](Critter& c, const std::string& id) { return S.LOr(c, "skill." + id + ".name", id); };
+    L["broadcast_key"] = [&S](const std::string& key, sol::optional<sol::table> args) {
+        for (auto& [id, c] : S.GetWorld().Critters())
+            if (c->IsPlayer() && c->mapId != 0) S.Tell(*c, LuaTr(S, *c, key, args));
+    };
 
     // Sandboxed replacement for dofile: paths are relative to the scripts directory.
     L["load_script"] = [this](sol::this_state ts, const std::string& rel) -> sol::object {

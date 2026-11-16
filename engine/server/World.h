@@ -128,6 +128,7 @@ struct Critter {
     std::vector<std::string> friends;
 
     // ---- account / character progression (Persist.cpp, Character.cpp)
+    std::string lang = "en";    // players: UI language the client announced at login (server messages are localized with it)
     std::string account;        // account name when logged in with an account (empty = guest, nothing is saved)
     int xp = 0;
     int skillPoints = 0;        // unspent skill points

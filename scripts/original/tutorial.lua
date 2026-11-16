@@ -7,8 +7,8 @@ local M = {}
 
 local function task_done(c, task, entry)      -- CloseTask(task) + AddEntry(task, entry)
     c:set_gvar("Task" .. task, 2)   -- journal state is per player (the world state below stays shared)
-    c:tell("Task completed: " .. stf(task))
-    if entry then c:set_gvar("TaskEntry" .. task, entry); c:tell("Journal: " .. stf(entry)) end
+    c:tell_key("msg.task.completed", {text = stf_for(c, task)})
+    if entry then c:set_gvar("TaskEntry" .. task, entry); c:tell_key("msg.task.journal", {text = stf_for(c, entry)}) end
 end
 
 local handlers = {}
@@ -21,16 +21,16 @@ local handlers = {}
 -- The vault computer (00_TutorialComputer01) then sets 00_Life_Support_Status; the tutorial task 3231 "Fix the Generator" is closed
 -- (entry 3237).
 handlers["00_TutorialGenerator01"] = function(c, id)
-    if get_global("00_Generator_Status") ~= 0 then c:tell("The generator is running."); return end
+    if get_global("00_Generator_Status") ~= 0 then c:tell_key("lua.generator_running"); return end
     set_global("00_Generator_Status", 1)
     set_global("00_Life_Support_Status", 1)
-    c:tell(" Repairing ")
+    c:tell_key("lua.repairing")
     task_done(c, 3231, 3237)
 end
 
 -- 00_TutorialComputer01.scrb: receives the generator message, sets 00_Life_Support_Status, enables map effect "Life_SupportEffects".
 handlers["00_TutorialComputer01"] = function(c, id)
-    c:tell(get_global("00_Life_Support_Status") ~= 0 and "Life support: online." or "Life support: offline (low power).")
+    c:tell_key(get_global("00_Life_Support_Status") ~= 0 and "lua.life_support_on" or "lua.life_support_off")
 end
 
 -- 00_Tutorial_Vault_Door_Console.scrb (Junktown): opens the vault entrance doors "Outer_EntranceDS_Doors_000".

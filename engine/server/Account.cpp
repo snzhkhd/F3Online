@@ -7,6 +7,7 @@
 #include <fstream>
 #include <random>
 #include "common/log.h"
+#include "common/utf8.h"
 
 namespace f3 {
 namespace crypto {
@@ -170,17 +171,11 @@ void AccountStore::Init(Store* store, int iterations) {
     iter_ = std::max(1000, iterations);
 }
 
-bool AccountStore::ValidName(const std::string& n) {
-    if (n.size() < 2 || n.size() > 16) return false;
-    for (char c : n) if (!(std::isalnum((unsigned char)c) || c == '_')) return false;
-    return true;
-}
+// 2..16 code points: Latin or Cyrillic letters, digits, '_' (UTF-8)
+bool AccountStore::ValidName(const std::string& n) { return utf8::ValidName(n, 2, 16); }
 
-std::string AccountStore::Key(const std::string& name) {
-    std::string k = name;
-    for (char& c : k) c = (char)std::tolower((unsigned char)c);
-    return k;
-}
+// case-insensitive account key (Latin and Cyrillic folded)
+std::string AccountStore::Key(const std::string& name) { return utf8::Lower(name); }
 
 bool AccountStore::Exists(const std::string& name) { return Ready() && ValidName(name) && store_->AccountExists(Key(name)); }
 

@@ -185,21 +185,21 @@ void Server::ReportOperate(Critter* actor, const Item& o, OperateResult r) {
     if (actor && actor->IsPlayer()) {
         std::string name = o.name;
         if (const Proto* p = data_.GetProto(o.pid)) name = p->ReadableName();
-        auto stf = [&](int id, const std::string& fallback) { std::string t = data_.String(id); return t.empty() ? fallback : t; };
+        auto stf = [&](int id, const char* key) { std::string t = Stf(*actor, id); return t.empty() ? L(*actor, key) : t; };
         switch (r) {
             case OperateResult::Locked:
-                Tell(*actor, o.kind == ObjKind::Door ? stf(1299, "The door is locked.") : "The " + name + " is locked.");
+                Tell(*actor, o.kind == ObjKind::Door ? stf(1299, "msg.door.locked_door") : L(*actor, "msg.door.locked", {{"name", name}}));
                 break;
-            case OperateResult::NoOpen: Tell(*actor, "The " + name + " cannot be opened."); break;
-            case OperateResult::Jammed: Tell(*actor, "The " + name + " is jammed."); break;
-            case OperateResult::Blocked: Tell(*actor, "Something is in the way."); break;
+            case OperateResult::NoOpen: TellK(*actor, "msg.door.no_open", {{"name", name}}); break;
+            case OperateResult::Jammed: TellK(*actor, "msg.door.jammed", {{"name", name}}); break;
+            case OperateResult::Blocked: TellK(*actor, "msg.blocked"); break;
             case OperateResult::OpenedWithKey: {
-                std::string kn = "right";
+                std::string kn = L(*actor, "msg.door.key_default");
                 HasKey(*actor, o, &kn);
-                std::string fmt = stf(1358, "You opened the door with the %s key.");
+                std::string fmt = stf(1358, "msg.door.opened_key");
                 char buf[256];
                 std::snprintf(buf, sizeof buf, fmt.c_str(), kn.c_str());
-                Tell(*actor, o.kind == ObjKind::Door ? std::string(buf) : "You unlock the " + name + " with the " + kn + " key.");
+                Tell(*actor, o.kind == ObjKind::Door ? std::string(buf) : L(*actor, "msg.door.unlocked_key", {{"name", name}, {"key", kn}}));
                 break;
             }
             default: break;
@@ -315,15 +315,15 @@ bool Server::Lockpick(Critter& c, Item& o) {
     if (const Proto* p = data_.GetProto(o.pid)) name = p->ReadableName();
     auto say = [&](const std::string& t) { Tell(c, t); };
     auto note = [&](const char* result) { if (scripting_) scripting_->Call("door_use", &c, static_cast<int>(o.id), std::string(result), false); };
-    if (o.open) { say("The " + name + " is open."); note("pick_not_needed"); return true; }
-    if (!o.locked) { say("The " + name + " is not locked."); note("pick_not_needed"); return true; }
-    if (o.lockFlags & kLockNoOpen) { say("The " + name + " cannot be opened."); note("no_open"); return true; }
-    if (o.lockFlags & (kLockNoPick | kLockKeyOnly)) { say("This lock cannot be picked."); note("pick_impossible"); return true; }
+    if (o.open) { say(L(c, "msg.pick.open", {{"name", name}})); note("pick_not_needed"); return true; }
+    if (!o.locked) { say(L(c, "msg.pick.not_locked", {{"name", name}})); note("pick_not_needed"); return true; }
+    if (o.lockFlags & kLockNoOpen) { say(L(c, "msg.door.no_open", {{"name", name}})); note("no_open"); return true; }
+    if (o.lockFlags & (kLockNoPick | kLockKeyOnly)) { say(L(c, "msg.pick.impossible")); note("pick_impossible"); return true; }
     if (rt_.LockpickNeedsKit) {
         bool kit = false;
         for (const InvItem& it : c.inventory)
             if (const Proto* p = data_.GetProto(it.pid); p && Lower(p->key).find("security_kit") != std::string::npos) kit = true;
-        if (!kit) { say("You need a Security Kit to pick locks."); note("pick_no_kit"); return true; }
+        if (!kit) { say(L(c, "msg.pick.need_kit")); note("pick_no_kit"); return true; }
     }
     int dc = 0;
     int chance = LockChance(c, o, &dc);
@@ -334,12 +334,12 @@ bool Server::Lockpick(Critter& c, Item& o) {
     if (roll <= chance) {
         o.locked = false;
         LockChanged(o, "pick");
-        std::string msg = o.kind == ObjKind::Door ? data_.String(672) : std::string();
-        say(msg.empty() ? "You successfully unlock the " + name + "." : msg);
+        std::string msg = o.kind == ObjKind::Door ? Stf(c, 672) : std::string();
+        say(msg.empty() ? L(c, "msg.pick.success", {{"name", name}}) : msg);
         note("picked");
         if (rt_.LockpickXp > 0) AddXp(c, rt_.LockpickXp);
     } else {
-        say("You fail to pick the lock.");
+        say(L(c, "msg.pick.fail"));
         note("pick_failed");
     }
     return true;

@@ -310,7 +310,7 @@ void AmxHost::BindActionNatives() {
     N["DisplayStringRef"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {   // (?, ?, ?, stfId) -> a line in the player's log (guess: last arg is the string)
         if (n < 1) return 0;
         Critter* p = Protagonist(m);
-        std::string t = DlgText(a[n - 1]);
+        std::string t = DlgText(a[n - 1], p);
         if (p && !t.empty()) server_.Tell(*p, t);
         return p ? 1 : 0;
     };

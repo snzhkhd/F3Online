@@ -362,7 +362,7 @@ void Server::SendObjectInfo(Critter& to, const Item& it) {
     Send(to, gnet::PackG(o));
 }
 
-std::string Server::Examine(Critter&, ItemId id, bool isCritter) {
+std::string Server::Examine(Critter& viewer, ItemId id, bool isCritter) {
     if (isCritter) {
         Critter* t = world_.GetCritter(id);
         if (!t) return "";
@@ -372,7 +372,7 @@ std::string Server::Examine(Critter&, ItemId id, bool isCritter) {
                 if (!p->desc.empty()) s += ": " + p->desc;
                 else if (!p->name2.empty() && p->name2 != p->name) s += " (" + p->name2 + ")";
             }
-        s += " [HP " + std::to_string(t->hp) + "/" + std::to_string(t->maxHp) + (t->dead ? ", dead" : "") + "]";
+        s += " " + L(viewer, t->dead ? "msg.examine.status_dead" : "msg.examine.status", {{"hp", t->hp}, {"max", t->maxHp}});
         return s;
     }
     for (auto& m : world_.Maps()) {
@@ -466,7 +466,7 @@ bool Server::PickUp(Critter& c, ItemId groundId) {
     const Proto* p = data_.GetProto(it->second.pid);
     if (!p) return false;
     if (c.IsPlayer() && Weight(c) + ProtoWeight(*p) * it->second.count > CarryLimit(c)) {
-        Tell(c, "You cannot carry that much.");
+        TellK(c, "msg.cant_carry_much");
         return false;
     }
     GiveItem(c, *p, it->second.count);
@@ -475,7 +475,7 @@ bool Server::PickUp(Critter& c, ItemId groundId) {
     if (c.IsPlayer()) {
         SendInventory(c);
         SendStats(c);
-        Tell(c, "You pick up " + p->DisplayName() + ".");
+        TellK(c, "msg.pickup", {{"item", p->DisplayName()}});
     }
     CritterId cid = c.id;
     if (scripting_) scripting_->Call("on_pickup", &c, static_cast<int>(groundId), p->key);
@@ -539,7 +539,7 @@ bool Server::TakeFrom(Critter& c, ItemId containerId, ItemId entry, bool corpse)
             cont.erase(cont.begin() + static_cast<long>(i));
             any = true;
         } else {
-            if (p && c.IsPlayer()) Tell(c, "You cannot carry " + p->DisplayName() + ".");
+            if (p && c.IsPlayer()) TellK(c, "msg.cant_carry", {{"item", p->DisplayName()}});
             ++i;
         }
     }
@@ -553,7 +553,7 @@ bool Server::TakeFrom(Critter& c, ItemId containerId, ItemId entry, bool corpse)
 
 bool Server::PutInto(Critter& c, ItemId containerId, ItemId entry, bool corpse) {
     if (corpse) {   // the dead are not storage: items go into chests / lockers / crates only
-        if (c.IsPlayer()) Tell(c, "You cannot put items into the dead.");
+        if (c.IsPlayer()) TellK(c, "msg.no_put_dead");
         return false;
     }
     std::vector<InvItem>* contp = LootTarget(c, containerId, corpse);
@@ -627,7 +627,7 @@ void Server::BeginInteract(Critter& c, PendingType type, ItemId id, ItemId sub, 
     for (size_t i = 0; i < spots.size() && i < 6 && !ok; ++i) ok = MoveCritterTo(c, spots[i]);
     if (!ok) {
         c.pending = Pending{};
-        if (c.IsPlayer()) Tell(c, "You cannot reach that.");
+        if (c.IsPlayer()) TellK(c, "msg.cant_reach");
     }
 }
 
@@ -648,7 +648,7 @@ void Server::TalkTo(Critter& c, CritterId npcId) {
     bool ok = false;
     for (size_t i = 0; i < spots.size() && i < 6 && !ok; ++i) ok = MoveCritterTo(c, spots[i]);
     if (ok) c.talkTarget = npcId;
-    else Tell(c, "You cannot reach that.");
+    else TellK(c, "msg.cant_reach");
 }
 
 void Server::RunTalk(Critter& c) {
@@ -680,7 +680,7 @@ void Server::RunPending(Critter& c) {
         else if (pm) { auto it = pm->items.find(p.id); if (it != pm->items.end()) { dist = ObjDist(it->second, c.pos); have = true; } }
         if (!have) { c.pending = Pending{}; return; }
         if (dist > InteractRange(p.type, rt_.DoorOpenRange)) {
-            if (!c.mv.active) { c.pending = Pending{}; if (c.IsPlayer()) Tell(c, "You cannot reach that."); }
+            if (!c.mv.active) { c.pending = Pending{}; if (c.IsPlayer()) TellK(c, "msg.cant_reach"); }
             return;
         }
     }
@@ -865,7 +865,7 @@ void Server::TickCombat(Critter& c) {
     if (c.ap < apCost) return;  // wait for AP regeneration
     StopMove(c, 1);
     if (plan.ranged && !plan.ammo && c.IsPlayer()) {
-        Tell(c, "You are out of ammo.");
+        TellK(c, "msg.out_of_ammo");
         c.target = 0;
         return;
     }
@@ -994,7 +994,7 @@ void Server::KillCritter(Critter& c, Critter* killer) {
     CritterId cid = c.id, kid = killer ? killer->id : 0;
     // an NPC corpse is a container: its inventory stays on it (Loot / Take), see LootTarget
     SendCritterState(c);
-    if (c.IsPlayer()) { SendStats(c); Tell(c, "You have died."); }
+    if (c.IsPlayer()) { SendStats(c); TellK(c, "msg.died"); }
     if (amx_) amx_->OnDeath(c);
     if (c.IsPlayer() || (killer && killer->IsPlayer()))   // audit log: every player death and every kill by a player
         Audit("kill", killer ? killer->name : std::string(), {{"victim", c.name}, {"victim_is_player", c.IsPlayer()}, {"map", c.mapId}, {"x", c.pos.x}, {"y", c.pos.y}});
@@ -1019,7 +1019,7 @@ void Server::Respawn(Critter& c) {
     EnterMap(c, *m, 0);
     SendCritterState(c);
     SendStats(c);
-    Tell(c, "You wake up again.");
+    TellK(c, "msg.woke");
 }
 
 // ------------------------------------------------------------------ game packets
@@ -1085,7 +1085,7 @@ void Server::HandleGamePacket(ENetPeer*, Critter* c, GMsg id, ByteBuffer& b, boo
         }
         case GMsg::C2S_Put: {
             gnet::Put m; ok = m.Read(b);
-            if (ok && m.isCritter) { if (budget()) Tell(*c, "You cannot put items into the dead."); }   // corpses take nothing
+            if (ok && m.isCritter) { if (budget()) TellK(*c, "msg.no_put_dead"); }   // corpses take nothing
             else if (ok && budget() && CheckAction(*c, static_cast<uint8_t>(id), ActionCost(static_cast<uint8_t>(id))) == gnet::ActionResult::Ok)
                 BeginInteract(*c, PendingType::Put, m.container, m.entry, m.isCritter != 0);
             break;

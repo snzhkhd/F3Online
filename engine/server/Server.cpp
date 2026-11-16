@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include "Scripting.h"
 #include "common/log.h"
+#include "common/utf8.h"
 
 namespace f3 {
 
@@ -23,26 +24,11 @@ uint32_t ColorFromName(const std::string& n) {
     return (r << 24) | (g << 16) | (b << 8) | 0xFFu;
 }
 
-std::string SanitizeText(const std::string& in, size_t maxLen) {
-    std::string out;
-    for (unsigned char ch : in) {
-        if (ch < 32 || ch == 127) continue;
-        out.push_back(static_cast<char>(ch));
-    }
-    size_t b = out.find_first_not_of(' ');
-    if (b == std::string::npos) return {};
-    size_t e = out.find_last_not_of(' ');
-    out = out.substr(b, e - b + 1);
-    if (out.size() > maxLen) out.resize(maxLen);
-    return out;
-}
+// Player text is UTF-8: invalid sequences, control characters and text spoofing code points are dropped, the length is counted in code points.
+std::string SanitizeText(const std::string& in, size_t maxLen) { return utf8::SanitizeText(in, maxLen); }
 
-bool ValidName(const std::string& n) {
-    if (n.size() < 2 || n.size() > kMaxNameLen) return false;
-    for (unsigned char ch : n)
-        if (!(std::isalnum(ch) || ch == '_')) return false;
-    return true;
-}
+// Names: 2..kMaxNameLen code points, Latin or Cyrillic letters, digits and '_'.
+bool ValidName(const std::string& n) { return utf8::ValidName(n, 2, kMaxNameLen); }
 
 Critter* PeerCritter(World& w, ENetPeer* peer) {
     CritterId id = static_cast<CritterId>(reinterpret_cast<uintptr_t>(peer->data));
@@ -63,6 +49,7 @@ Server::~Server() {
 }
 
 bool Server::Init() {
+    LoadLocale();
     if (enet_initialize() != 0) { log::Error("enet_initialize failed"); return false; }
     ENetAddress addr{};
     addr.host = ENET_HOST_ANY;
@@ -219,32 +206,36 @@ void Server::HandlePacket(ENetPeer* peer, const uint8_t* data, size_t len) {
     }
 }
 
+std::string Server::AnnouncedLang(const std::string& lang) const { return lang.empty() ? cfg_.lang : loc::Locale::Normalize(lang); }
+
 void Server::OnLogin(ENetPeer* peer, const net::LoginReq& req) {
-    auto fail = [&](const char* why) {
-        log::Info("login rejected: %s", why);
-        SendRaw(peer, net::Pack(net::LoginFail{why}));
+    const std::string lang = AnnouncedLang(req.lang);
+    auto fail = [&](const char* key, const char* english) {
+        log::Info("login rejected: %s", english);
+        SendRaw(peer, net::Pack(net::LoginFail{loc_.TrOr(lang, key, english)}));
         enet_peer_disconnect_later(peer, 0);
     };
-    if (req.version != kProtocolVersion) return fail("protocol version mismatch");
-    if (!cfg_.allowGuest) return fail(gnet::AuthCodeText(gnet::AuthCode::GuestDisabled));
-    if (!ValidName(req.name)) return fail("invalid name (2-16 chars, letters/digits/_)");
-    if (world_.FindPlayerByName(req.name)) return fail("name already in use");
-    if (accounts_.Exists(req.name)) return fail("that name belongs to a registered account");
-    if (!StartSession(peer, req.name, nullptr, std::string())) enet_peer_disconnect_later(peer, 0);
+    if (req.version != kProtocolVersion) return fail("auth.version_mismatch", "protocol version mismatch");
+    if (!cfg_.allowGuest) return fail("auth.guest_disabled", gnet::AuthCodeText(gnet::AuthCode::GuestDisabled));
+    if (!ValidName(req.name)) return fail("auth.invalid_name", "invalid name (2-16 letters, digits or _)");
+    if (world_.FindPlayerByName(req.name)) return fail("auth.name_in_use", "name already in use");
+    if (accounts_.Exists(req.name)) return fail("auth.name_registered", "that name belongs to a registered account");
+    if (!StartSession(peer, req.name, nullptr, std::string(), lang)) enet_peer_disconnect_later(peer, 0);
 }
 
-bool Server::StartSession(ENetPeer* peer, const std::string& name, const nlohmann::json* saved, const std::string& account) {
-    auto fail = [&](const char* why) {
-        log::Info("login rejected: %s", why);
-        SendRaw(peer, net::Pack(net::LoginFail{why}));
+bool Server::StartSession(ENetPeer* peer, const std::string& name, const nlohmann::json* saved, const std::string& account, const std::string& lang) {
+    auto fail = [&](const char* key, const char* english) {
+        log::Info("login rejected: %s", english);
+        SendRaw(peer, net::Pack(net::LoginFail{loc_.TrOr(lang, key, english)}));
         return false;
     };
-    if (world_.FindPlayerByName(name)) return fail("name already in use");
+    if (world_.FindPlayerByName(name)) return fail("auth.name_in_use", "name already in use");
     const bool restore = saved && saved->is_object() && saved->contains("map");
-    if (!world_.FirstMap()) return fail("server has no map");
+    if (!world_.FirstMap()) return fail("auth.no_map", "server has no map");
 
     Critter* c = world_.CreateCritter(name, CritterKind::Player);
     c->peer = peer;
+    c->lang = lang.empty() ? cfg_.lang : lang;
     c->account = account;
     c->color = ColorFromName(name);
     peer->data = reinterpret_cast<void*>(static_cast<uintptr_t>(c->id));
@@ -299,7 +290,7 @@ void Server::EnterWorld(Critter& crit, const nlohmann::json* saved) {
     if (restore) m = world_.FindMapByName(saved->value("map", std::string()));
     if (!m) m = data_.Loaded() ? world_.FindMapByName(data_.StartMap()) : nullptr;
     if (!m) m = world_.FirstMap();
-    if (!m) { Tell(*c, "The server has no map."); return; }
+    if (!m) { TellK(*c, "msg.no_map"); return; }
     TilePos spot = m->spawn;
     Dir dir = c->dir;
     bool placed = false;
@@ -327,7 +318,7 @@ void Server::EnterWorld(Critter& crit, const nlohmann::json* saved) {
     CritterId cid = c->id;
     if (!scripting_->OnLogin(*c)) {
         log::Info("login of '%s' vetoed by script", name.c_str());
-        Tell(*c, "Login refused.");
+        TellK(*c, "msg.login_refused");
         c->account.clear();   // never overwrite a saved character with a vetoed session
         OnDisconnect(peer);
         enet_peer_disconnect_later(peer, 0);
@@ -431,6 +422,7 @@ void Server::OnChatReq(Critter& c, const std::string& raw) {
     std::string text = SanitizeText(raw, kMaxChatLen);
     if (text.empty()) return;
     CritterId id = c.id;
+    if (LangChat(c, text)) return;      // /lang
     if (ContentChat(c, text)) return;   // /perks /perk /traits /reload
     if (PipChat(c, text)) return;   // /friend /friends /mail /inbox /maildel /quests
     if (!scripting_->OnChat(c, text)) return;
@@ -568,8 +560,61 @@ void Server::Say(Critter& speaker, const std::string& text) {
 
 void Server::Tell(Critter& player, const std::string& text) {
     net::ChatMsg msg;
-    msg.text = text; msg.channel = ChatChannel::System;
+    msg.text = text;
+    if (msg.text.size() > 1000) {   // the wire limit is 1024 bytes: cut at a code point boundary
+        size_t cut = 1000;
+        while (cut > 0 && (static_cast<unsigned char>(msg.text[cut]) & 0xC0) == 0x80) --cut;
+        msg.text.resize(cut);
+    }
+    msg.channel = ChatChannel::System;
     SendMsg(player, msg);
+}
+
+void Server::BroadcastK(const std::string& key, loc::Args args) {
+    for (auto& [id, c] : world_.Critters())
+        if (c->IsPlayer() && c->mapId != 0) TellK(*c, key, args);
+}
+
+// /lang [code]: shows or changes the language of this player's server messages (the client announces its own language at login).
+bool Server::LangChat(Critter& c, const std::string& text) {
+    if (text.size() < 5 || text.compare(0, 5, "/lang") != 0 || (text.size() > 5 && text[5] != ' ')) return false;
+    std::string list;
+    for (const std::string& l : loc_.Languages()) list += (list.empty() ? "" : ", ") + l;
+    const std::string want = text.size() > 6 ? loc::Locale::Normalize(text.substr(6)) : std::string();
+    if (want.empty()) TellK(c, "msg.lang.current", {{"lang", c.lang}, {"list", list}});
+    else if (!loc_.Has(want)) TellK(c, "msg.lang.unknown", {{"lang", text.substr(6)}, {"list", list}});
+    else {
+        c.lang = want;
+        TellK(c, "msg.lang.set", {{"lang", want}});
+        SendContentDefs(c);   // perk / trait names follow the language
+        SendPip(c);           // so do the quest titles
+    }
+    return true;
+}
+
+std::string Server::Stf(const Critter& c, int id) const {
+    if (const std::string* o = loc_.Find(LangOf(c), "stf." + std::to_string(id))) return *o;
+    return data_.String(id);
+}
+
+std::string Server::SkillName(const Critter& c, int skill) const {
+    if (skill < 0 || skill >= kSkillCount) return "?";
+    return loc_.TrOr(LangOf(c), std::string("skill.") + kSkillNames[skill] + ".name", kSkillNames[skill]);
+}
+
+bool Server::LoadLocale() {
+    std::filesystem::path dir = cfg_.localeDir;
+    if (dir.empty() && !cfg_.contentDir.empty() && std::filesystem::exists(cfg_.contentDir / "locale")) dir = cfg_.contentDir / "locale";
+    if (dir.empty()) dir = loc::Locale::FindDir(cfg_.scriptsDir);
+    std::string err;
+    if (dir.empty()) { log::Warn("localization: no data/locale folder found, messages show their keys"); return false; }
+    const bool ok = loc_.Load(dir, &err);
+    if (!ok) log::Warn("localization: %s", err.c_str());
+    cfg_.lang = loc::Locale::Normalize(cfg_.lang);
+    std::string langs;
+    for (const auto& l : loc_.Languages()) langs += (langs.empty() ? "" : ", ") + l;
+    log::Info("localization: %s (languages: %s; default %s)", dir.string().c_str(), langs.c_str(), cfg_.lang.c_str());
+    return ok;
 }
 
 void Server::Broadcast(const std::string& text) {

@@ -13,6 +13,15 @@ namespace {
 std::string Lc(std::string s) { for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; }
 }  // namespace
 
+// Localized texts of data records: key "perk.<id>.name" / ".desc", "trait.<id>.name" / ".desc", "quest.<id>.title" / ".text" in the player's
+// language (data/locale/<lang>/content.json); the English base text is the record in data/*.json.
+std::string Server::PerkName(const Critter& c, const PerkDef& p) const { return LOr(c, "perk." + p.id + ".name", p.name); }
+std::string Server::PerkDesc(const Critter& c, const PerkDef& p) const { return LOr(c, "perk." + p.id + ".desc", p.desc); }
+std::string Server::TraitName(const Critter& c, const TraitDef& t) const { return LOr(c, "trait." + t.id + ".name", t.name); }
+std::string Server::TraitDesc(const Critter& c, const TraitDef& t) const { return LOr(c, "trait." + t.id + ".desc", t.desc); }
+std::string Server::QuestTitle(const Critter& c, const Critter::QuestEntry& q) const { return LOr(c, "quest." + q.id + ".title", q.title); }
+std::string Server::QuestText(const Critter& c, const Critter::QuestEntry& q) const { return LOr(c, "quest." + q.id + ".text", q.text); }
+
 int Server::TraitMaxEff() const { return content_.hasTraitMax ? content_.traitMax : rt_.TraitMax; }
 
 int Server::Mod(const Critter& c, int stat) const {
@@ -38,20 +47,20 @@ int Server::PerkRank(const Critter& c, const std::string& id) const {
 
 bool Server::PerkAvailable(const Critter& c, const PerkDef& p, std::string* why) const {
     auto no = [&](const std::string& s) { if (why) *why = s; return false; };
-    if (PerkRank(c, p.id) >= p.ranks) return no("already at the maximum rank");
-    if (c.level < p.req.level) return no("requires level " + std::to_string(p.req.level));
-    static const char* const sp[7] = {"Strength", "Perception", "Endurance", "Charisma", "Intelligence", "Agility", "Luck"};
+    if (PerkRank(c, p.id) >= p.ranks) return no(L(c, "msg.perk.why.max"));
+    if (c.level < p.req.level) return no(L(c, "msg.perk.why.level", {{"n", p.req.level}}));
+    static const char* const sp[7] = {"special.strength", "special.perception", "special.endurance", "special.charisma", "special.intelligence", "special.agility", "special.luck"};
     for (int i = 0; i < 7; i++)
-        if (p.req.special[i] > 0 && c.special[i] < p.req.special[i]) return no(std::string("requires ") + sp[i] + " " + std::to_string(p.req.special[i]));
+        if (p.req.special[i] > 0 && c.special[i] < p.req.special[i]) return no(L(c, "msg.perk.why.stat", {{"name", L(c, sp[i])}, {"n", p.req.special[i]}}));
     for (const auto& [skill, min] : p.req.skills)
-        if (SkillValue(c, skill) < min) return no(std::string("requires ") + kSkillNames[skill] + " " + std::to_string(min));
+        if (SkillValue(c, skill) < min) return no(L(c, "msg.perk.why.stat", {{"name", SkillName(c, skill)}, {"n", min}}));
     for (const std::string& r : p.req.perks) {
         const PerkDef* rp = content_.FindPerk(r);
-        if (!rp || PerkRank(c, rp->id) < 1) return no("requires the perk " + (rp ? rp->name : r));
+        if (!rp || PerkRank(c, rp->id) < 1) return no(L(c, "msg.perk.why.perk", {{"name", rp ? PerkName(c, *rp) : r}}));
     }
     for (const std::string& r : p.req.traits) {
         const TraitDef* t = content_.FindTrait(r);
-        if (!t || !((c.traitMask >> t->index) & 1u)) return no("requires the trait " + (t ? t->name : r));
+        if (!t || !((c.traitMask >> t->index) & 1u)) return no(L(c, "msg.perk.why.trait", {{"name", t ? TraitName(c, *t) : r}}));
     }
     return true;
 }
@@ -59,16 +68,17 @@ bool Server::PerkAvailable(const Critter& c, const PerkDef& p, std::string* why)
 bool Server::TakePerk(Critter& c, const std::string& idIn) {
     if (!c.IsPlayer() || !c.created || c.dead) return false;
     const PerkDef* p = content_.FindPerk(idIn);
-    if (!p) { Tell(c, "Perks: unknown perk '" + idIn + "'. /perks lists them."); return false; }
-    if (c.perkPoints < 1) { Tell(c, "Perks: you have no perk points (one every " + std::to_string(rt_.PerkRate) + " levels)."); return false; }
+    if (!p) { TellK(c, "msg.perk.unknown", {{"id", idIn}}); return false; }
+    if (c.perkPoints < 1) { TellK(c, "msg.perk.no_points", {{"n", rt_.PerkRate}}); return false; }
     std::string why;
-    if (!PerkAvailable(c, *p, &why)) { Tell(c, "Perks: " + p->name + " " + why + "."); return false; }
+    if (!PerkAvailable(c, *p, &why)) { TellK(c, "msg.perk.unavailable", {{"name", PerkName(c, *p)}, {"why", why}}); return false; }
     const int rank = ++c.perks[p->id];
     --c.perkPoints;
     const int oldMax = c.maxHp;
     RecalcDerived(c);
     if (c.maxHp > oldMax) c.hp = std::min(c.maxHp, c.hp + (c.maxHp - oldMax));
-    Tell(c, "Perk gained: " + p->name + (p->ranks > 1 ? " (rank " + std::to_string(rank) + "/" + std::to_string(p->ranks) + ")" : std::string()) + ".");
+    if (p->ranks > 1) TellK(c, "msg.perk.gained_rank", {{"name", PerkName(c, *p)}, {"rank", rank}, {"max", p->ranks}});
+    else TellK(c, "msg.perk.gained", {{"name", PerkName(c, *p)}});
     if (!p->hook.empty() && scripting_) scripting_->Call(p->hook.c_str(), &c, p->id, rank);   // optional Lua hook: fn(critter, perk_id, rank)
     SendStats(c);
     SendCritterState(c);
@@ -172,8 +182,8 @@ void Server::SendContentDefs(Critter& c) {
     m.schema = static_cast<uint16_t>(content_.schema);
     m.revision = contentRev_;
     m.traitMax = static_cast<uint8_t>(std::clamp(TraitMaxEff(), 0, 16));
-    for (const TraitDef& t : content_.traits) m.traits.push_back({static_cast<uint8_t>(t.index), t.id, t.name, t.desc});
-    for (const PerkDef& p : content_.perks) m.perks.push_back({p.id, p.name, p.desc, static_cast<uint8_t>(p.ranks), static_cast<uint8_t>(std::min(255, p.req.level))});
+    for (const TraitDef& t : content_.traits) m.traits.push_back({static_cast<uint8_t>(t.index), t.id, TraitName(c, t), TraitDesc(c, t)});
+    for (const PerkDef& p : content_.perks) m.perks.push_back({p.id, PerkName(c, p), PerkDesc(c, p), static_cast<uint8_t>(p.ranks), static_cast<uint8_t>(std::min(255, p.req.level))});
     auto addProto = [&](const std::string& key, bool isNpc, bool onlyIfNamed) {
         const Proto* p = data_.FindProto(key);
         if (!p) return;
@@ -217,7 +227,7 @@ bool Server::ContentChat(Critter& c, const std::string& text) {
     cmd = Lc(cmd);
     if (cmd != "perks" && cmd != "perk" && cmd != "traits" && cmd != "reload") return false;
     if (cmd == "reload") {
-        if (!cfg_.devCommands) { Tell(c, "Dev commands are disabled on this server (start it with --dev-commands or --dev-kit)."); return true; }
+        if (!cfg_.devCommands) { TellK(c, "msg.dev_disabled"); return true; }
         std::string what;
         is >> what;
         const std::string rep = ReloadAll(what);
@@ -226,31 +236,35 @@ bool Server::ContentChat(Critter& c, const std::string& text) {
         return true;
     }
     if (cmd == "traits") {
-        if (content_.traits.empty()) { Tell(c, "Traits: none defined (data/traits)."); return true; }
-        Tell(c, "Traits (choose up to " + std::to_string(TraitMaxEff()) + " at creation):");
+        if (content_.traits.empty()) { TellK(c, "msg.traits.none"); return true; }
+        TellK(c, "msg.traits.header", {{"n", TraitMaxEff()}});
         for (const TraitDef& t : content_.traits)
-            Tell(c, std::string(((c.traitMask >> t.index) & 1u) ? "[x] " : "[ ] ") + t.id + " - " + t.name + (t.desc.empty() ? "" : ": " + t.desc));
+            {
+                const std::string desc = TraitDesc(c, t);
+                Tell(c, std::string(((c.traitMask >> t.index) & 1u) ? "[x] " : "[ ] ") + t.id + " - " + TraitName(c, t) + (desc.empty() ? "" : ": " + desc));
+            }
         return true;
     }
     if (cmd == "perk") {
         std::string sub, id;
         is >> sub;
         if (Lc(sub) == "take") is >> id; else id = sub;
-        if (id.empty()) { Tell(c, "Usage: /perk take <id>   (/perks lists them)"); return true; }
+        if (id.empty()) { TellK(c, "msg.perk.usage"); return true; }
         TakePerk(c, id);
         return true;
     }
     // /perks
-    if (content_.perks.empty()) { Tell(c, "Perks: none defined (data/perks)."); return true; }
-    Tell(c, "Perks: " + std::to_string(c.perkPoints) + " perk point(s). [*] taken  [+] available  [ ] locked.   /perk take <id>");
+    if (content_.perks.empty()) { TellK(c, "msg.perks.none"); return true; }
+    TellK(c, "msg.perks.header", {{"n", c.perkPoints}});
     for (const PerkDef& p : content_.perks) {
         std::string why;
         const int rank = PerkRank(c, p.id);
         const bool avail = PerkAvailable(c, p, &why);
-        std::string line = std::string(rank > 0 && !avail ? "[*] " : avail ? "[+] " : "[ ] ") + p.id + " - " + p.name;
-        if (p.ranks > 1) line += " (rank " + std::to_string(rank) + "/" + std::to_string(p.ranks) + ")";
-        else if (rank > 0) line += " (taken)";
-        if (!p.desc.empty()) line += ": " + p.desc;
+        std::string line = std::string(rank > 0 && !avail ? "[*] " : avail ? "[+] " : "[ ] ") + p.id + " - " + PerkName(c, p);
+        if (p.ranks > 1) line += L(c, "msg.perk.rank", {{"rank", rank}, {"max", p.ranks}});
+        else if (rank > 0) line += L(c, "msg.perk.taken");
+        const std::string desc = PerkDesc(c, p);
+        if (!desc.empty()) line += ": " + desc;
         if (!avail && rank < p.ranks) line += " [" + why + "]";
         Tell(c, line);
     }

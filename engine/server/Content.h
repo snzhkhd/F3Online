@@ -135,6 +135,7 @@ public:
 };
 
 // f3_server --validate-data: loads gamedata (when given) and the content folder, prints the report, returns the exit code.
+int RunCheckLocale(const std::filesystem::path& contentDir, const std::filesystem::path& localeDir, const std::string& srcDir, const std::filesystem::path& exePath, bool strict);
 int RunValidateData(const std::filesystem::path& gamedataDir, const std::filesystem::path& contentDir, bool lenient);
 
 std::filesystem::path FindContentDir(const std::filesystem::path& exePath);

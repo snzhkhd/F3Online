@@ -137,24 +137,24 @@ void AmxHost::BindNatives() {
     N["OpenTask"] = [this, playerOf](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
         if (n < 1) return 0;
         server_.SetGlobalFor(playerOf(m), "Task" + std::to_string(a[0]), 1);
-        if (Critter* p = playerOf(m)) server_.Tell(*p, "New task: " + DlgText(a[0]));
+        if (Critter* p = playerOf(m)) server_.TellK(*p, "msg.task.new", {{"text", DlgText(a[0], p)}});
         return 1;
     };
     N["CloseTask"] = [this, playerOf](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
         if (n < 1) return 0;
         server_.SetGlobalFor(playerOf(m), "Task" + std::to_string(a[0]), 2);
-        if (Critter* p = playerOf(m)) server_.Tell(*p, "Task completed: " + DlgText(a[0]));
+        if (Critter* p = playerOf(m)) server_.TellK(*p, "msg.task.completed", {{"text", DlgText(a[0], p)}});
         return 1;
     };
     N["AddEntry"] = [this, playerOf](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
         if (n < 2) return 0;
         server_.SetGlobalFor(playerOf(m), "TaskEntry" + std::to_string(a[0]), a[1]);
-        if (Critter* p = playerOf(m)) server_.Tell(*p, "Journal: " + DlgText(a[1]));
+        if (Critter* p = playerOf(m)) server_.TellK(*p, "msg.task.journal", {{"text", DlgText(a[1], p)}});
         return 1;
     };
     N["IsInDialogue"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell { return n > 0 && a[0] > 0 && InDialog(static_cast<CritterId>(a[0])) ? 1 : 0; };
     N["StartStore"] = [this, playerOf](AmxInstance& m, const AmxCell*, int) -> AmxCell {
-        if (Critter* p = playerOf(m)) server_.Tell(*p, "(trading is not implemented yet)");
+        if (Critter* p = playerOf(m)) server_.TellK(*p, "msg.trade_missing");
         return 0;
     };
     N["StartDialogue"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {  // (npc, pc): called by behaviours such as 00_TutorialFrank
@@ -174,8 +174,11 @@ void AmxHost::BindNatives() {
 // reply runs its action public RA, then its logic public RL, which sets globals (LA...) and enters the next node N<n>.
 // SetNodeTextFunction("EndDialogue") ends the conversation.
 
-std::string AmxHost::DlgText(int id) const {
-    std::string s = server_.Data().String(id);
+std::string AmxHost::DlgText(int id, const Critter* viewer) const {
+    // English.stf text, or its "stf.<id>" override in the viewer's language (data/locale); no viewer = the server default language
+    std::string s = viewer ? server_.Stf(*viewer, id) : server_.Data().String(id);
+    if (!viewer)
+        if (const std::string* o = server_.Loc().Find(server_.GetConfig().lang, "stf." + std::to_string(id))) s = *o;
     std::string out;
     for (size_t i = 0; i < s.size(); ++i) {   // strip {c255} style colour / format tags
         if (s[i] == '{') { size_t e = s.find('}', i); if (e != std::string::npos) { i = e; continue; } }
@@ -194,8 +197,9 @@ AmxHost::DlgView AmxHost::DialogView(CritterId pc) const {
     DlgView v;
     auto it = dialogs_.find(pc);
     if (it == dialogs_.end()) return v;
-    v.open = true; v.textId = it->second.textId; v.text = DlgText(it->second.textId); v.node = it->second.node;
-    for (auto& r : it->second.replies) v.replies.push_back(DlgText(r.textId));
+    const Critter* viewer = server_.GetWorld().GetCritter(pc);
+    v.open = true; v.textId = it->second.textId; v.text = DlgText(it->second.textId, viewer); v.node = it->second.node;
+    for (auto& r : it->second.replies) v.replies.push_back(DlgText(r.textId, viewer));
     return v;
 }
 
@@ -243,14 +247,14 @@ void AmxHost::Present(Critter& pc) {
     d.inst->Call(d.textFn);   // NU<k>_N<k>: registers the replies whose conditions hold
     active_ = prev;
     gnet::DialogNode m;
-    m.npc = d.npc; m.textId = static_cast<uint32_t>(d.textId); m.text = DlgText(d.textId);
+    m.npc = d.npc; m.textId = static_cast<uint32_t>(d.textId); m.text = DlgText(d.textId, &pc);
     if (d.replies.empty()) {   // nothing selectable: give the player a way out
         DlgReply r; r.textId = 0; r.logic = "EndDialogue";
         d.replies.push_back(r);
     }
     for (auto& r : d.replies) {
         gnet::DialogNode::Reply pr; pr.replyId = static_cast<uint32_t>(r.textId);
-        pr.text = r.textId ? DlgText(r.textId) : std::string("[Leave]");
+        pr.text = r.textId ? DlgText(r.textId, &pc) : server_.L(pc, "dlg.leave");
         m.replies.push_back(std::move(pr));
         if (m.replies.size() >= 24) break;
     }

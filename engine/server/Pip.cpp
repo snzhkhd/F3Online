@@ -7,6 +7,7 @@
 #include "Scripting.h"
 #include "Server.h"
 #include "common/log.h"
+#include "common/utf8.h"
 
 namespace f3 {
 
@@ -14,24 +15,10 @@ using json = nlohmann::json;
 
 namespace {
 
-std::string Lower(std::string s) {
-    for (char& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    return s;
-}
+std::string Lower(const std::string& s) { return utf8::Lower(s); }
 
-// printable single-line text, trimmed, at most maxLen bytes
-std::string Clean(const std::string& in, size_t maxLen) {
-    std::string out;
-    for (unsigned char ch : in) {
-        if (ch < 32 || ch == 127) continue;
-        out.push_back(static_cast<char>(ch));
-    }
-    const size_t b = out.find_first_not_of(' ');
-    if (b == std::string::npos) return std::string();
-    out = out.substr(b, out.find_last_not_of(' ') - b + 1);
-    if (out.size() > maxLen) out.resize(maxLen);
-    return out;
-}
+// printable single-line UTF-8 text, trimmed, at most maxLen code points
+std::string Clean(const std::string& in, size_t maxLen) { return utf8::SanitizeText(in, maxLen); }
 
 constexpr size_t kMaxQuests = 100;
 
@@ -57,7 +44,7 @@ bool Server::QuestAdd(Critter& c, const std::string& idIn, const std::string& ti
     Critter::QuestEntry q;
     q.id = id; q.title = title.empty() ? id : title; q.text = text; q.state = 0; q.updated = static_cast<int64_t>(std::time(nullptr));
     c.quests.push_back(std::move(q));
-    Tell(c, "Pip-Boy: new task - " + c.quests.back().title);
+    TellK(c, "msg.pip.new_task", {{"title", QuestTitle(c, c.quests.back())}});
     SendPip(c);
     return true;
 }
@@ -69,7 +56,7 @@ bool Server::QuestSet(Critter& c, const std::string& id, uint8_t state) {
         if (q.state == state) return true;
         q.state = state;
         q.updated = static_cast<int64_t>(std::time(nullptr));
-        Tell(c, std::string("Pip-Boy: task ") + (state == 1 ? "completed" : state == 2 ? "failed" : "reopened") + " - " + q.title);
+        TellK(c, state == 1 ? "msg.pip.task_done" : state == 2 ? "msg.pip.task_failed" : "msg.pip.task_reopened", {{"title", QuestTitle(c, q)}});
         const std::string qid = q.id;
         SendPip(c);
         // data/quests rewards (xp, items), once per character
@@ -97,15 +84,15 @@ int Server::QuestState(const Critter& c, const std::string& id) const {
 bool Server::FriendAdd(Critter& c, const std::string& nameIn) {
     if (!c.IsPlayer()) return false;
     std::string name = Clean(nameIn, 16);
-    if (!AccountStore::ValidName(name)) { Tell(c, "Friends: invalid name."); return false; }
-    if (Lower(name) == Lower(c.name)) { Tell(c, "Friends: you cannot add yourself."); return false; }
-    if (HasFriend(c, name)) { Tell(c, "Friends: " + name + " is already in your list."); return false; }
-    if (c.friends.size() >= kMaxFriends) { Tell(c, "Friends: the list is full."); return false; }
+    if (!AccountStore::ValidName(name)) { TellK(c, "msg.friend.invalid"); return false; }
+    if (Lower(name) == Lower(c.name)) { TellK(c, "msg.friend.self"); return false; }
+    if (HasFriend(c, name)) { TellK(c, "msg.friend.already", {{"name", name}}); return false; }
+    if (c.friends.size() >= kMaxFriends) { TellK(c, "msg.friend.full"); return false; }
     Critter* online = world_.FindPlayerByName(name);
-    if (!accounts_.Exists(name) && !IsOnline(online)) { Tell(c, "Friends: no such player."); return false; }
+    if (!accounts_.Exists(name) && !IsOnline(online)) { TellK(c, "msg.friend.no_player"); return false; }
     if (online) name = online->name;   // canonical spelling
     c.friends.push_back(name);
-    Tell(c, "Friends: " + name + " added.");
+    TellK(c, "msg.friend.added", {{"name", name}});
     SendPip(c);
     return true;
 }
@@ -114,10 +101,10 @@ bool Server::FriendDel(Critter& c, const std::string& nameIn) {
     if (!c.IsPlayer()) return false;
     const std::string k = Lower(Clean(nameIn, 16));
     auto it = std::find_if(c.friends.begin(), c.friends.end(), [&](const std::string& f) { return Lower(f) == k; });
-    if (it == c.friends.end()) { Tell(c, "Friends: not in your list."); return false; }
+    if (it == c.friends.end()) { TellK(c, "msg.friend.not_in_list"); return false; }
     const std::string n = *it;
     c.friends.erase(it);
-    Tell(c, "Friends: " + n + " removed.");
+    TellK(c, "msg.friend.removed", {{"name", n}});
     SendPip(c);
     return true;
 }
@@ -140,19 +127,19 @@ std::vector<Server::MailMsg> Server::Mailbox(const std::string& key) {
 
 bool Server::MailSend(Critter& c, const std::string& toIn, const std::string& textIn) {
     if (!c.IsPlayer()) return false;
-    if (c.account.empty()) { Tell(c, "Mail: guests cannot send mail."); return false; }
+    if (c.account.empty()) { TellK(c, "msg.mail.guest_send"); return false; }
     const std::string to = Clean(toIn, 16), text = Clean(textIn, kMaxMailText);
-    if (!AccountStore::ValidName(to) || !accounts_.Exists(to)) { Tell(c, "Mail: no such player."); return false; }
-    if (text.empty()) { Tell(c, "Mail: the message is empty."); return false; }
+    if (!AccountStore::ValidName(to) || !accounts_.Exists(to)) { TellK(c, "msg.mail.no_player"); return false; }
+    if (text.empty()) { TellK(c, "msg.mail.empty"); return false; }
     const std::string key = AccountStore::Key(to);
-    if (static_cast<size_t>(store_.MailCount(key)) >= kMaxMailbox) { Tell(c, "Mail: " + to + "'s mailbox is full."); return false; }
+    if (static_cast<size_t>(store_.MailCount(key)) >= kMaxMailbox) { TellK(c, "msg.mail.box_full", {{"name", to}}); return false; }
     const uint32_t id = store_.MailAdd(key, c.name, text, static_cast<int64_t>(std::time(nullptr)));
-    if (!id) { Tell(c, "Mail: the message could not be saved."); return false; }
+    if (!id) { TellK(c, "msg.mail.save_failed"); return false; }
     Audit("mail_sent", c.name, {{"to", to}, {"mail_id", id}, {"length", text.size()}});
-    Tell(c, "Mail sent to " + to + ".");
+    TellK(c, "msg.mail.sent", {{"name", to}});
     for (auto& [id2, p] : world_.Critters())
         if (IsOnline(p.get()) && !p->account.empty() && AccountStore::Key(p->account) == key) {
-            Tell(*p, "Pip-Boy: new mail from " + c.name + ".");
+            TellK(*p, "msg.pip.new_mail", {{"name", c.name}});
             SendPip(*p);
         }
     return true;
@@ -178,7 +165,7 @@ bool Server::MailDelete(Critter& c, uint32_t id) {
 void Server::SendPip(Critter& c) {
     if (!c.peer || !c.IsPlayer()) return;
     gnet::PipData d;
-    for (const Critter::QuestEntry& q : c.quests) d.quests.push_back({q.id, q.title, q.text, q.state});
+    for (const Critter::QuestEntry& q : c.quests) d.quests.push_back({q.id, QuestTitle(c, q), QuestText(c, q), q.state});
     for (const std::string& f : c.friends) d.friends.push_back({f, static_cast<uint8_t>(IsOnline(world_.FindPlayerByName(f)) ? 1 : 0)});
     if (!c.account.empty())
         for (const MailMsg& m : Mailbox(AccountStore::Key(c.account)))
@@ -190,11 +177,11 @@ void Server::PipOnLogin(Critter& c) {
     SendPip(c);
     if (!c.account.empty()) {
         const int unread = store_.MailUnread(AccountStore::Key(c.account));
-        if (unread) Tell(c, "Pip-Boy: you have " + std::to_string(unread) + " unread message" + (unread == 1 ? "" : "s") + " (press P).");
+        if (unread) TellK(c, "msg.pip.unread", {{"n", unread}});
     }
     for (auto& [id, p] : world_.Critters())
         if (p.get() != &c && IsOnline(p.get()) && HasFriend(*p, c.name)) {
-            Tell(*p, "Friends: " + c.name + " is online.");
+            TellK(*p, "msg.friend.online", {{"name", c.name}});
             SendPip(*p);
         }
 }
@@ -202,7 +189,7 @@ void Server::PipOnLogin(Critter& c) {
 void Server::PipOnLogout(Critter& c) {
     for (auto& [id, p] : world_.Critters())
         if (p.get() != &c && IsOnline(p.get()) && HasFriend(*p, c.name)) {
-            Tell(*p, "Friends: " + c.name + " went offline.");
+            TellK(*p, "msg.friend.offline", {{"name", c.name}});
             SendPip(*p);
         }
 }
@@ -235,12 +222,12 @@ bool Server::PipChat(Critter& c, const std::string& text) {
         sub = Lower(sub);
         if (sub == "add") FriendAdd(c, name);
         else if (sub == "del" || sub == "remove") FriendDel(c, name);
-        else Tell(c, "Usage: /friend add <name>, /friend del <name>, /friends");
+        else TellK(c, "msg.friend.usage");
         return true;
     }
     if (cmd == "friends") {
-        if (c.friends.empty()) Tell(c, "Friends: the list is empty. /friend add <name>");
-        for (const std::string& f : c.friends) Tell(c, "Friends: " + f + (IsOnline(world_.FindPlayerByName(f)) ? " (online)" : " (offline)"));
+        if (c.friends.empty()) TellK(c, "msg.friend.list_empty");
+        for (const std::string& f : c.friends) TellK(c, IsOnline(world_.FindPlayerByName(f)) ? "msg.friend.list_online" : "msg.friend.list_offline", {{"name", f}});
         return true;
     }
     if (cmd == "mail") {
@@ -250,21 +237,26 @@ bool Server::PipChat(Critter& c, const std::string& text) {
         return true;
     }
     if (cmd == "inbox") {
-        if (c.account.empty()) { Tell(c, "Mail: guests have no mailbox."); return true; }
+        if (c.account.empty()) { TellK(c, "msg.mail.guest_box"); return true; }
         const std::vector<MailMsg> box = Mailbox(AccountStore::Key(c.account));
-        if (box.empty()) Tell(c, "Mail: the inbox is empty.");
-        for (const MailMsg& m : box) Tell(c, "Mail #" + std::to_string(m.id) + (m.read ? " " : " [new] ") + m.from + ": " + m.text);
+        if (box.empty()) TellK(c, "msg.mail.inbox_empty");
+        for (const MailMsg& m : box) TellK(c, m.read ? "msg.mail.line" : "msg.mail.line_new", {{"id", m.id}, {"from", m.from}, {"text", m.text}});
         return true;
     }
     if (cmd == "maildel") {
         uint32_t id = 0;
         is >> id;
-        if (!MailDelete(c, id)) Tell(c, "Mail: no such message. Usage: /maildel <id>");
+        if (!MailDelete(c, id)) TellK(c, "msg.mail.no_message");
         return true;
     }
     if (cmd == "quests") {
-        if (c.quests.empty()) Tell(c, "Pip-Boy: no tasks.");
-        for (const Critter::QuestEntry& q : c.quests) Tell(c, std::string("Task [") + (q.state == 0 ? "active" : q.state == 1 ? "done" : "failed") + "] " + q.title + (q.text.empty() ? "" : ": " + q.text));
+        if (c.quests.empty()) TellK(c, "msg.pip.no_tasks");
+        for (const Critter::QuestEntry& q : c.quests) {
+            const loc::Arg state("state", L(c, q.state == 0 ? "msg.task.state.active" : q.state == 1 ? "msg.task.state.done" : "msg.task.state.failed"));
+            const std::string text = QuestText(c, q);
+            if (text.empty()) TellK(c, "msg.task.line", {state, {"title", QuestTitle(c, q)}});
+            else TellK(c, "msg.task.line_text", {state, {"title", QuestTitle(c, q)}, {"text", text}});
+        }
         return true;
     }
     return false;

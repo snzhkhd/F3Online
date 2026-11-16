@@ -103,7 +103,7 @@ private:
         std::vector<DlgReply> replies;
     };
     void Present(Critter& pc);   // builds the replies of the current node and sends it (or ends the conversation)
-    std::string DlgText(int id) const;
+    std::string DlgText(int id, const Critter* viewer = nullptr) const;   // stf text (colour tags stripped) in the viewer's language
     std::unordered_map<CritterId, Dlg> dialogs_;   // by player id
     Dlg* active_ = nullptr;                        // conversation the natives currently write to
     std::unordered_map<std::string, std::shared_ptr<AmxScript>> dlgScripts_;

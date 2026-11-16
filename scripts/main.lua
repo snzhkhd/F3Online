@@ -42,12 +42,12 @@ end
 
 -- Called after every successful hot reload (state is rebuilt, world is kept).
 function on_reload()
-    broadcast("[server] scripts reloaded")
+    broadcast_key("lua.reloaded")
 end
 
 -- Perk hook named by data/perks ("hook": "perk_awareness"): called as fn(critter, perk_id, rank) when the perk is taken.
 function perk_awareness(c, perk_id, rank)
-    c:tell("Your senses sharpen: you notice more of the world around you.")
+    c:tell_key("lua.perk_awareness")
 end
 
 function on_login(c)
@@ -64,10 +64,10 @@ function on_login(c)
         if arm > 0 then c:equip(arm, true) end
     end
     -- Pip-Boy demo quests (c:quest_add(id, title, text) / c:quest_done(id) / c:quest_fail(id) / c:quest_state(id) -> -1 unknown, 0 active, 1 done, 2 failed)
-    c:quest_add("first_steps", "First steps", "Look around, pick up something useful (an item on the ground) and get yourself a weapon.")
+    c:quest_add("first_steps", "First steps", "Look around, pick up something useful (an item on the ground) and get yourself a weapon.")   -- English base; quest.<id>.title / .text in data/locale translate it
     c:quest_add("survivor", "Survivor", "The wasteland is dangerous. Defeat your first enemy.")
-    c:tell("Welcome to F3Online, " .. c.name .. "! Click to move, Enter to chat. Try /help")
-    broadcast(c.name .. " entered the wasteland")
+    c:tell_key("lua.welcome", {name = c.name})
+    broadcast_key("lua.entered", {name = c.name})
     return true
 end
 
@@ -81,23 +81,23 @@ function use_skill(c, skill, value, kind, target)
         for _, o in ipairs(get_map(c.map_id):objects()) do
             if o.id == target then obj = o; break end
         end
-        if not obj then c:tell("That object is not here."); return true end
+        if not obj then c:tell_key("lua.skill.no_object"); return true end
     end
-    local who = (t == c) and "yourself" or t.name
+    local who = (t == c) and tr(c, "lua.skill.yourself") or t.name
     if skill == "Medic" then
-        if obj then c:tell("First aid does nothing for " .. obj.name .. "."); return true end
-        if t.dead then c:tell("It is too late for first aid."); return true end
-        if t.hp >= t.max_hp then c:tell((t == c and "You are" or t.name .. " is") .. " not hurt."); return true end
-        if t ~= c and c:distance_to(t) > 4 then c:tell("You are too far away."); return true end
+        if obj then c:tell_key("lua.medic.object", {name = obj.name}); return true end
+        if t.dead then c:tell_key("lua.medic.too_late"); return true end
+        if t.hp >= t.max_hp then if t == c then c:tell_key("lua.medic.not_hurt_self") else c:tell_key("lua.medic.not_hurt", {name = t.name}) end; return true end
+        if t ~= c and c:distance_to(t) > 4 then c:tell_key("lua.medic.too_far"); return true end
         local roll = math.random(1, 100)
-        if roll > math.max(value, 15) then c:tell("Your first aid attempt fails."); return true end
+        if roll > math.max(value, 15) then c:tell_key("lua.medic.fail"); return true end
         local heal = math.random(1, 4) + math.floor(value / 10)
         t:heal(heal)
-        c:tell(string.format("You treat %s for %d hit points.", who, heal))
+        c:tell_key("lua.medic.treated", {who = who, hp = heal})
         c:give_xp(5)
         return true
     elseif skill == "Outdoorsman" or skill == "Science" or skill == "Mechanics" or skill == "Security" or skill == "Traps" then
-        c:tell(string.format("%s (%d%%) on %s: nothing here that needs it yet.", skill, value, obj and ("the " .. obj.name) or who))
+        c:tell_key("lua.skill.nothing", {skill = skill_name(c, skill), value = value, target = obj and obj.name or who})
         return true
     end
     return false
@@ -121,7 +121,7 @@ function on_death(c, killer)
 end
 
 function on_logout(c)
-    broadcast(c.name .. " left the wasteland")
+    broadcast_key("lua.left", {name = c.name})
 end
 
 function on_critter_move(c, from_x, from_y)
@@ -132,29 +132,29 @@ end
 
 local commands = {}
 function commands.help(c)
-    c:tell("Commands: /help /who /pos /steps /ap /stats /inv /maps /goto <map> [entry] /heal /reload-info")
+    c:tell_key("lua.cmd.help")
 end
 function commands.who(c)
     local names = {}
     for _, p in ipairs(players()) do names[#names + 1] = p.name end
-    c:tell("Online (" .. #names .. "): " .. table.concat(names, ", "))
+    c:tell_key("lua.cmd.who", {n = #names, names = table.concat(names, ", ")})
 end
 function commands.pos(c)
-    c:tell(string.format("You are at %d,%d on map %d", c.x, c.y, c.map_id))
+    c:tell_key("lua.cmd.pos", {x = c.x, y = c.y, map = c.map_id})
 end
 function commands.steps(c)
-    c:tell("Steps taken: " .. math.floor(c:get_var("steps")))
+    c:tell_key("lua.cmd.steps", {n = math.floor(c:get_var("steps"))})
 end
 function commands.stats(c)
-    c:tell(string.format("HP %d/%d  S%d P%d E%d C%d I%d A%d L%d  (carry %d)", c.hp, c.max_hp,
-        c:special(1), c:special(2), c:special(3), c:special(4), c:special(5), c:special(6), c:special(7), c:weight()))
+    c:tell_key("lua.cmd.stats", {hp = c.hp, max = c.max_hp, s = c:special(1), p = c:special(2), e = c:special(3), c = c:special(4),
+        i = c:special(5), a = c:special(6), l = c:special(7), carry = c:weight()})
 end
 function commands.inv(c)
     local parts = {}
     for _, it in ipairs(c:inventory()) do
         parts[#parts + 1] = it.name .. (it.count > 1 and (" x" .. it.count) or "") .. (it.equipped and " [E]" or "")
     end
-    c:tell("Inventory: " .. (#parts > 0 and table.concat(parts, ", ") or "(empty)"))
+    c:tell_key("lua.cmd.inv", {items = #parts > 0 and table.concat(parts, ", ") or tr(c, "lua.cmd.inv_empty")})
 end
 function commands.maps(c)
     c:tell(table.concat(map_names(), ", "))

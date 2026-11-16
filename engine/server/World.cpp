@@ -1,4 +1,5 @@
 #include "World.h"
+#include "common/utf8.h"
 
 #include <algorithm>
 #include <cmath>
@@ -85,13 +86,9 @@ Critter* World::GetCritter(CritterId id) {
 }
 
 Critter* World::FindPlayerByName(const std::string& name) {
-    auto lower = [](std::string s) {
-        for (char& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        return s;
-    };
-    std::string n = lower(name);
+    const std::string n = utf8::Lower(name);   // Latin and Cyrillic names compare case-insensitively
     for (auto& [id, c] : critters_)
-        if (c->IsPlayer() && lower(c->name) == n) return c.get();
+        if (c->IsPlayer() && utf8::Lower(c->name) == n) return c.get();
     return nullptr;
 }
 
