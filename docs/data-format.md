@@ -240,6 +240,13 @@ prototypes with the pid of the original they are cloned from), split in chunks o
 tooltips and slot layout from the list (slots without a trait are hidden); a client that never receives the message keeps the
 original English.stf trait names. The client applies prototype overrides to its `ProtoDb` so inventory and examine texts match.
 
+## 7b. Localization of data
+
+Data JSON carries English text only (`name`, `desc`, quest `title` / `text`). Translations are locale keys by convention, not per-record
+fields (`name_ru` / `desc_ru` do not exist): `perk.<id>.name|desc`, `trait.<id>.name|desc`, `skill.<EnglishName>.name|desc`,
+`quest.<id>.title|text` in `data/locale/<lang>/content.json`; `stf.<id>` overrides an original English.stf text. Fallback: language -> English
+data text. The content sync (7) is built per player language. Details: `docs/localization.md`.
+
 ## 8. Known gaps
 
 * Effects cover the stats listed in 4; no SPECIAL modifiers, no conditional or per-weapon effects yet.

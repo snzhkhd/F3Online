@@ -1,5 +1,7 @@
 # Smoke tests.
 #  1. f3_server --no-data (built-in Lua test map) + f3_testclient (headless bot): protocol round trips.
+#  0c. Localization: f3_localetest (loader, fallbacks, placeholders, UTF-8 wrap), f3_server --check-locale --strict on data/locale (+ a broken fixture
+#      that must fail); with game data: f3_gametest --locale (per-player language of server messages, Cyrillic names / chat).
 #  0. Data layer: f3_datatest (loader / merge / validation unit tests), f3_server --validate-data on data/ (must pass) and on the
 #     deliberately broken engine/tests/data_bad (must fail with a status code, must pass with --lenient).
 #  2. If gamedata/server exists (run f3_dataimport first): f3_server on the real data + f3_gametest
@@ -99,6 +101,27 @@ if (-not $pbad.WaitForExit(15000)) { Stop-Process -Id $pbad.Id -Force; Write-Hos
 elseif ($pbad.ExitCode -eq 0) { Write-Host "FAIL: server started with broken data"; $exit = 1 }
 else { Write-Host "ok:   server refuses to start on broken data (exit $($pbad.ExitCode))" }
 
+# ---- 0c. localization: unit tests (loader, fallbacks, placeholders, UTF-8 wrap) and the coverage report of data/locale
+$localetest = Join-Path $BinDir "f3_localetest.exe"
+if (Test-Path $localetest) {
+    & $localetest | Where-Object { $_ -notmatch "INFO" }
+    if ($LASTEXITCODE -ne 0) { Write-Host "f3_localetest FAILED"; $exit = 1 }
+}
+$lout = & $server --check-locale --content $contentDir --strict
+if ($LASTEXITCODE -ne 0) { Write-Host ($lout -join "`n"); Write-Host "FAIL: --check-locale reports problems in data/locale"; $exit = 1 }
+else { Write-Host "ok:   --check-locale: every key translated, placeholders match, no undefined keys"; $lout | Select-String "^language|locale check" | ForEach-Object { Write-Host "      $_" } }
+$badLoc = Join-Path $env:TEMP ("f3_smoke_badlocale_" + $PID)   # a broken locale folder: placeholder mismatch + missing key + used-but-undefined key
+if (Test-Path $badLoc) { Remove-Item -Recurse -Force $badLoc }
+foreach ($l in "en", "ru", "src") { New-Item -ItemType Directory -Force (Join-Path $badLoc $l) | Out-Null }
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[IO.File]::WriteAllText((Join-Path $badLoc "en\ui.json"), '{"ui.a":"A {n}","ui.b":"B"}', $utf8)
+[IO.File]::WriteAllText((Join-Path $badLoc "ru\ui.json"), '{"ui.a":"A {m}"}', $utf8)
+[IO.File]::WriteAllText((Join-Path $badLoc "src\code.cpp"), 'const char* k = "ui.a"; const char* u = "ui.undefined_key";', $utf8)
+$blout = & $server --check-locale --content $contentDir --locale $badLoc --src (Join-Path $badLoc "src")
+if ($LASTEXITCODE -ne 1 -or -not (($blout -join "`n") -match "ui.undefined_key" -and ($blout -join "`n") -match "placeholders differ")) { Write-Host ($blout -join "`n"); Write-Host "FAIL: --check-locale did not fail on the broken fixture (exit $LASTEXITCODE)"; $exit = 1 }
+else { Write-Host "ok:   --check-locale fails on a broken locale (placeholder mismatch, undefined key)" }
+Remove-Item -Recurse -Force $badLoc
+
 # ---- 1. test map
 $log1 = Join-Path $env:TEMP "f3_server_smoke.log"
 $p = Run-Server "--no-data --allow-guest" $log1 $Port
@@ -185,6 +208,24 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
     Get-Content $log5 | Select-Object -Last 25
     if ($code -ne 0) { $exit = $code }
     foreach ($d in $csaves, $cdata) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
+
+    # ---- 6. localization end to end: the language each player announces at login selects the language of server messages and
+    # of the data names (perks / traits); /lang switches at run time; UTF-8 (Cyrillic) names and chat are validated in code points
+    $lsaves = Join-Path $env:TEMP ("f3_smoke_locale_saves_" + $PID)
+    if (Test-Path $lsaves) { Remove-Item -Recurse -Force $lsaves }
+    $log6 = Join-Path $env:TEMP "f3_server_smoke_locale.log"
+    $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 5) --data `"$DataDir`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$lsaves`" --run-seconds 120" `
+        -RedirectStandardOutput $log6 -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
+    try {
+        Start-Sleep -Milliseconds 2500
+        & $gametest --port ($Port + 5) --locale
+        $code = $LASTEXITCODE
+    } finally {
+        if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+    }
+    if ($code -ne 0) { Write-Host "---- server log (localization) ----"; Get-Content $log6 | Select-Object -Last 25; $exit = $code }
+    Start-Sleep -Milliseconds 800   # let the killed server release its database files
+    if (Test-Path $lsaves) { Remove-Item -Recurse -Force $lsaves -ErrorAction SilentlyContinue }
 } else {
     Write-Host "gamedata/server not found: real-data test skipped (see docs/server-data.md)"
 }

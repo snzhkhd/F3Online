@@ -1,5 +1,6 @@
 // f3_gametest: end-to-end test of the data-driven server (run it against `f3_server --data gamedata/server`).
 //   f3_gametest [--port N] [--expect-map NAME]
+//   f3_gametest --locale        localization: per-player language of server messages, UTF-8 names / chat (server --data --dev-kit)
 //   f3_gametest --content DIR   data layer: client sync, perk flow, /reload (DIR = content folder of the server, edited by the test)
 // Two bots log in on the real start map: verifies the map size/grid, stats and starter inventory, walking
 // with real-grid pathfinding, pickup of a ground item, an attack between the bots (hit/damage events),
@@ -47,6 +48,7 @@ struct Bot {
     ENetPeer* peer = nullptr;
     std::string name;
     bool loggedIn = false, failed = false;
+    std::string failReason;           // text of the last LoginFail
     int authCode = -1, authNew = 0;   // account block
     gnet::CharSheet sheet;
     int sheetCount = 0;
@@ -100,10 +102,11 @@ struct Bot {
         enet_peer_send(peer, 0, p);
         enet_host_flush(host);
     }
-    void Login(const std::string& n) {
+    void Login(const std::string& n, const std::string& lang = std::string()) {
         name = n;
         net::LoginReq r;
         r.name = n;
+        r.lang = lang;   // language of the server messages ("" = server default)
         Send(net::Pack(r));
     }
     void AuthMsg(gnet::AuthMode mode, const std::string& n, const std::string& pw) {
@@ -116,7 +119,7 @@ struct Bot {
         uint8_t id = b.ReadU8();
         switch (id) {
             case (uint8_t)Msg::S2C_LoginOk: { net::LoginOk m; m.Read(b); myId = m.critterId; loggedIn = true; break; }
-            case (uint8_t)Msg::S2C_LoginFail: { net::LoginFail m; m.Read(b); failed = true; std::printf("login failed: %s\n", m.reason.c_str()); break; }
+            case (uint8_t)Msg::S2C_LoginFail: { net::LoginFail m; m.Read(b); failed = true; failReason = m.reason; std::printf("login failed: %s\n", m.reason.c_str()); break; }
             case (uint8_t)Msg::S2C_MapInfo: { map = net::MapInfo{}; map.Read(b); ++mapInfoCount; critters.clear(); items.clear(); objInfo.clear(); break; }
             case (uint8_t)Msg::S2C_CritterAdd: {
                 net::CritterAdd m; m.Read(b);
@@ -558,6 +561,111 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
 // the player has not talked to him, the AMX dialogue (00 Frank.scra) runs, the per player globals / journal tasks it sets are
 // stored on the player (not shared), and Frank stops barking afterwards. Junktown: Armstrong's dialogue opens the tutorial tasks.
 // ---------------------------------------------------------------------------------------------------------------------
+// Localization suite: f3_gametest --locale against `f3_server --data ... --dev-kit` (no accounts). Players announce their language at login; the
+// server localizes its messages per player (key + args, fallback lang -> en -> key); UTF-8 names / chat are validated in code points.
+static bool HasNonAscii(const std::string& t) { for (unsigned char c : t) if (c >= 0x80) return true; return false; }
+static bool AnyChat(const Bot& b, size_t from, const std::string& needle) {
+    for (size_t i = from; i < b.chat.size(); ++i) if (b.chat[i].find(needle) != std::string::npos) return true;
+    return false;
+}
+static size_t Codepoints(const std::string& t) { size_t n = 0; for (unsigned char c : t) if ((c & 0xC0) != 0x80) ++n; return n; }
+static int RunLocaleTests(uint16_t port) {
+    Bot r, e, d;
+    if (!r.Connect(port) || !e.Connect(port) || !d.Connect(port)) { std::printf("FAIL: cannot connect to 127.0.0.1:%u\n", port); return 1; }
+    const std::string ruName = u8"Сталкер";   // Stalker, in Cyrillic
+    r.Login(ruName, "ru");
+    e.Login("LocaleBotE", "en");
+    d.Login("LocaleBotD");   // an old client that does not announce a language: the server default (en)
+    CHECK(WaitFor({&r, &e, &d}, 8, [&] { return r.loggedIn && e.loggedIn && d.loggedIn && !r.chat.empty() && !e.chat.empty() && !d.chat.empty(); }), "three players logged in (ru, en, no language)");
+    if (!r.loggedIn || !e.loggedIn || !d.loggedIn) return 1;
+    auto say = [&](Bot& b, const std::string& t) { net::ChatReq c; c.text = t; b.Send(net::Pack(c)); };
+    WaitFor({&r, &e, &d}, 0.5, [] { return false; });
+    // the welcome line comes from a Lua script by key: Russian for the ru player, English for the others
+    {
+        bool ruWelcome = false, enWelcome = false, dWelcome = false, ruHasEnglish = false;
+        for (auto& t : r.chat) { if (t.find("F3Online") != std::string::npos && HasNonAscii(t)) ruWelcome = true; if (t.find("Welcome to F3Online") != std::string::npos) ruHasEnglish = true; }
+        for (auto& t : e.chat) if (t.find("Welcome to F3Online") != std::string::npos) enWelcome = true;
+        for (auto& t : d.chat) if (t.find("Welcome to F3Online") != std::string::npos) dWelcome = true;
+        CHECK(ruWelcome && !ruHasEnglish, "ru player gets the welcome message in Russian");
+        CHECK(enWelcome, "en player gets the welcome message in English");
+        CHECK(dWelcome, "player without a language gets the server default (English)");
+    }
+    // a server command message: same key, two languages
+    {
+        const size_t rn = r.chat.size(), en = e.chat.size();
+        say(r, "/traits"); say(e, "/traits");
+        CHECK(WaitFor({&r, &e}, 3, [&] { return r.chat.size() > rn && e.chat.size() > en; }), "/traits answered for both");
+        std::string rt, et;
+        for (size_t i = rn; i < r.chat.size(); ++i) rt += r.chat[i] + "\n";
+        for (size_t i = en; i < e.chat.size(); ++i) et += e.chat[i] + "\n";
+        CHECK(HasNonAscii(rt) && rt.find("Traits") == std::string::npos, "ru /traits is Russian: %s", rt.substr(0, 60).c_str());
+        CHECK(et.find("Traits") != std::string::npos && !HasNonAscii(et), "en /traits is English: %s", et.substr(0, 60).c_str());
+    }
+    // designer data names follow the player language (content sync): trait.<id>.name keys
+    if (!r.content.traits.empty() && !e.content.traits.empty()) {
+        const gnet::ContentDefs::Trait& tr = r.content.traits[0];
+        const gnet::ContentDefs::Trait* te = nullptr;
+        for (auto& t : e.content.traits) if (t.id == tr.id) te = &t;
+        CHECK(te && HasNonAscii(tr.name) && !HasNonAscii(te->name), "trait '%s' is named per language (ru '%s', en '%s')", tr.id.c_str(), tr.name.c_str(), te ? te->name.c_str() : "?");
+    } else {
+        std::printf("note: no trait definitions received, per-language trait names not checked\n");
+    }
+    // runtime switch: /lang
+    {
+        size_t rn = r.chat.size();
+        say(r, "/lang");
+        CHECK(WaitFor({&r}, 3, [&] { return r.chat.size() > rn; }) && AnyChat(r, rn, "ru"), "/lang shows the current language");
+        rn = r.chat.size();
+        say(r, "/lang en");
+        CHECK(WaitFor({&r}, 3, [&] { return r.chat.size() > rn; }) && AnyChat(r, rn, "Language set to en"), "/lang en switches the ru player to English");
+        rn = r.chat.size();
+        say(r, "/lang xx");
+        CHECK(WaitFor({&r}, 3, [&] { return r.chat.size() > rn; }) && AnyChat(r, rn, "Unknown language"), "unknown language is refused (in the current language)");
+        rn = r.chat.size();
+        say(r, "/lang ru");
+        CHECK(WaitFor({&r}, 3, [&] { return r.chat.size() > rn; }) && HasNonAscii(r.chat.back()), "/lang ru switches back");
+    }
+    // UTF-8 chat: Cyrillic text arrives intact, control characters are dropped, the limit counts code points
+    {
+        const std::string text = u8"Привет, мир!";
+        const size_t en = e.chat.size();
+        say(r, text);
+        CHECK(WaitFor({&e}, 3, [&] { return e.chat.size() > en; }) && e.chat.back() == text && e.chatFrom.back() == ruName, "Cyrillic chat line arrives intact from a Cyrillic name");
+        const std::string test = u8"Тест";
+        const size_t en2 = e.chat.size();
+        say(r, test + "\x01\x02 ok");
+        CHECK(WaitFor({&e}, 3, [&] { return e.chat.size() > en2; }) && e.chat.back() == test + " ok", "control characters are stripped from chat: '%s'", e.chat.back().c_str());
+        std::string lng;
+        for (int i = 0; i < 300; ++i) lng += u8"ж";
+        const size_t en3 = e.chat.size();
+        say(r, lng);
+        const bool got = WaitFor({&e}, 3, [&] { return e.chat.size() > en3; });
+        const size_t cps = got ? Codepoints(e.chat.back()) : 0;
+        CHECK(got && cps == 200, "chat limit is counted in code points (%zu, expected 200)", cps);
+    }
+    // names: validated in code points, letters / digits / _ only, no control characters, no broken UTF-8
+    {
+        auto tryName = [&](const std::string& n, const std::string& lang) {
+            Bot x;
+            if (!x.Connect(port)) return std::string("noconnect");
+            x.Login(n, lang);
+            WaitFor({&x}, 3, [&] { return x.loggedIn || x.failed; });
+            return x.loggedIn ? std::string("ok") : x.failed ? x.failReason : std::string("timeout");
+        };
+        std::string sixteen;
+        for (int i = 0; i < 16; ++i) sixteen += u8"б";
+        CHECK(tryName(sixteen, "ru") == "ok", "16 Cyrillic letters (32 bytes) are a valid name");
+        const std::string longFail = tryName(sixteen + u8"б", "ru");
+        CHECK(longFail != "ok" && HasNonAscii(longFail), "17 code points refused, reason in Russian: %s", longFail.c_str());
+        const std::string badEn = tryName("Bad\x01Name", "en");
+        CHECK(badEn != "ok" && !HasNonAscii(badEn) && badEn.find("invalid") != std::string::npos, "control character in a name refused, reason in English: %s", badEn.c_str());
+        CHECK(tryName("bad\xD0", "en") != "ok", "truncated UTF-8 name refused");
+        CHECK(tryName("a b", "en") != "ok", "space in a name refused");
+    }
+    std::printf(g_failed ? "LOCALE GAMETEST FAILED\n" : "LOCALE GAMETEST PASSED\n");
+    return g_failed ? 1 : 0;
+}
+
 static int RunTutorialTests(uint16_t port) {
     Bot a;
     if (!a.Connect(port)) { std::printf("FAIL: cannot connect\n"); return 1; }
@@ -1083,6 +1191,7 @@ int main(int argc, char** argv) {
     if (accountPhase) return RunAccountTests(port, accountPhase, stateFile);
     for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--doors")) return RunDoorTests(port, std::atoi(argv[i + 1]), stateFile);
     for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--tutorial")) return RunTutorialTests(port);
+    for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--locale")) return RunLocaleTests(port);
     for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--content")) return RunContentTests(port, argv[i + 1]);
 
     Bot a, b;

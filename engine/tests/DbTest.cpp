@@ -151,6 +151,38 @@ static void TestTransactions() {
 
 // ============================================================================================================ round trips
 
+// UTF-8 (Cyrillic) names, chat text and quest texts: stored and read back byte for byte, account names fold case across Latin and Cyrillic.
+static void TestUtf8() {
+    std::printf("utf-8\n");
+    const fs::path dir = Fresh("utf8");
+    std::string err;
+    const std::string stalker = u8"\u0421\u0442\u0430\u043b\u043a\u0435\u0440";      // Stalker
+    const std::string stalkerUp = u8"\u0421\u0422\u0410\u041b\u041a\u0415\u0420";    // STALKER (upper case)
+    const std::string stalkerLow = u8"\u0441\u0442\u0430\u043b\u043a\u0435\u0440";   // stalker (lower case)
+    Store st;
+    CHECK(st.Open(dir / "f3.db", &err), "open");
+    AccountStore as;
+    as.Init(&st, 1000);
+    Reg(as, stalker, "secret1");
+    CHECK(as.Exists(stalkerUp) && as.Exists(stalkerLow), "Cyrillic account names are case-insensitive");
+    CHECK(as.Register(stalkerLow, "other", "1.1.1.1", json::object()) == AccountStore::Result::NameTaken, "name taken across letter case (Cyrillic)");
+    CHECK(as.Register(u8"\u0418\u0433\u0440 ok", "secret1", "1.1.1.1", json::object()) == AccountStore::Result::InvalidName, "a space is not a name character");
+    json ch;
+    CHECK(as.Login(stalkerUp, "secret1", "2.2.2.2", &ch) == AccountStore::Result::Ok && ch.value("name", "") == stalker, "login with another letter case returns the stored spelling");
+    json full = MakeCharacter(stalker, "00_03_Tutorial_Junktown", 1, 2, 3, 4);
+    full["quests"] = json::array({{{"id", "q1"}, {"title", u8"\u041f\u0435\u0440\u0432\u044b\u0435 \u0448\u0430\u0433\u0438"}, {"text", u8"\u041f\u043e\u0433\u043e\u0432\u043e\u0440\u0438\u0442\u0435 \u0441 \u043c\u0435\u0441\u0442\u043d\u044b\u043c\u0438"}, {"state", 0}, {"updated", 1}}});
+    full["friends"] = json::array({u8"\u0414\u0440\u0443\u0433"});
+    CHECK(as.SaveCharacter(stalker, 0, full), "save a character with Cyrillic texts");
+    json back;
+    CHECK(st.LoadCharacter(stalkerLow, 0, &back) == Store::Load::Ok && back == full, "Cyrillic character document round trips exactly");
+    CHECK(st.Raw().ScalarText("SELECT name FROM characters LIMIT 1") == stalker, "the name column holds UTF-8: %s", st.Raw().ScalarText("SELECT name FROM characters LIMIT 1").c_str());
+    const std::string mailText = u8"\u041f\u0440\u0438\u0432\u0435\u0442 \u0438\u0437 \u043f\u0443\u0441\u0442\u043e\u0448\u0438";
+    const uint32_t id = st.MailAdd(AccountStore::Key(stalkerUp), u8"\u0414\u0440\u0443\u0433", mailText, 1700000000);
+    auto box = st.MailList(AccountStore::Key(stalkerUp));
+    CHECK(id && box.size() == 1 && box[0].text == mailText && box[0].from == u8"\u0414\u0440\u0443\u0433", "mail text and sender in Cyrillic round trip");
+    CHECK(!st.WhoHasFriend(u8"\u0434\u0440\u0443\u0433").empty() && st.WhoHasFriend(u8"\u0434\u0440\u0443\u0433")[0] == stalker, "friend lookup folds Cyrillic case");
+}
+
 static void TestRoundTrip() {
     std::printf("round trip\n");
     const fs::path dir = Fresh("rt");
@@ -458,6 +490,7 @@ int main() {
     TestOpenAndSchema();
     TestTransactions();
     TestRoundTrip();
+    TestUtf8();
     TestMigration();
     TestMigrationRoundTripExport();
     TestCorrupt();
