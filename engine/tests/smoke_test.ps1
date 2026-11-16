@@ -32,6 +32,51 @@ if (Test-Path $datatest) {
     & $datatest | Where-Object { $_ -notmatch "INFO" }
     if ($LASTEXITCODE -ne 0) { Write-Host "f3_datatest FAILED"; $exit = 1 }
 }
+# ---- 0b. persistence: unit tests (SQLite store, JSON import / export, corrupt files) + the server's database tools and first-start import
+$dbtest = Join-Path $BinDir "f3_dbtest.exe"
+if (Test-Path $dbtest) {
+    & $dbtest | Where-Object { $_ -notmatch "INFO|WARN|ERROR" }
+    if ($LASTEXITCODE -ne 0) { Write-Host "f3_dbtest FAILED"; $exit = 1 }
+}
+$dbs = Join-Path $env:TEMP ("f3_smoke_db_" + $PID)
+if (Test-Path $dbs) { Remove-Item -Recurse -Force $dbs }
+New-Item -ItemType Directory -Force (Join-Path $dbs "accounts") | Out-Null
+$salt = [byte[]](1..16)
+$kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes("oldpass", $salt, 1000, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+$hashHex = -join ($kdf.GetBytes(32) | ForEach-Object { $_.ToString("x2") })
+$saltHex = -join ($salt | ForEach-Object { $_.ToString("x2") })
+$acc = '{"name":"OldUser","algo":"pbkdf2-sha256","iterations":1000,"salt":"' + $saltHex + '","hash":"' + $hashHex + '","characters":[{"name":"OldUser","level":3,"xp":500,"map":"town","x":5,"y":6,"created":true,"quests":[{"id":"q","title":"T","text":"x","state":0,"updated":1}],"friends":["Pal"]}]}'
+[System.IO.File]::WriteAllText((Join-Path $dbs "accounts\acc_olduser.json"), $acc)
+$mout = & $server --saves $dbs --migrate-json
+if ($LASTEXITCODE -ne 0 -or -not ($mout -match "imported 1 account") -or -not (Test-Path (Join-Path $dbs "accounts.migrated\acc_olduser.json")) -or (Test-Path (Join-Path $dbs "accounts"))) { Write-Host "FAIL: --migrate-json"; $mout | Write-Host; $exit = 1 } else { Write-Host "ok:   --migrate-json imports the old JSON saves and keeps them as accounts.migrated" }
+$mout = & $server --saves $dbs --migrate-json
+if ($LASTEXITCODE -ne 0 -or -not ($mout -match "nothing to migrate")) { Write-Host "FAIL: --migrate-json is not idempotent"; $exit = 1 } else { Write-Host "ok:   --migrate-json twice: second run does nothing" }
+$dump = (& $server --saves $dbs --db-dump) -join "`n"
+if ($LASTEXITCODE -ne 0 -or -not ($dump -match "OldUser") -or ($dump -match $hashHex) -or -not ($dump -match '"friend":"Pal"')) { Write-Host "FAIL: --db-dump"; $exit = 1 } else { Write-Host "ok:   --db-dump shows the imported rows and hides the hash" }
+& $server --saves $dbs --export-json (Join-Path $dbs "export") | Out-Null
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $dbs "export\accounts\acc_olduser.json"))) { Write-Host "FAIL: --export-json"; $exit = 1 } else { Write-Host "ok:   --export-json writes the old format" }
+# server start on a damaged database: refuses (exit 1) and leaves the file alone
+$bsaves = Join-Path $env:TEMP ("f3_smoke_baddb_" + $PID)
+if (Test-Path $bsaves) { Remove-Item -Recurse -Force $bsaves }
+New-Item -ItemType Directory -Force $bsaves | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $bsaves "f3.db"), "this is not a database, do not touch")
+$bdlog = Join-Path $env:TEMP "f3_server_baddb.log"
+$pdb = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 8) --no-data --scripts `"$ScriptsDir`" --saves `"$bsaves`" --run-seconds 20" -RedirectStandardOutput $bdlog -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
+$null = $pdb.Handle
+if (-not $pdb.WaitForExit(15000)) { Stop-Process -Id $pdb.Id -Force; Write-Host "FAIL: server kept running on a damaged database"; $exit = 1 }
+elseif ($pdb.ExitCode -eq 0 -or -not ((Get-Content $bdlog -Raw) -match "NOT modified") -or ([System.IO.File]::ReadAllText((Join-Path $bsaves "f3.db")) -ne "this is not a database, do not touch")) { Write-Host "FAIL: damaged database handling (exit $($pdb.ExitCode))"; $exit = 1 }
+else { Write-Host "ok:   server refuses a damaged database with a clear error and leaves the file untouched" }
+Remove-Item -Recurse -Force $bsaves
+# first start on old JSON saves: imported automatically
+New-Item -ItemType Directory -Force (Join-Path $dbs "fs\accounts") | Out-Null
+Copy-Item (Join-Path $dbs "accounts.migrated\acc_olduser.json") (Join-Path $dbs "fs\accounts\acc_olduser.json")
+$fslog = Join-Path $env:TEMP "f3_server_firststart.log"
+$pfs = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 7) --no-data --scripts `"$ScriptsDir`" --saves `"$(Join-Path $dbs 'fs')`" --run-seconds 4" -RedirectStandardOutput $fslog -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
+$null = $pfs.Handle
+if (-not $pfs.WaitForExit(20000)) { Stop-Process -Id $pfs.Id -Force }
+if (-not ((Get-Content $fslog -Raw) -match "1 account\(s\)") -or -not (Test-Path (Join-Path $dbs "fs\accounts.migrated")) -or -not (Test-Path (Join-Path $dbs "fs\f3.db"))) { Write-Host "FAIL: automatic import at first start"; Get-Content $fslog | Write-Host; $exit = 1 } else { Write-Host "ok:   first start imports the old JSON saves automatically" }
+Remove-Item -Recurse -Force $dbs
+
 $contentDir = Join-Path (Split-Path $PSScriptRoot -Parent | Split-Path -Parent) "data"
 $badDir = Join-Path $PSScriptRoot "data_bad"
 $hasGame = Test-Path (Join-Path $DataDir "manifest.json")

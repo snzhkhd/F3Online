@@ -26,3 +26,11 @@ client.cfg
 *.lnk
 saves/
 _work/
+
+# server databases and set-aside JSON saves: never commit
+*.db
+*.db-wal
+*.db-shm
+*.db.*.bak
+*.migrated/
+*.migrated.*/

@@ -2,6 +2,7 @@
 #include <chrono>
 #include <ctime>
 #include <enet/enet.h>
+#include "Migrate.h"
 #include "Scripting.h"
 #include "Server.h"
 #include "common/log.h"
@@ -100,6 +101,28 @@ void Server::ApplyCharacter(Critter& c, const json& j) {
         for (auto& [k, v] : j["gvars"].items()) if (v.is_number()) c.gvars[k] = v.get<double>();
 }
 
+bool Server::OpenStore() {
+    std::error_code ec;
+    std::filesystem::create_directories(cfg_.savesDir, ec);
+    std::string err;
+    if (!store_.Open(cfg_.savesDir / "f3.db", &err)) {
+        log::Error("%s", err.c_str());
+        return false;
+    }
+    // first start after the switch from JSON files: import the old accounts / mail / world state into the empty database
+    MigrateReport rep;
+    if (!MigrateJsonSaves(store_, cfg_.savesDir, false, rep, &err)) {
+        log::Error("import of the old JSON saves failed, nothing was changed: %s", err.c_str());
+        return false;
+    }
+    accounts_.Init(&store_, cfg_.pbkdf2Iterations);
+    return true;
+}
+
+void Server::Audit(const std::string& kind, const std::string& actor, const json& data) {
+    if (store_.IsOpen()) store_.LogEvent(kind, actor, data);
+}
+
 bool Server::SavePlayer(Critter& c) {
     if (c.account.empty() || !c.IsPlayer() || !accounts_.Ready()) return false;
     if (IsCreating(c)) return false;   // still in character creation: not in the world, nothing worth saving
@@ -110,8 +133,10 @@ bool Server::SavePlayer(Critter& c) {
 
 void Server::SaveAllPlayers() {
     int n = 0;
+    Store::Tx tx(store_);   // one commit for the whole autosave (each SavePlayer is a savepoint inside)
     for (auto& [id, c] : world_.Critters())
         if (c->IsPlayer() && c->mapId != 0 && SavePlayer(*c)) ++n;
+    tx.Commit();
     if (n) log::Info("saved %d player(s)", n);
 }
 
@@ -133,6 +158,7 @@ void Server::OnAuth(ENetPeer* peer, const gnet::Auth& a) {
         SendRaw(peer, gnet::PackG(r));
         if (code != AuthCode::Ok) {
             log::Info("auth '%s' rejected: %s", a.name.c_str(), r.text.c_str());
+            if (code == AuthCode::BadCredentials || code == AuthCode::RateLimited) Audit("login_failed", a.name.substr(0, 32), {{"ip", PeerIp(peer)}, {"reason", r.text}});
             enet_peer_disconnect_later(peer, 0);
         }
     };
@@ -164,6 +190,7 @@ void Server::OnAuth(ENetPeer* peer, const gnet::Auth& a) {
     // duplicate login: the new session wins, the old one is saved and kicked
     if (Critter* old = world_.FindPlayerByName(name)) {
         log::Info("duplicate login of '%s': kicking the old session", name.c_str());
+        Audit("kick", name, {{"reason", "duplicate login"}, {"ip", ip}});
         if (old->peer) {
             ENetPeer* op = old->peer;
             SendRaw(op, net::Pack(net::LoginFail{"logged in from another location"}));
@@ -172,6 +199,7 @@ void Server::OnAuth(ENetPeer* peer, const gnet::Auth& a) {
         }
     }
     reply(AuthCode::Ok, isNew);
+    Audit(isNew ? "register" : "login", name, {{"ip", ip}});
     if (!StartSession(peer, name, &ch, name)) {
         enet_peer_disconnect_later(peer, 0);
     }

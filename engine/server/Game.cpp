@@ -996,6 +996,8 @@ void Server::KillCritter(Critter& c, Critter* killer) {
     SendCritterState(c);
     if (c.IsPlayer()) { SendStats(c); Tell(c, "You have died."); }
     if (amx_) amx_->OnDeath(c);
+    if (c.IsPlayer() || (killer && killer->IsPlayer()))   // audit log: every player death and every kill by a player
+        Audit("kill", killer ? killer->name : std::string(), {{"victim", c.name}, {"victim_is_player", c.IsPlayer()}, {"map", c.mapId}, {"x", c.pos.x}, {"y", c.pos.y}});
     if (c.IsNpc() && !c.isStatic && killer && killer->IsPlayer()) AddXp(*killer, KillXp(c));
     if (Map* m = world_.GetMap(c.mapId)) m->dirty = true;
     if (scripting_) {

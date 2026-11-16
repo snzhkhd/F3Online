@@ -7,3 +7,9 @@ add_executable(f3_datatest DataTest.cpp ../server/Content.cpp ../server/DataStor
 target_include_directories(f3_datatest PRIVATE ../server)
 target_link_libraries(f3_datatest PRIVATE f3_common nlohmann_json::nlohmann_json)
 add_test(NAME f3_datatest COMMAND f3_datatest)
+
+# Persistence layer: SQLite store, schema migrations, JSON import / export, corrupt files. No server, no game data.
+add_executable(f3_dbtest DbTest.cpp ../server/Db.cpp ../server/Store.cpp ../server/Migrate.cpp ../server/Account.cpp)
+target_include_directories(f3_dbtest PRIVATE ../server)
+target_link_libraries(f3_dbtest PRIVATE f3_common nlohmann_json::nlohmann_json sqlite3_static)
+add_test(NAME f3_dbtest COMMAND f3_dbtest)

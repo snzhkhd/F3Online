@@ -6,6 +6,7 @@
 #include <memory>
 #include <map>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <vector>
 #include "Account.h"
@@ -36,7 +37,7 @@ public:
         bool devKit = false;            // --dev-kit: new players get a few test items (gun, ammo, armor, revolver); default: nothing
         bool noData = false;            // --no-data: never load gamedata even if present
         int maxRunSeconds = 0;  // 0 = run until stopped; used by smoke tests
-        std::filesystem::path savesDir;  // account + character files (default: <repo>/saves, gitignored)
+        std::filesystem::path savesDir;  // holds f3.db (accounts, characters, mail, world state, events); default: <repo>/saves, gitignored
         bool allowGuest = false;        // --allow-guest (implied by --dev-kit): legacy name-only login, nothing is saved
         int saveIntervalSec = 60;       // periodic save of all logged in players (0 = only on logout / transfer / shutdown)
         int pbkdf2Iterations = 10000;
@@ -98,7 +99,7 @@ public:
     void SetLockDC(Item& o, int dc);
     void SetLockKey(Item& o, const std::string& keyId);
     int ObjDist(const Item& o, TilePos from) const;                       // distance to the object or its doorway cells
-    void LoadWorldState();                                                // <saves>/world/<map>.json: door / container state per map
+    void LoadWorldState();                                                // table world_objects: door / container state per map
     void SaveWorldState(bool force = false);
     bool TakeFrom(Critter& c, ItemId containerId, ItemId entry, bool corpse = false);
     bool PutInto(Critter& c, ItemId containerId, ItemId entry, bool corpse);   // move one of c's items into a container / corpse
@@ -126,7 +127,7 @@ public:
     bool CreateCharacter(Critter& c, const gnet::CharCreate& m);
     bool SpendSkillPoints(Critter& c, int skill, int points);
     bool UseSkill(Critter& c, int skill, int kind, uint32_t target);
-    // ---- Pip-Boy: quests, friends, mail (Pip.cpp). Quests and friends live in the character, mail per account in <saves>/mail/<key>.json.
+    // ---- Pip-Boy: quests, friends, mail (Pip.cpp). Quests and friends live in the character (tables quests / friends of the store), mail per account (table mail).
     bool QuestAdd(Critter& c, const std::string& id, const std::string& title, const std::string& text);   // false: id already in the log
     bool QuestSet(Critter& c, const std::string& id, uint8_t state);   // 1 completed, 2 failed, 0 active again; false: unknown quest
     int QuestState(const Critter& c, const std::string& id) const;     // -1 unknown, else 0 / 1 / 2
@@ -155,8 +156,12 @@ public:
     void SpawnDataNpcs();                                    // data/npcs "spawns"
     std::string ReloadAll(const std::string& what);          // "data" | "scripts" | "all" -> report text (console and /reload)
     // ---- accounts + persistence (Persist.cpp)
+    bool OpenStore();                 // <saves>/f3.db: open + migrate the schema + import old JSON saves; false = fatal (clear message logged)
+    Store& GetStore() { return store_; }
+    // audit log (table events): kind login / logout / register / kick / level_up / kill / mail_sent / character_created ...; never throws
+    void Audit(const std::string& kind, const std::string& actor, const nlohmann::json& data = nlohmann::json::object());
     bool SavePlayer(Critter& c);
-    void SaveAllPlayers();
+    void SaveAllPlayers();           // one transaction for all players
     nlohmann::json CharacterToJson(const Critter& c) const;
     void ApplyCharacter(Critter& c, const nlohmann::json& j);
     // quest / script globals: per player overlay (Critter::gvars) over the shared table (originals from globals.ini)
@@ -273,14 +278,14 @@ private:
     GameConfig rt_;
     ContentDb content_;
     uint32_t contentRev_ = 0;
+    Store store_;           // declared before accounts_ (which points at it); all access on the server thread (Db.h)
     AccountStore accounts_;
     uint64_t nextSaveTick_ = 0;
     std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
 
     struct MailMsg { uint32_t id = 0; std::string from, text; int64_t time = 0; bool read = false; };
-    std::vector<MailMsg>& Mailbox(const std::string& accountKey);   // loads <saves>/mail/<key>.json on first use
-    bool SaveMailbox(const std::string& accountKey);
-    std::map<std::string, std::vector<MailMsg>> mail_;
+    std::vector<MailMsg> Mailbox(const std::string& accountKey);   // from the store, oldest first
+    void DbCommand(const std::string& cmd, std::istringstream& args);   // console: dbinfo | events [n] [kind]
     std::mutex cmdMutex_;
     std::vector<std::string> commands_;
 };

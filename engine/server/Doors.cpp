@@ -2,7 +2,7 @@
 // key-only), a lock DC and a key item. A closed door blocks its doorway cells (movement, pathing, line of sight); critters that may
 // operate it (unlocked, or carrying the key) open it on the way. Containers share the state model: loot only while open.
 // Lockpicking (Security skill through C2S_UseSkill) and keys (inventory items) live here; Lua / AMX scripts reach it through
-// Scripting.cpp / AmxHost.cpp. State is persisted per map under <saves>/world/. See docs/research/doors.md.
+// Scripting.cpp / AmxHost.cpp. State is persisted per map in the store (table world_objects). See docs/research/doors.md.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -345,79 +345,75 @@ bool Server::Lockpick(Critter& c, Item& o) {
     return true;
 }
 
-// ------------------------------------------------------------------ persistence (<saves>/world/<map>.json)
+// ------------------------------------------------------------------ persistence (table world_objects, one set of rows per map)
 
 namespace {
 std::string ObjKey(const DataStore& d, const Item& o) {
     const Proto* p = d.GetProto(o.pid);
     return (p ? p->key : o.name) + "@" + std::to_string(o.pos.x) + "," + std::to_string(o.pos.y);
 }
-std::string SafeName(std::string s) {
-    for (char& ch : s)
-        if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_' && ch != '-' && ch != '.') ch = '_';
-    return s;
-}
 }  // namespace
 
 void Server::SaveWorldState(bool force) {
-    if (cfg_.savesDir.empty()) return;
+    if (!store_.IsOpen()) return;
     int saved = 0;
+    Store::Tx tx(store_);   // all dirty maps in one commit
+    std::vector<Map*> done;
     for (auto& mp : world_.Maps()) {
         Map& m = *mp;
         if (!m.objDirty && !force) continue;
-        json arr = json::array();
+        std::vector<WorldObjRow> rows;
         for (auto& [id, o] : m.items) {
             if (o.kind != ObjKind::Door && o.kind != ObjKind::Container) continue;
-            json j;
-            j["key"] = ObjKey(data_, o);
-            j["open"] = o.open;
-            j["locked"] = o.locked;
-            j["flags"] = o.lockFlags;
-            j["dc"] = o.lockDC;
-            j["lock_key"] = o.keyId;
+            WorldObjRow r;
+            r.key = ObjKey(data_, o);
+            r.open = o.open;
+            r.locked = o.locked;
+            r.flags = o.lockFlags;
+            r.dc = o.lockDC;
+            r.lockKey = o.keyId;
             if (o.kind == ObjKind::Container) {
-                j["contents"] = json::array();
+                json contents = json::array();
                 for (const InvItem& it : o.contents)
-                    if (const Proto* p = data_.GetProto(it.pid)) j["contents"].push_back({{"proto", p->key}, {"count", it.count}});
+                    if (const Proto* p = data_.GetProto(it.pid)) contents.push_back({{"proto", p->key}, {"count", it.count}});
+                r.contents = contents.dump();
             }
-            arr.push_back(std::move(j));
+            rows.push_back(std::move(r));
         }
-        if (arr.empty()) { m.objDirty = false; continue; }
-        std::error_code ec;
-        std::filesystem::create_directories(cfg_.savesDir / "world", ec);
-        json doc = {{"version", 1}, {"map", m.name}, {"objects", arr}};
-        if (WriteFileAtomic(cfg_.savesDir / "world" / (SafeName(m.name) + ".json"), doc.dump(1))) { m.objDirty = false; ++saved; }
+        if (rows.empty()) { m.objDirty = false; continue; }
+        if (store_.SaveWorldObjects(m.name, rows)) { done.push_back(&m); ++saved; }
         else log::Error("world state of map %s: save FAILED", m.name.c_str());
     }
+    if (!tx.Commit()) { log::Error("world state: commit FAILED, will retry"); return; }   // objDirty stays set
+    for (Map* m : done) m->objDirty = false;
     if (saved) log::Info("saved door / container state of %d map(s)", saved);
 }
 
 void Server::LoadWorldState() {
-    if (cfg_.savesDir.empty()) return;
+    if (!store_.IsOpen()) return;
     int maps = 0, objs = 0;
     for (auto& mp : world_.Maps()) {
         Map& m = *mp;
-        std::ifstream f(cfg_.savesDir / "world" / (SafeName(m.name) + ".json"), std::ios::binary);
-        if (!f) continue;
-        json doc = json::parse(f, nullptr, false);
-        if (doc.is_discarded() || !doc.is_object() || !doc.contains("objects")) { log::Warn("world state of map %s is unreadable, ignored", m.name.c_str()); continue; }
+        const std::vector<WorldObjRow> rows = store_.LoadWorldObjects(m.name);
+        if (rows.empty()) continue;
         std::unordered_map<std::string, Item*> byKey;
         for (auto& [id, o] : m.items)
             if (o.kind == ObjKind::Door || o.kind == ObjKind::Container) byKey[ObjKey(data_, o)] = &o;
-        for (const json& j : doc["objects"]) {
-            auto it = byKey.find(j.value("key", std::string()));
+        for (const WorldObjRow& r : rows) {
+            auto it = byKey.find(r.key);
             if (it == byKey.end()) continue;
             Item& o = *it->second;
-            o.open = j.value("open", false);
-            o.locked = j.value("locked", false);
-            o.lockFlags = static_cast<uint8_t>(j.value("flags", 0));
-            o.lockDC = j.value("dc", 0);
-            o.keyId = j.value("lock_key", std::string());
+            o.open = r.open;
+            o.locked = r.locked;
+            o.lockFlags = static_cast<uint8_t>(r.flags);
+            o.lockDC = r.dc;
+            o.keyId = r.lockKey;
             if (o.kind == ObjKind::Container) {
                 o.open = false;   // a container is closed again after a restart
-                if (j.contains("contents") && j["contents"].is_array()) {
+                const json contents = r.contents.empty() ? json() : json::parse(r.contents, nullptr, false);
+                if (contents.is_array()) {
                     o.contents.clear();
-                    for (const json& c : j["contents"])
+                    for (const json& c : contents)
                         if (const Proto* p = data_.FindProto(c.value("proto", std::string())))
                             o.contents.push_back(InvItem{world_.NextItemId(), p->pid, static_cast<uint16_t>(c.value("count", 1)), false, 0});
                 }

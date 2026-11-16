@@ -3,8 +3,10 @@
 #include <enet/enet.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstring>
+#include <ctime>
 #include <sstream>
 #include <thread>
 #include <unordered_set>
@@ -90,8 +92,8 @@ bool Server::Init() {
     }
     if (!data_.Loaded() && !LoadContent()) return false;   // no gamedata: traits / perks / skills / quests only
     if (cfg_.savesDir.empty()) cfg_.savesDir = cfg_.scriptsDir.parent_path() / "saves";
-    accounts_.Init(cfg_.savesDir, cfg_.pbkdf2Iterations);
-    LoadWorldState();   // door / container state per map (<saves>/world/)
+    if (!OpenStore()) return false;   // <saves>/f3.db (+ import of old JSON saves); a damaged file is refused, never replaced
+    LoadWorldState();   // door / container state per map (table world_objects)
     accounts_.ConfigureLimit(cfg_.maxLoginFails, 300, 30);
     if (cfg_.devKit) { cfg_.allowGuest = true; cfg_.devCommands = true; }
     nextSaveTick_ = static_cast<uint64_t>(std::max(0, cfg_.saveIntervalSec)) * cfg_.tickRate;
@@ -352,6 +354,7 @@ void Server::OnDisconnect(ENetPeer* peer) {
         return;
     }
     log::Info("player '%s' left", c->name.c_str());
+    if (!c->account.empty()) Audit("logout", c->name, {{"map", c->mapId}, {"level", c->level}});
     c->peer = nullptr;
     scripting_->OnLogout(*c);
     PipOnLogout(*c);
@@ -703,6 +706,32 @@ void Server::ProcessCommands() {
     for (auto& c : cmds) ExecCommand(c);
 }
 
+void Server::DbCommand(const std::string& cmd, std::istringstream& ss) {
+    if (!store_.IsOpen()) { log::Info("no database"); return; }
+    if (cmd == "dbinfo") {
+        const DbInfo d = store_.Info();
+        log::Info("database %s: schema v%d, journal %s, %lld bytes (+ %lld WAL), %lld pages of %lld (%lld free)", d.path.c_str(), d.schemaVersion, d.journalMode.c_str(),
+                  static_cast<long long>(d.fileBytes), static_cast<long long>(d.walBytes), static_cast<long long>(d.pageCount), static_cast<long long>(d.pageSize),
+                  static_cast<long long>(d.freePages));
+        std::string line;
+        for (const TableCount& t : d.tables) line += (line.empty() ? "" : ", ") + t.name + " " + std::to_string(t.rows);
+        log::Info("rows: %s", line.c_str());
+        return;
+    }
+    int n = 20;   // events [n] [kind] [actor]
+    std::string kind, actor, tok;
+    if (ss >> tok) { if (std::isdigit(static_cast<unsigned char>(tok[0]))) { n = std::max(1, std::atoi(tok.c_str())); ss >> kind; } else kind = tok; }
+    ss >> actor;
+    const auto rows = store_.RecentEvents(n, kind, actor);
+    log::Info("%zu event(s) (newest first, of %lld)", rows.size(), static_cast<long long>(store_.EventCount()));
+    for (const EventRow& e : rows) {
+        char tb[32] = "?";
+        const std::time_t t = static_cast<std::time_t>(e.ts);
+        if (const std::tm* tm = std::localtime(&t)) std::strftime(tb, sizeof tb, "%Y-%m-%d %H:%M:%S", tm);
+        log::Info("  #%lld %s %-12s %-16s %s", static_cast<long long>(e.id), tb, e.kind.c_str(), e.actor.c_str(), e.data.c_str());
+    }
+}
+
 void Server::ExecCommand(const std::string& line) {
     std::istringstream ss(line);
     std::string cmd;
@@ -727,6 +756,8 @@ void Server::ExecCommand(const std::string& line) {
         if (tok.size() >= 2) { pub = tok.back(); for (size_t i = 0; i + 1 < tok.size(); ++i) sc += (i ? " " : "") + tok[i]; }  // script names may contain spaces
         if (!amx_ || sc.empty() || pub.empty()) log::Info("usage: amx <script> <public>   (needs game data); %zu amx instances", amx_ ? amx_->Count() : 0);
         else log::Info("amx %s.%s: %s", sc.c_str(), pub.c_str(), amx_->RunTest(sc, pub).c_str());
+    } else if (cmd == "dbinfo" || cmd == "events") {
+        DbCommand(cmd, ss);
     } else if (cmd == "say") {
         std::string rest;
         std::getline(ss, rest);
@@ -734,7 +765,7 @@ void Server::ExecCommand(const std::string& line) {
     } else if (cmd == "quit" || cmd == "stop" || cmd == "exit") {
         RequestStop();
     } else {
-        log::Info("commands: reload [data|scripts|all] | status | amx <script> <public> | say <text> | quit");
+        log::Info("commands: reload [data|scripts|all] | status | dbinfo | events [n] [kind] | amx <script> <public> | say <text> | quit");
     }
 }
 

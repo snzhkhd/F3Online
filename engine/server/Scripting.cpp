@@ -315,7 +315,7 @@ void Scripting::BindApi(sol::state& L) {
         if (!d || !m) return sol::make_object(sv, sol::nil);
         return sol::make_object(sv, std::string(Server::OperateResultName(S.Operate(by.value_or(nullptr), *m, *d, want))));
     };
-    L["save_world"] = [&S]() { S.SaveWorldState(true); };   // writes <saves>/world/*.json now (also done periodically and at shutdown)
+    L["save_world"] = [&S]() { S.SaveWorldState(true); };   // writes the door / container state to the database now (also done periodically and at shutdown)
     L["set_lock_roll"] = [&S](int force) { S.Rt().ForceLockRoll = force; };   // dev/test only: 1 picks always succeed, 0 always fail, -1 random
     L["get_global"] = [&S](const std::string& k) { return S.GetGlobal(k); };
     L["set_global"] = [&S](const std::string& k, double v) { S.SetGlobal(k, v); };

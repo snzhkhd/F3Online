@@ -113,6 +113,7 @@ bool Server::CreateCharacter(Critter& c, const gnet::CharCreate& m) {
     SendWaitState(*cc);
     Tell(*cc, "Character created. Welcome to the wasteland!");
     SavePlayer(*cc);
+    Audit("character_created", cc->name, {{"level", cc->level}, {"account", cc->account}});
     return true;
 }
 
@@ -198,6 +199,7 @@ void Server::AddXp(Critter& c, int amount) {
         if (rt_.PerkRate > 0 && c.level % rt_.PerkRate == 0) { ++c.perkPoints; msg += ", +1 perk point (/perks)"; }
         Tell(c, msg + ".");
         leveled = true;
+        if (!c.account.empty()) Audit("level_up", c.name, {{"level", c.level}, {"xp", c.xp}});
         if (scripting_) scripting_->Call("on_levelup", &c, c.level);
     }
     if (leveled) { SendStats(c); SendCritterState(c); }

@@ -1,12 +1,13 @@
 #pragma once
-// Accounts: salted PBKDF2-HMAC-SHA256 password hashes + one JSON file per account under <saves>/accounts, atomic writes.
-// Character data lives in the same file ("characters": [...]) so an account can own several characters later; only index 0 is used today.
+// Accounts: salted PBKDF2-HMAC-SHA256 password hashes in the SQLite store (Store.h, table accounts) + the character document of each
+// account (table characters, slot 0 is the only one used today). Also the crypto primitives and the atomic file writer.
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <string>
 #include <vector>
 #include <nlohmann/json.hpp>
+#include "Store.h"
 
 namespace f3 {
 
@@ -27,14 +28,14 @@ class AccountStore {
 public:
     enum class Result { Ok, BadCredentials, NameTaken, InvalidName, WeakPassword, RateLimited, Error };
 
-    void Init(const std::filesystem::path& savesDir, int pbkdfIterations = 10000);
-    bool Ready() const { return !dir_.empty(); }
+    void Init(Store* store, int pbkdfIterations = 10000);
+    bool Ready() const { return store_ && store_->IsOpen(); }
     static bool ValidName(const std::string& n);
     static std::string Key(const std::string& name);          // lower case
     Result Register(const std::string& name, const std::string& password, const std::string& ip, nlohmann::json firstCharacter);
     Result Login(const std::string& name, const std::string& password, const std::string& ip, nlohmann::json* characterOut);
     bool SaveCharacter(const std::string& name, size_t index, const nlohmann::json& ch);
-    bool Exists(const std::string& name) const;
+    bool Exists(const std::string& name);
     // failed-login rate limit (per account key and per ip): maxFails within windowSec locks for lockSec
     void ConfigureLimit(int maxFails, int windowSec, int lockSec) { maxFails_ = maxFails; windowSec_ = windowSec; lockSec_ = lockSec; }
 
@@ -42,8 +43,7 @@ private:
     struct Fail { std::vector<int64_t> times; int64_t lockedUntil = 0; };
     bool Limited(const std::string& key, int64_t now);
     void NoteFail(const std::string& key, int64_t now);
-    std::filesystem::path PathFor(const std::string& name) const;
-    std::filesystem::path dir_;
+    Store* store_ = nullptr;
     int iter_ = 10000;
     int maxFails_ = 5, windowSec_ = 300, lockSec_ = 30;
     std::map<std::string, Fail> fails_;

@@ -1,5 +1,5 @@
-// Pip-Boy back end: quest log, friends list, mail. Quests and friends are part of the character (Persist.cpp), mail is kept per account in
-// <saves>/mail/<account key>.json so it reaches offline players. The client gets the complete snapshot (S2C_Pip) after every change.
+// Pip-Boy back end: quest log, friends list, mail. Quests and friends are part of the character (Persist.cpp; tables quests / friends), mail is kept
+// per account in the store (table mail) so it reaches offline players. The client gets the complete snapshot (S2C_Pip) after every change.
 #include <algorithm>
 #include <ctime>
 #include <fstream>
@@ -124,38 +124,18 @@ bool Server::FriendDel(Critter& c, const std::string& nameIn) {
 
 // ------------------------------------------------------------------ mail
 
-std::vector<Server::MailMsg>& Server::Mailbox(const std::string& key) {
-    auto it = mail_.find(key);
-    if (it != mail_.end()) return it->second;
-    std::vector<MailMsg>& box = mail_[key];
-    std::ifstream f(cfg_.savesDir / "mail" / (key + ".json"), std::ios::binary);
-    if (!f) return box;
-    try {
-        const json j = json::parse(f);
-        if (j.is_array())
-            for (const json& e : j) {
-                MailMsg m;
-                m.id = e.value("id", 0u);
-                m.from = Clean(e.value("from", std::string()), 16);
-                m.text = Clean(e.value("text", std::string()), kMaxMailText);
-                m.time = e.value("time", static_cast<int64_t>(0));
-                m.read = e.value("read", false);
-                if (m.id) box.push_back(std::move(m));
-            }
-    } catch (const std::exception& e) {
-        log::Warn("mailbox '%s' unreadable: %s", key.c_str(), e.what());
+std::vector<Server::MailMsg> Server::Mailbox(const std::string& key) {
+    std::vector<MailMsg> box;
+    for (const MailRow& r : store_.MailList(key)) {
+        MailMsg m;
+        m.id = r.id;
+        m.from = Clean(r.from, 16);
+        m.text = Clean(r.text, kMaxMailText);
+        m.time = r.time;
+        m.read = r.read;
+        box.push_back(std::move(m));
     }
     return box;
-}
-
-bool Server::SaveMailbox(const std::string& key) {
-    json j = json::array();
-    for (const MailMsg& m : Mailbox(key)) j.push_back({{"id", m.id}, {"from", m.from}, {"text", m.text}, {"time", m.time}, {"read", m.read}});
-    std::error_code ec;
-    std::filesystem::create_directories(cfg_.savesDir / "mail", ec);
-    const bool ok = WriteFileAtomic(cfg_.savesDir / "mail" / (key + ".json"), j.dump());
-    if (!ok) log::Error("mailbox '%s' save FAILED", key.c_str());
-    return ok;
 }
 
 bool Server::MailSend(Critter& c, const std::string& toIn, const std::string& textIn) {
@@ -165,16 +145,12 @@ bool Server::MailSend(Critter& c, const std::string& toIn, const std::string& te
     if (!AccountStore::ValidName(to) || !accounts_.Exists(to)) { Tell(c, "Mail: no such player."); return false; }
     if (text.empty()) { Tell(c, "Mail: the message is empty."); return false; }
     const std::string key = AccountStore::Key(to);
-    std::vector<MailMsg>& box = Mailbox(key);
-    if (box.size() >= kMaxMailbox) { Tell(c, "Mail: " + to + "'s mailbox is full."); return false; }
-    MailMsg m;
-    for (const MailMsg& o : box) m.id = std::max(m.id, o.id);
-    m.id += 1;
-    m.from = c.name; m.text = text; m.time = static_cast<int64_t>(std::time(nullptr));
-    box.push_back(std::move(m));
-    SaveMailbox(key);
+    if (static_cast<size_t>(store_.MailCount(key)) >= kMaxMailbox) { Tell(c, "Mail: " + to + "'s mailbox is full."); return false; }
+    const uint32_t id = store_.MailAdd(key, c.name, text, static_cast<int64_t>(std::time(nullptr)));
+    if (!id) { Tell(c, "Mail: the message could not be saved."); return false; }
+    Audit("mail_sent", c.name, {{"to", to}, {"mail_id", id}, {"length", text.size()}});
     Tell(c, "Mail sent to " + to + ".");
-    for (auto& [id, p] : world_.Critters())
+    for (auto& [id2, p] : world_.Critters())
         if (IsOnline(p.get()) && !p->account.empty() && AccountStore::Key(p->account) == key) {
             Tell(*p, "Pip-Boy: new mail from " + c.name + ".");
             SendPip(*p);
@@ -184,23 +160,15 @@ bool Server::MailSend(Critter& c, const std::string& toIn, const std::string& te
 
 bool Server::MailRead(Critter& c, uint32_t id) {
     if (c.account.empty()) return false;
-    const std::string key = AccountStore::Key(c.account);
-    for (MailMsg& m : Mailbox(key))
-        if (m.id == id) {
-            if (!m.read) { m.read = true; SaveMailbox(key); SendPip(c); }
-            return true;
-        }
-    return false;
+    const int r = store_.MailMarkRead(AccountStore::Key(c.account), id);
+    if (r < 0) return false;
+    if (r > 0) SendPip(c);
+    return true;
 }
 
 bool Server::MailDelete(Critter& c, uint32_t id) {
     if (c.account.empty()) return false;
-    const std::string key = AccountStore::Key(c.account);
-    std::vector<MailMsg>& box = Mailbox(key);
-    auto it = std::find_if(box.begin(), box.end(), [&](const MailMsg& m) { return m.id == id; });
-    if (it == box.end()) return false;
-    box.erase(it);
-    SaveMailbox(key);
+    if (!store_.MailDelete(AccountStore::Key(c.account), id)) return false;
     SendPip(c);
     return true;
 }
@@ -221,8 +189,7 @@ void Server::SendPip(Critter& c) {
 void Server::PipOnLogin(Critter& c) {
     SendPip(c);
     if (!c.account.empty()) {
-        int unread = 0;
-        for (const MailMsg& m : Mailbox(AccountStore::Key(c.account))) if (!m.read) ++unread;
+        const int unread = store_.MailUnread(AccountStore::Key(c.account));
         if (unread) Tell(c, "Pip-Boy: you have " + std::to_string(unread) + " unread message" + (unread == 1 ? "" : "s") + " (press P).");
     }
     for (auto& [id, p] : world_.Critters())
@@ -284,7 +251,7 @@ bool Server::PipChat(Critter& c, const std::string& text) {
     }
     if (cmd == "inbox") {
         if (c.account.empty()) { Tell(c, "Mail: guests have no mailbox."); return true; }
-        const std::vector<MailMsg>& box = Mailbox(AccountStore::Key(c.account));
+        const std::vector<MailMsg> box = Mailbox(AccountStore::Key(c.account));
         if (box.empty()) Tell(c, "Mail: the inbox is empty.");
         for (const MailMsg& m : box) Tell(c, "Mail #" + std::to_string(m.id) + (m.read ? " " : " [new] ") + m.from + ": " + m.text);
         return true;

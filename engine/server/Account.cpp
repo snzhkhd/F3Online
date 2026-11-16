@@ -3,6 +3,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <random>
 #include "common/log.h"
@@ -164,11 +165,8 @@ static int64_t NowSec() {
     return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-void AccountStore::Init(const std::filesystem::path& savesDir, int iterations) {
-    std::error_code ec;
-    dir_ = savesDir / "accounts";
-    std::filesystem::create_directories(dir_, ec);
-    if (ec) { log::Error("cannot create %s", dir_.string().c_str()); dir_.clear(); }
+void AccountStore::Init(Store* store, int iterations) {
+    store_ = store;
     iter_ = std::max(1000, iterations);
 }
 
@@ -184,8 +182,7 @@ std::string AccountStore::Key(const std::string& name) {
     return k;
 }
 
-std::filesystem::path AccountStore::PathFor(const std::string& name) const { return dir_ / ("acc_" + Key(name) + ".json"); }
-bool AccountStore::Exists(const std::string& name) const { std::error_code ec; return ValidName(name) && std::filesystem::exists(PathFor(name), ec); }
+bool AccountStore::Exists(const std::string& name) { return Ready() && ValidName(name) && store_->AccountExists(Key(name)); }
 
 bool AccountStore::Limited(const std::string& key, int64_t now) {
     auto it = fails_.find(key);
@@ -204,17 +201,16 @@ AccountStore::Result AccountStore::Register(const std::string& name, const std::
     if (!ValidName(name)) return Result::InvalidName;
     if (password.size() < 4 || password.size() > 64) return Result::WeakPassword;
     if (Limited("ip:" + ip, NowSec())) return Result::RateLimited;
-    std::error_code ec;
-    if (std::filesystem::exists(PathFor(name), ec)) return Result::NameTaken;
+    if (store_->AccountExists(Key(name))) return Result::NameTaken;
     auto salt = crypto::RandomBytes(16);
-    nlohmann::json j;
-    j["name"] = name;
-    j["algo"] = "pbkdf2-sha256";
-    j["iterations"] = iter_;
-    j["salt"] = crypto::Hex(salt);
-    j["hash"] = crypto::Hex(crypto::Pbkdf2Sha256(password, salt, iter_));
-    j["characters"] = nlohmann::json::array({std::move(first)});
-    return WriteFileAtomic(PathFor(name), j.dump(1)) ? Result::Ok : Result::Error;
+    AccountRow a;
+    a.key = Key(name);
+    a.name = name;
+    a.iterations = iter_;
+    a.salt = salt;
+    a.hash = crypto::Pbkdf2Sha256(password, salt, iter_);
+    a.created = static_cast<int64_t>(std::time(nullptr));
+    return store_->CreateAccount(a, first) ? Result::Ok : Result::Error;
 }
 
 AccountStore::Result AccountStore::Login(const std::string& name, const std::string& password, const std::string& ip, nlohmann::json* out) {
@@ -223,43 +219,33 @@ AccountStore::Result AccountStore::Login(const std::string& name, const std::str
     const std::string kn = "acc:" + Key(name), ki = "ip:" + ip;
     if (Limited(kn, now) || Limited(ki, now)) return Result::RateLimited;
     if (!ValidName(name) || password.size() > 128) { NoteFail(ki, now); return Result::BadCredentials; }
-    nlohmann::json j;
-    {
-        std::ifstream f(PathFor(name), std::ios::binary);
-        if (f) j = nlohmann::json::parse(f, nullptr, false);
-    }
+    std::optional<AccountRow> acc = store_->GetAccount(Key(name));
     // unknown accounts burn the same hashing time so the response does not reveal whether the name exists
-    bool known = j.is_object() && j.contains("salt") && j.contains("hash") && j.contains("iterations");
-    std::vector<uint8_t> salt = known ? crypto::FromHex(j["salt"].get<std::string>()) : crypto::RandomBytes(16);
-    int it = known ? std::clamp(j["iterations"].get<int>(), 1000, 5000000) : iter_;
+    const bool known = acc.has_value() && !acc->salt.empty() && !acc->hash.empty();
+    std::vector<uint8_t> salt = known ? acc->salt : crypto::RandomBytes(16);
+    const int it = known ? std::clamp(acc->iterations, 1000, 5000000) : iter_;
     auto got = crypto::Pbkdf2Sha256(password, salt, it);
-    if (!known || !crypto::ConstantTimeEq(got, crypto::FromHex(j["hash"].get<std::string>()))) {
+    if (!known || !crypto::ConstantTimeEq(got, acc->hash)) {
         NoteFail(ki, now);
         NoteFail(kn, now);
         return Result::BadCredentials;
     }
     fails_.erase(kn);
+    nlohmann::json ch;
+    const Store::Load ld = store_->LoadCharacter(Key(name), 0, &ch);
+    if (ld == Store::Load::Error) return Result::Error;   // unreadable character: refuse the login, never start a fresh one over it
+    store_->TouchLogin(Key(name));
     if (out) {
         *out = nlohmann::json::object();
-        (*out)["account_name"] = j.value("name", name);
-        if (j.contains("characters") && j["characters"].is_array() && !j["characters"].empty()) *out = j["characters"][0];
+        (*out)["account_name"] = acc->name;
+        if (ld == Store::Load::Ok) *out = std::move(ch);
     }
     return Result::Ok;
 }
 
 bool AccountStore::SaveCharacter(const std::string& name, size_t index, const nlohmann::json& ch) {
     if (!Ready() || !ValidName(name)) return false;
-    nlohmann::json j;
-    {
-        std::ifstream f(PathFor(name), std::ios::binary);
-        if (!f) return false;
-        j = nlohmann::json::parse(f, nullptr, false);
-    }
-    if (!j.is_object()) return false;
-    if (!j.contains("characters") || !j["characters"].is_array()) j["characters"] = nlohmann::json::array();
-    while (j["characters"].size() <= index) j["characters"].push_back(nlohmann::json::object());
-    j["characters"][index] = ch;
-    return WriteFileAtomic(PathFor(name), j.dump(1));
+    return store_->SaveCharacter(Key(name), static_cast<int>(index), ch);
 }
 
 }  // namespace f3
