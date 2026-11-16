@@ -1068,6 +1068,16 @@ const std::vector<std::string>& StatNames() {
     return v;
 }
 
+const std::vector<std::string>& SpecialKeyNames() {
+    static const std::vector<std::string> v(kSpecialKeys, kSpecialKeys + kSpecialCount);
+    return v;
+}
+
+const std::vector<std::string>& DialogStatNames() {
+    static const std::vector<std::string> v(std::begin(kDlgStats), std::end(kDlgStats));
+    return v;
+}
+
 int StatFromName(const std::string& name) {
     const std::string l = Low(name);
     for (int i = 0; i < StNamedCount; ++i) if (l == kStatNamesNamed[i]) return i;

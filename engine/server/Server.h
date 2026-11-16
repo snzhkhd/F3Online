@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <map>
 #include <mutex>
@@ -63,6 +64,7 @@ public:
     void Run();
     void RequestStop() { running_ = false; }
     void PostCommand(std::string cmd);  // thread-safe; processed on the main loop
+    void PostTask(std::function<void()> fn);   // thread-safe; runs fn on the main loop, in the same queue (and the same ProcessCommands pass) as PostCommand; used by the content editor (EditorServer.cpp)
 
     // ---- game operations (used by the network layer and by the Lua API) ----
     World& GetWorld() { return world_; }
@@ -332,6 +334,7 @@ private:
     loc::Locale loc_;
     std::mutex cmdMutex_;
     std::vector<std::string> commands_;
+    std::vector<std::function<void()>> tasks_;   // see PostTask
 };
 
 }  // namespace f3

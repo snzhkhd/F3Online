@@ -31,6 +31,8 @@ inline constexpr int kStatSkillBase = 100;
 int StatFromName(const std::string& name);   // "max_hp", "skill.Firearms" (case-insensitive) -> id, -1 unknown
 std::string StatName(int id);
 const std::vector<std::string>& StatNames();  // all valid stat names (for messages / docs)
+const std::vector<std::string>& SpecialKeyNames();   // strength .. luck, the keys of every SPECIAL block in data/ (editor schema)
+const std::vector<std::string>& DialogStatNames();   // the names a dialog condition `stat:<name>` accepts (editor schema)
 
 struct StatMod { int stat = 0; int add = 0; };
 

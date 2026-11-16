@@ -9,6 +9,7 @@
 #include <sstream>
 #include <nlohmann/json.hpp>
 #include "Content.h"
+#include "DataFormat.h"
 #include "GameConfig.h"
 #include "common/protocol_game.h"
 
@@ -21,64 +22,6 @@ namespace {
 
 std::string Lw(std::string s) { for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; }
 
-// ---- JSON emitter: objects one field per line, arrays of scalars on one line, arrays of objects one element per block
-void EmitStr(std::ostream& o, const std::string& s) { o << ordered_json(s).dump(-1, ' ', false); }
-
-void Emit(std::ostream& o, const ordered_json& j, int ind) {
-    const std::string pad(static_cast<size_t>(ind) * 2, ' '), pad1(static_cast<size_t>(ind + 1) * 2, ' ');
-    if (j.is_object()) {
-        if (j.empty()) { o << "{}"; return; }
-        bool simple = true;   // small flat objects below the record level (a skill formula, a stat block, an attack mode) stay on one line
-        for (auto& [k, v] : j.items()) {
-            if (v.is_object()) simple = false;
-            if (v.is_array()) for (auto& e : v) if (e.is_object() || e.is_array()) simple = false;
-        }
-        if (simple && ind >= 3 && j.dump().size() < 130) {
-            o << "{ ";
-            bool first = true;
-            for (auto& [k, v] : j.items()) { if (!first) o << ", "; first = false; EmitStr(o, k); o << ": "; Emit(o, v, ind + 1); }
-            o << " }";
-            return;
-        }
-        o << "{\n";
-        bool first = true;
-        for (auto& [k, v] : j.items()) {
-            if (!first) o << ",\n";
-            first = false;
-            o << pad1;
-            EmitStr(o, k);
-            o << ": ";
-            Emit(o, v, ind + 1);
-        }
-        o << "\n" << pad << "}";
-    } else if (j.is_array()) {
-        if (j.empty()) { o << "[]"; return; }
-        bool scalar = true;
-        for (auto& v : j) if (v.is_object() || v.is_array()) scalar = false;
-        if (scalar) {
-            o << "[";
-            for (size_t i = 0; i < j.size(); ++i) { if (i) o << ", "; Emit(o, j[i], ind + 1); }
-            o << "]";
-            return;
-        }
-        o << "[\n";
-        for (size_t i = 0; i < j.size(); ++i) {
-            o << pad1;
-            Emit(o, j[i], ind + 1);
-            o << (i + 1 < j.size() ? ",\n" : "\n");
-        }
-        o << pad << "]";
-    } else if (j.is_number_float()) {
-        const double d = j.get<double>();
-        if (std::floor(d) == d && std::fabs(d) < 1e9) o << static_cast<long long>(d);
-        else o << j.dump();
-    } else if (j.is_string()) {
-        EmitStr(o, j.get<std::string>());
-    } else {
-        o << j.dump();
-    }
-}
-
 std::string Envelope(const char* kind, const char* note, const ordered_json& records) {
     ordered_json h = ordered_json::object();
     h["schema"] = kContentSchema;
@@ -86,10 +29,7 @@ std::string Envelope(const char* kind, const char* note, const ordered_json& rec
     h["generator"] = "f3_server --export-data";
     h["note"] = note;
     h["records"] = records;
-    std::ostringstream o;
-    Emit(o, h, 0);
-    o << "\n";
-    return o.str();
+    return EmitJsonText(h);
 }
 
 struct Writer {
@@ -242,6 +182,10 @@ ordered_json SkillRecords(const ContentDb& db) {
 }
 
 }  // namespace
+
+// The record the exporter writes for a base prototype (the "base value" the content editor diffs against, docs/editor.md).
+ordered_json ExportItemRecord(const Proto& p) { return ItemRecord(p); }
+ordered_json ExportNpcRecord(const Proto& p) { return NpcRecord(p, {}); }
 
 int RunExportData(const fs::path& gamedataDir, const fs::path& contentDir, const fs::path& outDirIn, bool force, bool check) {
     if (gamedataDir.empty()) { std::cerr << "export-data: no gamedata/server found (use --data DIR; run f3_dataimport first)\n"; return 2; }

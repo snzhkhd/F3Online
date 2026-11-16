@@ -30,7 +30,21 @@ FetchContent_Declare(sqlite3
   SOURCE_SUBDIR no_cmake_here
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 
-FetchContent_MakeAvailable(enet lua sol2 nlohmann_json sqlite3)
+# cpp-httplib (MIT, single header httplib.h): the loopback-only HTTP server behind the content editor (docs/editor.md). Header only: fetched,
+# not built; only Editor.cpp includes it. Offline: point FETCHCONTENT_SOURCE_DIR_HTTPLIB at an unpacked cpp-httplib-0.18.3 directory.
+FetchContent_Declare(httplib
+  URL https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.18.3.tar.gz
+  URL_HASH SHA256=a0567bcd6c3fe5cef1b329b96245119047f876b49e06cc129a36a7a8dffe173e
+  SOURCE_SUBDIR no_cmake_here
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+
+FetchContent_MakeAvailable(enet lua sol2 nlohmann_json sqlite3 httplib)
+
+add_library(httplib_headers INTERFACE)
+target_include_directories(httplib_headers INTERFACE ${httplib_SOURCE_DIR})
+if(WIN32)
+  target_link_libraries(httplib_headers INTERFACE ws2_32)
+endif()
 
 target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
 if(WIN32)

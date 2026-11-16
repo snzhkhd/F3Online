@@ -217,6 +217,17 @@ std::string DataStore::String(int id) const {
     return it == strings_.end() ? std::string() : it->second;
 }
 
+std::vector<std::pair<int, std::string>> DataStore::SearchStrings(const std::string& needle, size_t limit) const {
+    std::vector<std::pair<int, std::string>> out;
+    const std::string n = Lower(needle);
+    if (n.empty()) return out;
+    for (const auto& [id, s] : strings_)
+        if (Lower(s).find(n) != std::string::npos) out.emplace_back(id, s);
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    if (out.size() > limit) out.resize(limit);
+    return out;
+}
+
 bool DataStore::LoadMap(const std::string& name, MapDef& out, std::string& err) const {
     json j;
     if (!ReadJson(dir_ / "maps" / (name + ".json"), j, err)) return false;

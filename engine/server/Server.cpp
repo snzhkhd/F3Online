@@ -109,6 +109,11 @@ void Server::PostCommand(std::string cmd) {
     commands_.push_back(std::move(cmd));
 }
 
+void Server::PostTask(std::function<void()> fn) {
+    std::lock_guard<std::mutex> lk(cmdMutex_);
+    tasks_.push_back(std::move(fn));
+}
+
 void Server::Run() {
     using clock = std::chrono::steady_clock;
     running_ = true;
@@ -758,11 +763,14 @@ void Server::DoTick() {
 
 void Server::ProcessCommands() {
     std::vector<std::string> cmds;
+    std::vector<std::function<void()>> tasks;
     {
         std::lock_guard<std::mutex> lk(cmdMutex_);
         cmds.swap(commands_);
+        tasks.swap(tasks_);
     }
     for (auto& c : cmds) ExecCommand(c);
+    for (auto& t : tasks) t();
 }
 
 void Server::DbCommand(const std::string& cmd, std::istringstream& ss) {

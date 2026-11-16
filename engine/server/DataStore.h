@@ -134,6 +134,7 @@ public:
     const std::string& StartMap() const { return startMap_; }
     int StartEntry() const { return startEntry_; }
     std::string String(int id) const;  // English.stf string by 1-based id, "" if unknown
+    std::vector<std::pair<int, std::string>> SearchStrings(const std::string& needle, size_t limit) const;   // case-insensitive substring search (content editor), ascending id
     const std::map<std::string, double>& Globals() const { return globals_; }
     const std::filesystem::path& Dir() const { return dir_; }
 

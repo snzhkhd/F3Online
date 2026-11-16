@@ -3,6 +3,7 @@
 // --data defaults to the nearest gamedata/server (output of f3_dataimport) next to the binary or in a parent of the cwd.
 //   --content DIR (default: nearest data/), --lenient, --validate-data (check data/ and exit), --dev-commands (chat /reload; implied by --dev-kit)
 //   --export-data [--export-out DIR] [--force] [--check]   regenerate data/items, data/npcs/original.json, data/skills from the original data and exit
+//   --editor [--editor-port N (default 4041)] [--editor-dir DIR]   web content editor for data/ on 127.0.0.1 only, token printed in the console (docs/editor.md); off by default, not enabled by --local
 //   --saves DIR (holds f3.db), --save-interval SEC
 //   database tools (no network, exit when done): --migrate-json | --export-json DIR | --db-dump [TABLE] | --db-backup FILE  (docs/persistence.md)
 // Console commands on stdin: reload [data|scripts|all] | status | dbinfo | events [n] [kind] | say <text> | quit
@@ -15,6 +16,7 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include "EditorServer.h"
 #include "Migrate.h"
 #include "Server.h"
 #include "common/log.h"
@@ -58,6 +60,8 @@ int main(int argc, char** argv) {
     bool exportData = false, exportForce = false, exportCheck = false;
     std::string exportOut;
     std::string srcDir;
+    bool editorOn = false;
+    f3::EditorConfig editorCfg;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&](const char* name) -> const char* {
@@ -93,10 +97,19 @@ int main(int argc, char** argv) {
         else if (a == "--export-json") { dbTool = "export-json"; dbToolArg = next("--export-json"); }
         else if (a == "--db-backup") { dbTool = "db-backup"; dbToolArg = next("--db-backup"); }
         else if (a == "--db-dump") { dbTool = "db-dump"; if (i + 1 < argc && std::strncmp(argv[i + 1], "--", 2) != 0) dbToolArg = argv[++i]; }
+        else if (a == "--editor") editorOn = true;
+        else if (a == "--editor-port") { editorCfg.port = static_cast<uint16_t>(std::atoi(next("--editor-port"))); }
+        else if (a == "--editor-bind") { editorCfg.bind = next("--editor-bind"); }
+        else if (a == "--editor-dir") { editorCfg.uiDir = next("--editor-dir"); }
         else if (a == "--bind") cfg.bindHost = next("--bind");
         else if (a == "--local") cfg.bindHost = "127.0.0.1";
-        else { std::cerr << "usage: f3_server [--lang CODE] [--locale DIR] [--check-locale [--strict] [--src DIR]] [--content DIR] [--lenient] [--validate-data] [--export-data [--export-out DIR] [--force] [--check]] [--dev-commands] [--port N] [--bind ADDR | --local] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit] [--allow-guest] [--saves DIR] [--save-interval SEC]\n"; return 2; }
+        else { std::cerr << "usage: f3_server [--lang CODE] [--locale DIR] [--check-locale [--strict] [--src DIR]] [--content DIR] [--lenient] [--validate-data] [--export-data [--export-out DIR] [--force] [--check]] [--dev-commands] [--port N] [--bind ADDR | --local] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit] [--allow-guest] [--editor [--editor-port N] [--editor-bind ADDR] [--editor-dir DIR]] [--saves DIR] [--save-interval SEC]\n"; return 2; }
     }
+    if (editorOn && !f3::EditorBindAllowed(editorCfg.bind)) {   // before anything starts: the editor never listens on a public interface
+        std::cerr << "editor: refusing to bind to '" << editorCfg.bind << "': only loopback addresses (127.0.0.1, ::1, localhost) are allowed\n";
+        return 2;
+    }
+    if (editorOn && editorCfg.port == 0) { std::cerr << "editor: --editor-port needs a port between 1 and 65535\n"; return 2; }
     if (!scriptsGiven) cfg.scriptsDir = FindScripts(argv[0]);
     if (!dbTool.empty()) {   // database tools: only need the saves folder
         if (cfg.savesDir.empty()) cfg.savesDir = std::filesystem::absolute(cfg.scriptsDir).parent_path() / "saves";
@@ -126,6 +139,11 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
     if (!server.Init()) return 1;
+    f3::EditorServer editorSrv(server, editorCfg);   // destroyed before the server
+    if (editorOn) {
+        std::string err;
+        if (!editorSrv.Start(err)) { f3::log::Error("editor: %s", err.c_str()); return 1; }
+    }
 
     std::thread console([&server] {
         std::string line;
@@ -134,6 +152,7 @@ int main(int argc, char** argv) {
     console.detach();  // blocked in getline; process exit tears it down
 
     server.Run();
+    editorSrv.Stop();
     g_server = nullptr;
     return 0;
 }
