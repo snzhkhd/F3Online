@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "kind": "quests",
+  "records": [
+    {
+      "id": "demo_first_steps",
+      "title": "First steps",
+      "text": "Find your feet in the wasteland: talk to the locals and see what needs doing.",
+      "xp": 0
+    }
+  ]
+}

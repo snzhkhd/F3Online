@@ -1,0 +1,1 @@
+{ "schema": 1, "kind": "npcs", "records": [ { "id": "Default_PC.CRT", "inventory": ["No_Such_Loot.ITM"] } ] }

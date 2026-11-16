@@ -1,4 +1,5 @@
 #include "DataStore.h"
+#include "Content.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -142,6 +143,7 @@ bool DataStore::Load(const fs::path& dir, std::string& err) {
         protos_.push_back(std::move(p));
     }
 
+    base_ = protos_;
     // English.stf as id<TAB>text
     {
         std::ifstream f(dir / "strings.tsv", std::ios::binary);
@@ -173,6 +175,15 @@ bool DataStore::Load(const fs::path& dir, std::string& err) {
     log::Info("data: %zu prototypes, %zu maps, %zu globals, %zu strings from %s", protos_.size(), mapNames_.size(),
               globals_.size(), strings_.size(), dir.string().c_str());
     return true;
+}
+
+void DataStore::Commit(ProtoSet&& set) {
+    // in place for the existing entries, push_back for new ones: references into the deque stay valid
+    for (size_t i = 0; i < set.protos.size(); ++i) {
+        if (i < protos_.size()) protos_[i] = std::move(set.protos[i]);
+        else protos_.push_back(std::move(set.protos[i]));
+    }
+    byKey_ = std::move(set.byKey);
 }
 
 const Proto* DataStore::FindProto(const std::string& key) const {

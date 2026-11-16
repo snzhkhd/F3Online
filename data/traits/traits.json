@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "kind": "traits",
+  "max_picks": 2,
+  "records": [
+    {
+      "id": "bruiser",
+      "index": 0,
+      "name": "Bruiser",
+      "desc": "Hits harder in a fight, but the heavier stance costs speed. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "chem_reliant",
+      "index": 1,
+      "name": "Chem Reliant",
+      "desc": "Chems work better on you and cravings come quicker. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "clean_living",
+      "index": 2,
+      "name": "Clean Living",
+      "desc": "You stay away from chems: withdrawal never bites, but their benefits are halved. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "fast_shot",
+      "index": 3,
+      "name": "Fast Shot",
+      "desc": "Aimed shots are given up for faster, snappier fire. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "feral_kid",
+      "index": 4,
+      "name": "Feral Kid",
+      "desc": "Raised in the wild: better with the land, worse with people. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "finesse",
+      "index": 5,
+      "name": "Finesse",
+      "desc": "Your hits land cleaner, but the raw punch behind them is a little lighter. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "gifted",
+      "index": 6,
+      "name": "Gifted",
+      "desc": "A few points better at everything, with fewer skill points to show for it. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "good_natured",
+      "index": 7,
+      "name": "Good Natured",
+      "desc": "A friendlier skill set at the cost of the rough kind. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "increased_metabolism",
+      "index": 8,
+      "name": "Increased Metabolism",
+      "desc": "Heals faster but is more fragile against poison and radiation. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "kamikaze",
+      "index": 9,
+      "name": "Kamikaze",
+      "desc": "Strike first and ask later: quicker to act, softer to hit. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "night_person",
+      "index": 10,
+      "name": "Night Person",
+      "desc": "Sharper by night and a little duller by day. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "one_hander",
+      "index": 11,
+      "name": "One Hander",
+      "desc": "Better with one-handed weapons, clumsy with two-handed ones. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "one_in_a_million",
+      "index": 12,
+      "name": "One In a Million",
+      "desc": "Fortune smiles at you now and then. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "red_scare",
+      "index": 13,
+      "name": "Red Scare",
+      "desc": "A history that opens some doors and slams others. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "skilled",
+      "index": 14,
+      "name": "Skilled",
+      "desc": "Learns skills faster but earns perks more slowly. (no effect yet)",
+      "effects": []
+    },
+    {
+      "id": "small_frame",
+      "index": 15,
+      "name": "Small Frame",
+      "desc": "Nimble and light, but not built to carry much. (no effect yet)",
+      "effects": []
+    }
+  ]
+}

@@ -1,0 +1,125 @@
+{
+  "schema": 1,
+  "kind": "skills",
+  "records": [
+    {
+      "id": "Firearms",
+      "desc": "Pistols, rifles and everything that shoots.",
+      "base": {
+        "const": 5,
+        "agility": 4
+      }
+    },
+    {
+      "id": "Melee",
+      "desc": "Knives, clubs and spears.",
+      "base": {
+        "const": 20,
+        "strength": 2,
+        "agility": 2
+      }
+    },
+    {
+      "id": "Unarmed",
+      "desc": "Fists, feet and martial tricks.",
+      "base": {
+        "const": 30,
+        "strength": 2,
+        "agility": 2
+      }
+    },
+    {
+      "id": "Barter",
+      "desc": "Getting a good price.",
+      "base": {
+        "const": 0,
+        "charisma": 4
+      }
+    },
+    {
+      "id": "Persuasion",
+      "desc": "Talking people around.",
+      "base": {
+        "const": 5,
+        "charisma": 4
+      }
+    },
+    {
+      "id": "Deception",
+      "desc": "Lying convincingly.",
+      "base": {
+        "const": 5,
+        "charisma": 3,
+        "intelligence": 1
+      }
+    },
+    {
+      "id": "Mechanics",
+      "desc": "Fixing machines.",
+      "base": {
+        "const": 0,
+        "intelligence": 3
+      }
+    },
+    {
+      "id": "Medic",
+      "desc": "Treating wounds.",
+      "base": {
+        "const": 0,
+        "perception": 2,
+        "intelligence": 2
+      }
+    },
+    {
+      "id": "Outdoorsman",
+      "desc": "Surviving the wasteland.",
+      "base": {
+        "const": 5,
+        "endurance": 2,
+        "intelligence": 2
+      }
+    },
+    {
+      "id": "Science",
+      "desc": "Computers and the hard sciences.",
+      "base": {
+        "const": 0,
+        "intelligence": 4
+      }
+    },
+    {
+      "id": "Security",
+      "desc": "Locks and security systems.",
+      "base": {
+        "const": 10,
+        "perception": 1,
+        "agility": 1
+      }
+    },
+    {
+      "id": "Sneak",
+      "desc": "Moving unseen.",
+      "base": {
+        "const": 5,
+        "agility": 3
+      }
+    },
+    {
+      "id": "Steal",
+      "desc": "Lifting what is not yours.",
+      "base": {
+        "const": 3,
+        "agility": 3
+      }
+    },
+    {
+      "id": "Traps",
+      "desc": "Finding, setting and disarming traps.",
+      "base": {
+        "const": 10,
+        "perception": 1,
+        "agility": 1
+      }
+    }
+  ]
+}

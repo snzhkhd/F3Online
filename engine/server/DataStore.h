@@ -2,6 +2,7 @@
 // Server-side game data: prototypes and map definitions produced by tools/dataimport
 // (gamedata/server). Pure data, no gameplay logic. See docs/server-data.md.
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -46,6 +47,13 @@ struct Proto {
     int ammoCaliber = -1, ammoDmgMin = 0, ammoDmgMax = 0;
     int weight = 1;
     bool headArmor = false;  // armor worn on the head (helmets) instead of the body
+    // ---- data layer (data/*.json, Content.cpp); defaults keep the behaviour of the plain original prototype
+    int weightOverride = -1;   // >= 0: unit weight from data/items (wins over config.lua ItemWeights)
+    int level = 1;             // critters: starting level (HP formula)
+    int maxHpFixed = 0;        // critters: > 0 fixes the maximum HP
+    int xp = -1;               // critters: >= 0 experience for killing it (replaces XpByProto / the formula)
+    bool fromData = false;     // record added by data/ (no original prototype)
+    bool retired = false;      // record removed by a later reload; the pid stays valid for existing instances
 
     const std::string& DisplayName() const { return !name.empty() ? name : (!name2.empty() ? name2 : key); }
     // Name for people: the English name, else the key made readable ("Critters00_TMCommunist_Insurgent_Shiv.CRT" ->
@@ -96,6 +104,9 @@ struct MapDef {
     std::vector<std::string> pathNames;  // parallel to paths (EPTH name)
 };
 
+struct ProtoSet;
+struct ContentReport;
+
 class DataStore {
 public:
     // dir = gamedata/server. Returns false (with err) if manifest or protos are missing/invalid.
@@ -108,6 +119,10 @@ public:
     const Proto* FindProto(const std::string& key) const;  // case-insensitive
     const Proto* GetProto(uint16_t pid) const { return pid < protos_.size() ? &protos_[pid] : nullptr; }
     size_t ProtoCount() const { return protos_.size(); }
+    // data layer: the original prototypes (base) stay untouched; the effective table is base + data/ records (Content.cpp)
+    const std::deque<Proto>& BaseProtos() const { return base_; }
+    const std::deque<Proto>& AllProtos() const { return protos_; }
+    void Commit(ProtoSet&& set);   // makes a candidate table (ContentDb::protoSet) the effective one; addresses of existing entries stay valid
 
     const std::string& StartMap() const { return startMap_; }
     int StartEntry() const { return startEntry_; }
@@ -121,7 +136,8 @@ private:
     bool loaded_ = false;
     std::filesystem::path dir_;
     std::vector<std::string> mapNames_;
-    std::vector<Proto> protos_;
+    std::deque<Proto> protos_;   // effective table; base entries first (same pids as ever), data records appended
+    std::deque<Proto> base_;     // pristine copy of the original prototypes
     std::unordered_map<std::string, uint16_t> byKey_;  // lowercase key
     std::unordered_map<int, std::string> strings_;
     std::map<std::string, double> globals_;

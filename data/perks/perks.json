@@ -1,0 +1,157 @@
+{
+  "schema": 1,
+  "kind": "perks",
+  "records": [
+    {
+      "id": "toughness",
+      "name": "Toughness",
+      "desc": "You can take a beating: +10 maximum hit points.",
+      "requires": {
+        "level": 3,
+        "special": {
+          "endurance": 6
+        }
+      },
+      "effects": [
+        {
+          "stat": "max_hp",
+          "add": 10
+        }
+      ]
+    },
+    {
+      "id": "strong_back",
+      "name": "Strong Back",
+      "desc": "Carry 50 more pounds.",
+      "requires": {
+        "level": 3,
+        "special": {
+          "strength": 6
+        }
+      },
+      "effects": [
+        {
+          "stat": "carry_weight",
+          "add": 50
+        }
+      ]
+    },
+    {
+      "id": "bonus_move",
+      "name": "Bonus Move",
+      "desc": "One extra action point.",
+      "requires": {
+        "level": 6,
+        "special": {
+          "agility": 5
+        }
+      },
+      "effects": [
+        {
+          "stat": "max_ap",
+          "add": 1
+        }
+      ]
+    },
+    {
+      "id": "marksman",
+      "name": "Marksman",
+      "desc": "+10% Firearms per rank.",
+      "ranks": 2,
+      "requires": {
+        "level": 3,
+        "special": {
+          "perception": 5
+        }
+      },
+      "effects": [
+        {
+          "stat": "skill.Firearms",
+          "add": 10
+        }
+      ]
+    },
+    {
+      "id": "lucky_streak",
+      "name": "Lucky Streak",
+      "desc": "+5% critical hit chance per rank.",
+      "ranks": 3,
+      "requires": {
+        "level": 6,
+        "special": {
+          "luck": 6
+        }
+      },
+      "effects": [
+        {
+          "stat": "crit_chance",
+          "add": 5
+        }
+      ]
+    },
+    {
+      "id": "educated",
+      "name": "Educated",
+      "desc": "Two more skill points per level.",
+      "requires": {
+        "level": 3,
+        "special": {
+          "intelligence": 6
+        }
+      },
+      "effects": [
+        {
+          "stat": "skill_rate",
+          "add": 2
+        }
+      ]
+    },
+    {
+      "id": "swift_learner",
+      "name": "Swift Learner",
+      "desc": "+10% experience from everything, per rank.",
+      "ranks": 3,
+      "requires": {
+        "level": 3,
+        "special": {
+          "intelligence": 4
+        }
+      },
+      "effects": [
+        {
+          "stat": "xp_gain",
+          "add": 10
+        }
+      ]
+    },
+    {
+      "id": "thick_skin",
+      "name": "Thick Skin",
+      "desc": "Toughened hide: +5 armor class.",
+      "requires": {
+        "level": 6,
+        "perks": [
+          "toughness"
+        ]
+      },
+      "effects": [
+        {
+          "stat": "armor_class",
+          "add": 5
+        }
+      ]
+    },
+    {
+      "id": "awareness",
+      "name": "Awareness",
+      "desc": "Notice what others miss (calls the Lua hook perk_awareness when taken).",
+      "requires": {
+        "level": 3,
+        "special": {
+          "perception": 6
+        }
+      },
+      "hook": "perk_awareness"
+    }
+  ]
+}

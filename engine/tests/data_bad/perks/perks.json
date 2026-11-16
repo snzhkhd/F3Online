@@ -1,0 +1,12 @@
+{
+  // comments are allowed in data files
+  "schema": 1,
+  "kind": "perks",
+  "records": [
+    { "id": "ok_perk", "name": "Fine" },
+    { "id": "ok_perk", "name": "Duplicate id" },
+    { "id": "needs_ghost", "name": "Broken reference", "requires": { "perks": ["ghost_perk"] } },
+    { "id": "wrong_type", "name": "Wrong type", "requires": { "level": "three" } },
+    { "id": "typo", "name": "Typo", "descripton": "unknown field" }
+  ]
+}

@@ -1,0 +1,1 @@
+{ "schema": 1, "name": "deliberately broken data (smoke test: f3_server --validate-data must fail on it)" }
