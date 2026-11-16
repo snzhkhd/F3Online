@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "kind": "npcs",
+  "note": "Test NPCs in Junktown that use data dialogs (data/dialogs/junktown.json). They stand near the start entry.",
+  "records": [
+    { "id": "F3_Junktown_Scrapper", "base": "Critters04_BFBFMale.CRT", "name": "Scrapper Joe", "team": 0, "script": "", "dialog": "junktown_scrapper",
+      "spawns": [ { "map": "00_03_Tutorial_Junktown", "cell": [190, 556] } ] },
+    { "id": "F3_Junktown_Drifter", "base": "Critters04_BFHDMale.CRT", "name": "Drifter", "team": 0, "script": "", "dialog": "junktown_drifter",
+      "spawns": [ { "map": "00_03_Tutorial_Junktown", "cell": [196, 556] } ] },
+    { "id": "F3_Junktown_Guide", "base": "Critters04_BFBFFem.CRT", "name": "Old Mara", "team": 0, "script": "", "dialog": "junktown_guide",
+      "spawns": [ { "map": "00_03_Tutorial_Junktown", "cell": [202, 556] } ] }
+  ]
+}

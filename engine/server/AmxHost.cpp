@@ -188,7 +188,7 @@ std::string AmxHost::DlgText(int id, const Critter* viewer) const {
 }
 
 bool AmxHost::InDialog(CritterId id) const {
-    if (dialogs_.count(id)) return true;
+    if (dialogs_.count(id) || server_.InDataDialog(id)) return true;
     for (auto& [pc, d] : dialogs_) if (d.npc == id) return true;
     return false;
 }

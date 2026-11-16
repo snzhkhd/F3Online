@@ -169,6 +169,17 @@ public:
     bool LangChat(Critter& c, const std::string& text);      // /lang [code]; true = handled
     bool ContentChat(Critter& c, const std::string& text);   // /perks /perk /traits /reload; true = handled
     void SpawnDataNpcs();                                    // data/npcs "spawns"
+    // ---- data dialogs (Dialogs.cpp, docs/dialogs.md): data/dialogs graphs through the AMX dialogue protocol; used when the NPC's `dialog` is a data dialog id
+    bool HasDataDialog(const Critter& npc) const;
+    bool StartDataDialog(Critter& pc, Critter& npc);          // false: the NPC has no data dialog (the caller tries the original .scra)
+    void DataDialogChoose(Critter& pc, int index);            // index into the replies of the last DialogNode
+    void DataDialogClose(Critter& pc, bool notify = true);
+    bool InDataDialog(CritterId id) const;                    // id is the player or the NPC of a running data dialog
+    void CloseDataDialogsOf(CritterId id);                    // a critter that leaves the world ends its conversations
+    void TickDataDialogs();                                   // walking away / death ends a conversation
+    struct DataDlgView { bool open = false; std::string dialog, node; };
+    DataDlgView DataDialogView(CritterId pc) const;
+    bool EvalCond(const Critter& pc, const Critter* npc, const DlgCond& d);
     std::string ReloadAll(const std::string& what);          // "data" | "scripts" | "all" -> report text (console and /reload)
     // ---- accounts + persistence (Persist.cpp)
     bool OpenStore();                 // <saves>/f3.db: open + migrate the schema + import old JSON saves; false = fatal (clear message logged)
@@ -305,6 +316,11 @@ private:
     GameConfig rt_;
     ContentDb content_;
     uint32_t contentRev_ = 0;
+    struct DataDlg { CritterId pc = 0, npc = 0; std::string dialog, node; std::vector<int> shown; };   // shown: answer index per reply sent (-1 = leave)
+    std::unordered_map<CritterId, DataDlg> ddlgs_;   // running data dialogs by player id
+    bool RunDlgEffects(Critter& pc, Critter& npc, const std::vector<DlgEffect>& fx);   // true = an effect closed the conversation
+    void DataDlgEnter(Critter& pc, const std::string& nodeId);
+    std::string DataDlgText(const Critter& pc, const Critter* npc, const DialogDef& def, const DlgNode& node, int answer) const;
     Store store_;           // declared before accounts_ (which points at it); all access on the server thread (Db.h)
     AccountStore accounts_;
     uint64_t nextSaveTick_ = 0;

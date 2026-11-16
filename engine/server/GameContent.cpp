@@ -101,7 +101,10 @@ void Server::SpawnDataNpcs() {
             Map* m = world_.FindMapByName(s.map);
             if (!m) { log::Warn("data: npc %s: map '%s' is not loaded, spawn skipped", r.id.c_str(), s.map.c_str()); continue; }
             for (int k = 0; k < s.count; ++k)
-                if (SpawnCritterProto(m->id, *p, TilePos{static_cast<int16_t>(s.x), static_cast<int16_t>(s.y)}, nullptr)) ++n;
+                if (Critter* c = SpawnCritterProto(m->id, *p, TilePos{static_cast<int16_t>(s.x), static_cast<int16_t>(s.y)}, nullptr)) {
+                    if (c->instName.empty()) c->instName = r.id;   // scripts see data NPCs by name too (death counter _DEAD_<name>, HasDied)
+                    ++n;
+                }
         }
     }
     if (n) log::Info("data: %zu npc(s) spawned from data/npcs", n);

@@ -517,6 +517,7 @@ void Server::RemoveCritter(CritterId id) {
     Critter* c = world_.GetCritter(id);
     if (!c) return;
     if (amx_) amx_->DetachCritter(id);
+    CloseDataDialogsOf(id);
     UnplaceCritter(*c);
     if (c->peer) {
         c->peer->data = nullptr;
@@ -743,6 +744,7 @@ void Server::DoTick() {
     if (tick_ % 10 == 0)
         for (MapId mid : active)
             if (Map* dm = world_.GetMap(mid)) TickObjects(*dm);
+    TickDataDialogs();
     if (amx_) amx_->Tick(tick_, active);
     scripting_->OnTick(tick_);
     if (tick_ % static_cast<uint64_t>(cfg_.tickRate) == 0) scripting_->PollConfig();  // hot reload of config.lua

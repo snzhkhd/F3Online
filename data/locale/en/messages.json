@@ -51,6 +51,7 @@
   "msg.create.unknown_trait": "Character creation: unknown trait.",
   "msg.created": "Character created. Welcome to the wasteland!",
   "msg.dev_disabled": "Dev commands are disabled on this server (start it with --dev-commands or --dev-kit).",
+  "msg.dialog.nothing_to_say": "{npc} has nothing to say to you.",
   "msg.died": "You have died.",
   "msg.door.jammed": "The {name} is jammed.",
   "msg.door.key_default": "right",

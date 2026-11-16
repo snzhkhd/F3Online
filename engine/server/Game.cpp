@@ -633,11 +633,11 @@ void Server::BeginInteract(Critter& c, PendingType type, ItemId id, ItemId sub, 
 
 void Server::TalkTo(Critter& c, CritterId npcId) {
     Critter* n = world_.GetCritter(npcId);
-    if (!amx_ || !n || n == &c || c.dead || n->dead || n->mapId != c.mapId || n->dialog.empty()) return;
+    if (!n || n == &c || c.dead || n->dead || n->mapId != c.mapId || n->dialog.empty() || !(amx_ || HasDataDialog(*n))) return;
     Map* m = world_.GetMap(c.mapId);
     if (!m) return;
     c.pending = Pending{};
-    if (TileDist(n->pos, c.pos) <= 3) { StopMove(c); c.talkTarget = 0; amx_->StartDialog(c, *n); return; }
+    if (TileDist(n->pos, c.pos) <= 3) { StopMove(c); c.talkTarget = 0; if (!StartDataDialog(c, *n) && amx_) amx_->StartDialog(c, *n); return; }
     std::vector<TilePos> spots;   // free cells next to the NPC, nearest to the player first
     for (int dy = -2; dy <= 2; ++dy)
         for (int dx = -2; dx <= 2; ++dx) {
@@ -653,8 +653,8 @@ void Server::TalkTo(Critter& c, CritterId npcId) {
 
 void Server::RunTalk(Critter& c) {
     Critter* n = world_.GetCritter(c.talkTarget);
-    if (!amx_ || !n || n->dead || n->mapId != c.mapId) { c.talkTarget = 0; return; }
-    if (TileDist(n->pos, c.pos) <= 3) { c.talkTarget = 0; StopMove(c); amx_->StartDialog(c, *n); }
+    if (!n || !(amx_ || HasDataDialog(*n)) || n->dead || n->mapId != c.mapId) { c.talkTarget = 0; return; }
+    if (TileDist(n->pos, c.pos) <= 3) { c.talkTarget = 0; StopMove(c); if (!StartDataDialog(c, *n) && amx_) amx_->StartDialog(c, *n); }
     else if (!c.mv.active) c.talkTarget = 0;   // arrived somewhere else / path blocked
 }
 
@@ -1140,12 +1140,12 @@ void Server::HandleGamePacket(ENetPeer*, Critter* c, GMsg id, ByteBuffer& b, boo
         }
         case static_cast<GMsg>(GMsgDlg::C2S_DialogChoose): {
             gnet::DialogChoose m; ok = m.Read(b);
-            if (ok && budget() && amx_) amx_->DialogChoose(*c, m.index);
+            if (ok && budget()) { if (InDataDialog(c->id) && ddlgs_.count(c->id)) DataDialogChoose(*c, m.index); else if (amx_) amx_->DialogChoose(*c, m.index); }
             break;
         }
         case static_cast<GMsg>(GMsgDlg::C2S_DialogClose):
             ok = b.Ok();
-            if (ok && amx_) amx_->DialogClose(*c, false);
+            if (ok) { DataDialogClose(*c, false); if (amx_) amx_->DialogClose(*c, false); }
             break;
         case static_cast<GMsg>(GMsgRt::C2S_ClientCaps): {
             gnet::ClientCaps m; ok = m.Read(b);

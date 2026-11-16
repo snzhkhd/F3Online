@@ -28,6 +28,12 @@ int RunCheckLocale(const std::filesystem::path& contentDir, const std::filesyste
     for (const PerkDef& p : db.perks) { o.dataKeys.insert("perk." + p.id + ".name"); if (!p.desc.empty()) o.dataKeys.insert("perk." + p.id + ".desc"); }
     for (const TraitDef& t : db.traits) { o.dataKeys.insert("trait." + t.id + ".name"); if (!t.desc.empty()) o.dataKeys.insert("trait." + t.id + ".desc"); }
     for (const QuestDef& q : db.quests) { o.dataKeys.insert("quest." + q.id + ".title"); if (!q.text.empty()) o.dataKeys.insert("quest." + q.id + ".text"); }
+    for (const DialogDef& d : db.dialogs)
+        for (const DlgNode& n : d.nodes) {
+            if (n.stf == 0) o.dataKeys.insert("dialog." + d.id + "." + n.id + ".text");
+            for (size_t k = 0; k < n.answers.size(); ++k)
+                if (n.answers[k].stf == 0) o.dataKeys.insert("dialog." + d.id + "." + n.id + "." + (n.answers[k].id.empty() ? "a" + std::to_string(k + 1) : n.answers[k].id));
+        }
     for (int i = 0; i < kSkillCount; ++i) {
         o.dataKeys.insert(std::string("skill.") + kSkillNames[i] + ".name");
         if (!db.skills[i].desc.empty()) o.dataKeys.insert(std::string("skill.") + kSkillNames[i] + ".desc");

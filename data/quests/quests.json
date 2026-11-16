@@ -7,6 +7,18 @@
       "title": "First steps",
       "text": "Find your feet in the wasteland: talk to the locals and see what needs doing.",
       "xp": 0
+    },
+    {
+      "id": "scrapper_toolkit",
+      "title": "Joe's tool kit",
+      "text": "Scrapper Joe in Junktown lost his tool kit to an insurgent. Bring him a Tool Kit.",
+      "xp": 50,
+      "items": [
+        {
+          "item": "Ammo9mm.AMO",
+          "count": 10
+        }
+      ]
     }
   ]
 }

@@ -1,0 +1,152 @@
+{
+  "schema": 1,
+  "kind": "dialogs",
+  "note": "Sample dialogs for the Junktown test NPCs of data/npcs/junktown_test.json. All text is ours; Russian is in data/locale/ru/dialogs.json. Schema: docs/dialogs.md.",
+  "records": [
+    {
+      "id": "junktown_scrapper",
+      "speaker": "F3_Junktown_Scrapper",
+      "start": [
+        { "if": "quest:scrapper_toolkit==done", "goto": "after" },
+        { "if": "quest:scrapper_toolkit==active", "goto": "reminder" },
+        { "goto": "greeting" }
+      ],
+      "nodes": [
+        {
+          "id": "greeting",
+          "text": "Hey, stranger. Scrap is the only currency worth having around here. Need something?",
+          "answers": [
+            { "id": "who", "text": "Who are you?", "goto": "who" },
+            { "id": "work", "text": "I am looking for work.", "do": [ { "quest": "scrapper_toolkit", "state": "add" }, { "flag": "scrapper_met", "set": true } ], "goto": "job" },
+            { "id": "haggle", "text": "[Barter 30] I know my way around a deal.", "if": "skill:Barter>=30", "goto": "haggle" },
+            { "id": "bye", "text": "Not now." }
+          ]
+        },
+        {
+          "id": "who",
+          "text": "Name is Joe. I buy junk, sell junk and fix what can be fixed. Business has been slow since the soldiers showed up.",
+          "answers": [
+            { "id": "help", "text": "Maybe I can help.", "do": [ { "quest": "scrapper_toolkit", "state": "add" }, { "flag": "scrapper_met", "set": true } ], "goto": "job" },
+            { "id": "bye", "text": "See you around." }
+          ]
+        },
+        {
+          "id": "haggle",
+          "text": "A trader, eh? Then you know a tool kit is worth more than my whole stall. Bring me one and we will talk numbers.",
+          "answers": [
+            { "id": "job", "text": "What kind of job is this?", "do": [ { "quest": "scrapper_toolkit", "state": "add" } ], "goto": "job" },
+            { "id": "bye", "text": "Maybe later." }
+          ]
+        },
+        {
+          "id": "job",
+          "text": "Some insurgent walked off with my tool kit. Bring me a Tool Kit, any Tool Kit, and I will make it worth your while.",
+          "answers": [
+            { "id": "advance", "text": "[Level 2] Give me an advance first.", "if": [ "stat:level>=2", "!flag:scrapper_advance" ],
+              "do": [ { "give": "KitsFirst_Aid_Kit.ITM" }, { "flag": "scrapper_advance", "set": true } ], "goto": "advance_given" },
+            { "id": "bye", "text": "I will keep an eye out." }
+          ]
+        },
+        {
+          "id": "advance_given",
+          "text": "Fine, take this first aid kit. Do not make me regret it."
+        },
+        {
+          "id": "reminder",
+          "text": "Back already? Do you have my tool kit?",
+          "answers": [
+            { "id": "here", "text": "Here it is.", "if": "item:KitsTool_Kit.ITM>=1",
+              "do": [ { "take": "KitsTool_Kit.ITM" }, { "quest": "scrapper_toolkit", "state": "done" }, { "flag": "scrapper_done", "set": 1 } ], "goto": "thanks" },
+            { "id": "notyet", "text": "Not yet." }
+          ]
+        },
+        {
+          "id": "thanks",
+          "text": "That is my kit! Here, something for your trouble."
+        },
+        {
+          "id": "after",
+          "text": "Thanks again for the tool kit. Come back any time.",
+          "answers": [
+            { "id": "more", "text": "Any more work?", "goto": "nowork" },
+            { "id": "bye", "text": "Goodbye." }
+          ]
+        },
+        {
+          "id": "nowork",
+          "text": "Not today. Check back later.",
+          "answers": [ { "id": "back", "text": "Fair enough.", "goto": "after" } ]
+        }
+      ]
+    },
+    {
+      "id": "junktown_drifter",
+      "speaker": "F3_Junktown_Drifter",
+      "nodes": [
+        {
+          "id": "hello",
+          "text": "Psst. You. Care to see what I am carrying?",
+          "answers": [
+            { "id": "yes", "stf": 11, "do": [ { "trade": true } ], "goto": "hello" },
+            { "id": "no", "stf": 12, "goto": "bye" },
+            { "id": "rob", "text": "Hand it over. All of it.", "if": { "any": [ "stat:strength>=6", "skill:Unarmed>=60" ] },
+              "do": [ { "flag": "drifter_robbed", "set": 1 }, { "lua": "dlg_demo_hook" }, { "attack": true } ] }
+          ]
+        },
+        {
+          "id": "bye",
+          "text": "Suit yourself. Watch your back out here."
+        }
+      ]
+    },
+    {
+      "id": "junktown_guide",
+      "speaker": "F3_Junktown_Guide",
+      "start": [
+        { "if": { "any": [ "stat:level>=3", "flag:mara_told_all" ] }, "goto": "veteran" },
+        { "goto": "newcomer" }
+      ],
+      "nodes": [
+        {
+          "id": "newcomer",
+          "text": "New in town? Junktown looks rough, but it looks after its own. Ask me anything.",
+          "answers": [
+            { "id": "soldiers", "text": "Where are the soldiers?", "goto": "soldiers" },
+            { "id": "traders", "text": "Who can I trade with?", "goto": "traders" },
+            { "id": "bye", "text": "Thanks." }
+          ]
+        },
+        {
+          "id": "soldiers",
+          "text": "Corporal Armstrong's people hold the gate. They are friendlier than they look, if you are not carrying trouble.",
+          "answers": [
+            { "id": "else", "text": "What else should I know?", "goto": "newcomer" },
+            { "id": "bye", "text": "Thanks, that is all.", "do": [ { "flag": "mara_told_all", "set": true } ] }
+          ]
+        },
+        {
+          "id": "traders",
+          "text": "Joe the scrapper buys anything that is not nailed down. The drifter next to him sells things he will not name.",
+          "answers": [
+            { "id": "soldiers", "text": "Tell me about the soldiers.", "goto": "soldiers" },
+            { "id": "bye", "text": "Got it.", "do": [ { "flag": "mara_told_all", "set": true } ] }
+          ]
+        },
+        {
+          "id": "veteran",
+          "text": "Seen you around. You know the place by now.",
+          "answers": [
+            { "id": "again", "text": "Remind me how the town works.", "if": { "not": "flag:mara_told_all" }, "goto": "newcomer" },
+            { "id": "news", "text": "Any news?", "goto": "news" },
+            { "id": "bye", "text": "Take care." }
+          ]
+        },
+        {
+          "id": "news",
+          "text": "Quiet. Which is never a good sign.",
+          "answers": [ { "id": "back", "text": "Go on.", "goto": "veteran" } ]
+        }
+      ]
+    }
+  ]
+}

@@ -354,3 +354,8 @@ function on_tick(t)
         log("heartbeat: " .. #players() .. " player(s) online")
     end
 end
+
+-- Lua hook of the data dialog junktown_drifter (data/dialogs/junktown.json, effect {"lua": "dlg_demo_hook"}): fn(player, npc)
+function dlg_demo_hook(pc, npc)
+    pc:tell("The drifter's hand drops to his belt...")
+end

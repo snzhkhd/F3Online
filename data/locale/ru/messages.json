@@ -51,6 +51,7 @@
   "msg.create.unknown_trait": "Создание персонажа: неизвестная черта.",
   "msg.created": "Персонаж создан. Добро пожаловать в Пустошь!",
   "msg.dev_disabled": "Команды разработчика на этом сервере отключены (запустите его с --dev-commands или --dev-kit).",
+  "msg.dialog.nothing_to_say": "{npc} не хочет с вами разговаривать.",
   "msg.died": "Вы погибли.",
   "msg.door.jammed": "Заклинило: {name}.",
   "msg.door.key_default": "нужный",
