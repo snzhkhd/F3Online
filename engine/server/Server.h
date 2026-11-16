@@ -8,6 +8,7 @@
 #include <map>
 #include <mutex>
 #include <sstream>
+#include <set>
 #include <string>
 #include <vector>
 #include "Account.h"
@@ -111,6 +112,27 @@ public:
     int ObjDist(const Item& o, TilePos from) const;                       // distance to the object or its doorway cells
     void LoadWorldState();                                                // table world_objects: door / container state per map
     void SaveWorldState(bool force = false);
+    // ---- object scripts (ObjectScripts.cpp, docs/object-scripts.md): data/objects bindings + scripts/objects/*.lua on map objects
+    struct ObjState { bool used = false; std::map<std::string, double> flags; };   // persisted in the store, table object_state
+    void BindObjects();                                                   // resolves every data/objects record against the map objects, (re)loads the Lua scripts
+    void BindObjectItem(Map& m, Item& it);                                // a freshly spawned object
+    const ObjectDef* BoundDef(const Item& o) const;
+    std::string ObjectKey(const Item& o) const;                           // instance name, else "<proto key>@x,y"
+    ObjState& ObjStateOf(const Map& m, const Item& o);
+    bool ObjectUse(Critter& c, Map& m, Item& o);                          // true = the binding handled the use (default door / container operation skipped)
+    bool ObjectSkill(Critter& c, Map& m, Item& o, int skill);             // skill used on a bound object; true = handled
+    void ObjectLook(Critter& c, Map& m, Item& o);                         // on_look steps / hook while examining
+    bool ObjectHiddenFor(Critter& c, const Item& o);
+    std::string ObjectName(const Critter& c, const Item& o) const;        // name override (locale object.<id>.name) or the object's own name
+    std::string ObjectDesc(const Critter& c, const Item& o) const;        // desc override or empty
+    std::string ObjectLabel(const Critter& c, const Item& o) const;       // use cursor label or empty
+    int ObjectRange(const Item& o, int def) const;
+    bool SkillCheck(Critter& c, const std::string& skill, int difficulty, bool roll);   // plain threshold, or a percent roll (chance = skill - difficulty)
+    bool StartObjectDialog(Critter& pc, const std::string& dialogId, const Item& obj, const std::string& speakerName);
+    void DefaultUseObject(Critter& c, Map& m, Item& o);                   // the engine's own door / container use
+    void DoorAction(Map& m, Item& o, const std::string& action);          // open | close | toggle | lock | unlock without actor checks
+    std::string ObjectsJson(const std::string& map, const std::string& query, int limit);   // editor: maps, or the objects of one map (id, name, proto, model, kind, x, y, binding)
+    void SaveObjectStates();                                              // called by SaveWorldState
     bool TakeFrom(Critter& c, ItemId containerId, ItemId entry, bool corpse = false);
     bool PutInto(Critter& c, ItemId containerId, ItemId entry, bool corpse);   // move one of c's items into a container / corpse
     bool OpenLoot(Critter& c, ItemId id, bool corpse);                          // send the contents (S2C_Container)
@@ -318,9 +340,16 @@ private:
     GameConfig rt_;
     ContentDb content_;
     uint32_t contentRev_ = 0;
-    struct DataDlg { CritterId pc = 0, npc = 0; std::string dialog, node; std::vector<int> shown; };   // shown: answer index per reply sent (-1 = leave)
+    struct DataDlg { CritterId pc = 0, npc = 0; ItemId obj = 0; std::string dialog, node; std::vector<int> shown; };   // shown: answer index per reply sent (-1 = leave)
     std::unordered_map<CritterId, DataDlg> ddlgs_;   // running data dialogs by player id
-    bool RunDlgEffects(Critter& pc, Critter& npc, const std::vector<DlgEffect>& fx);   // true = an effect closed the conversation
+    std::map<std::string, ObjState> objState_;              // "map\nobject key" -> state
+    std::set<std::string> objStateLoaded_, objStateDirty_;  // map names
+    std::vector<std::string> objUnresolved_;                // bindings that found no object at the last BindObjects
+    std::map<ItemId, uint64_t> objCooldown_;                // object id -> server ms until it can be used again
+    bool ObjectGate(Critter& c, Map& m, Item& o, const ObjectDef& d);   // usable / hidden / range / one-shot / cooldown; false = refused (already told)
+    void ObjectMarkUsed(Critter& c, Item& o, const ObjectDef& d);
+    bool RunObjSteps(Critter& pc, Map& m, Item& o, const ObjectDef& d, const std::vector<ObjStep>& steps);   // true = stop (end / dialog started)
+    bool RunDlgEffects(Critter& pc, Critter* npc, const std::vector<DlgEffect>& fx);   // true = an effect closed the conversation
     void DataDlgEnter(Critter& pc, const std::string& nodeId);
     std::string DataDlgText(const Critter& pc, const Critter* npc, const DialogDef& def, const DlgNode& node, int answer) const;
     Store store_;           // declared before accounts_ (which points at it); all access on the server thread (Db.h)

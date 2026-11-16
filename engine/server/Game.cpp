@@ -212,7 +212,7 @@ ItemId Server::SpawnObjectProto(MapId mapId, const Proto& p, TilePos pos, uint16
     it.mapId = mapId;
     it.pos = pos;
     it.count = count;
-    if (inst) it.script = inst->script;
+    if (inst) { it.script = inst->script; it.instName = inst->name; }
     switch (p.cls) {
         case PClass::Door:
             it.kind = ObjKind::Door;
@@ -247,6 +247,7 @@ ItemId Server::SpawnObjectProto(MapId mapId, const Proto& p, TilePos pos, uint16
     ItemId id = it.id;
     m->items[id] = std::move(it);
     m->dirty = true;
+    BindObjectItem(*m, m->items[id]);
     if (amx_) amx_->AttachObject(m->items[id]);
     return id;
 }
@@ -359,6 +360,7 @@ void Server::SendObjectInfo(Critter& to, const Item& it) {
     o.open = it.open ? 1 : 0;
     o.locked = it.locked ? 1 : 0;
     o.flags = it.lockFlags;
+    o.label = ObjectLabel(to, it);
     Send(to, gnet::PackG(o));
 }
 
@@ -378,9 +380,12 @@ std::string Server::Examine(Critter& viewer, ItemId id, bool isCritter) {
     for (auto& m : world_.Maps()) {
         auto it = m->items.find(id);
         if (it == m->items.end()) continue;
-        std::string s = it->second.name;
-        if (const Proto* p = data_.GetProto(it->second.pid))
+        std::string s = ObjectName(viewer, it->second);
+        const std::string od = ObjectDesc(viewer, it->second);
+        if (!od.empty()) s += ": " + od;
+        else if (const Proto* p = data_.GetProto(it->second.pid))
             if (!p->desc.empty()) s += ": " + p->desc;
+        ObjectLook(viewer, *m, it->second);   // on_look steps / hook of a bound object (messages follow the examine text)
         return s;
     }
     return "";
@@ -679,7 +684,9 @@ void Server::RunPending(Critter& c) {
         if (p.critter) { if (Critter* t = world_.GetCritter(static_cast<CritterId>(p.id)); t && t->mapId == c.mapId) { dist = TileDist(t->pos, c.pos); have = true; } }
         else if (pm) { auto it = pm->items.find(p.id); if (it != pm->items.end()) { dist = ObjDist(it->second, c.pos); have = true; } }
         if (!have) { c.pending = Pending{}; return; }
-        if (dist > InteractRange(p.type, rt_.DoorOpenRange)) {
+        int need = InteractRange(p.type, rt_.DoorOpenRange);
+        if (p.type == PendingType::Use && !p.critter && pm) { auto oi = pm->items.find(p.id); if (oi != pm->items.end()) need = ObjectRange(oi->second, need); }
+        if (dist > need) {
             if (!c.mv.active) { c.pending = Pending{}; if (c.IsPlayer()) TellK(c, "msg.cant_reach"); }
             return;
         }

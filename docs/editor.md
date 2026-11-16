@@ -46,7 +46,7 @@ Still, it is a development tool: run it on a machine you trust, and do not forwa
 
 ## 3. What the UI does
 
-* **Lists** per kind (items with weapon / armor / ammo / kit / other chips, npcs, perks, traits, skills, quests, dialogs): search, origin and file filters.
+* **Lists** per kind (items with weapon / armor / ammo / kit / other chips, npcs, perks, traits, skills, quests, dialogs, object scripts): search, origin and file filters.
   Each row says where the record comes from: `hand` (hand-authored file), `gen` (file with a `generator` key, written by `--export-data`) or `base`
   (original prototype that is not in `data/`; tick "include original prototypes" or type two letters to see them).
 * **Form** generated from the schema: types, enums, ranges, required marks, reference pickers (item, npc, quest, perk, trait, dialog, map, flag; STF id with a
@@ -108,6 +108,8 @@ All under `/api`, JSON in and out, header `X-F3-Token`. Errors are `{"ok":false,
 | `POST reload` | the server re-reads `data/` and returns the diff report |
 | `GET locale-status` | per key en / target text, file, status (`ok`, `missing`, `extra`, `placeholders`) and the `--check-locale` report |
 | `GET refs` | id lists for the pickers |
+| `GET objects?map=&q=&limit=` | objects of a map loaded by the running server (`id`, `name`, `display`, `proto`, `model`, `kind`, `x`, `y`, `binding`); no `map`: the list of maps. 503 without a server |
+| `GET objscript?path=` / `POST objscript/create` | status of `scripts/<path>` (exists, valid, error, warning, hooks, abs, vscode) / create it from the template (never overwrites) |
 | `GET stf?id=N` / `stf?q=text` | original STF text / search |
 
 Save refuses a change when the edited file has errors or when the change introduces **new** errors elsewhere (for example deleting an item another record uses);
@@ -136,35 +138,19 @@ It also runs one sample of every condition and effect form the builder can emit,
 5. `f3_editortest` picks up the new schema automatically and probes every field against the validator; add a sample record if the kind needs cross references.
 6. A kind that needs a special editor sets `"editor":"name"` and registers it from a new file in `tools/editor/` (dialogs: `dialog.js`).
 
-## 7. Extension point: object scripts (not implemented)
+## 7. Object scripts
 
-Planned: behaviour attached to a placed map object, for example a computer terminal that runs a dialog, a switch that opens a door, an object that needs a skill check.
-Nothing reads or writes such files today. The UI has a marked section ("Object scripts", nav group "Planned") and `/api/schema` carries
-`extensionPoints.objectScripts` with the idea below; a future module sets `Ed.ext.objects` in `tools/editor/`.
+The kind `objects` (`data/objects/*.json`, full reference: **`docs/object-scripts.md`**) has its own editor, `tools/editor/objects.js`, registered through `"editor":"objects"`
+in the schema (nav group "Content", "Object scripts"). The generic list, file, undo, save and validation flow is unchanged; only the form tab is replaced:
 
-Intended shape, a new kind `objects` with `data/objects/*.json`:
+* **Which object**: id, map, object (instance name) and the fallback prototype + cell. **Pick object from the map** opens the picker: choose a map, search (id, name, model, position),
+  and click a dot of the 2D scatter plot or a row of the table; the plot marks the current object (red ring) and objects that already have a binding (outline). It fills `map` + `object`
+  (or `proto` + `cell` for an object without an instance name). The list comes from `GET /api/objects`, which asks the running server (its loaded maps), so it needs the server; the rest of the editor does not.
+* **Presentation / behaviour**: cursor label, name and description override, usable, one shot, cooldown, range, "hidden until" (the dialog condition builder).
+* **Lua script**: the path, a **Create Lua script from template** button (writes `scripts/objects/<id>.lua` when missing, never overwrites; shows the absolute path and a `vscode://` link) and a live status line
+  (file exists, loads through the Lua loader, hooks found, warnings).
+* **Declarative steps**: `on_use`, `on_look` and one list per skill, built from the schema (`steps` in `/api/schema`): kind picker, fields per kind, an optional condition per step,
+  nested success / failure lists for skill checks, door targets suggested from the objects of the map.
 
-```json
-{
-  "schema": 1,
-  "kind": "objects",
-  "records": [
-    {
-      "id": "junktown_terminal_1",
-      "map": "junktown",
-      "cell": [112, 87],
-      "on_use": [
-        { "require_skill": "Science>=50", "else": "terminal_locked_dialog" },
-        { "run_dialog": "junktown_terminal" },
-        { "open_door": [120, 90] }
-      ]
-    }
-  ]
-}
-```
-
-* `id` names the object (a placed object of the map file, or a freshly defined one); `map` and `cell` locate it.
-* `on_use` is an ordered list of steps executed on the server when a player uses the object, the same vocabulary as dialog effects where it exists
-  (`run_dialog` -> dialog id, `open_door` -> the `door` effect of `docs/dialogs.md`, conditions in the `skill:Science>=50` form with the `if` / `else` shape used by dialog routes).
-* The steps would be validated by the same code as dialogs (references to dialogs, cells inside the map), exported by `--export-data` for map objects with scripts, and edited by a form generated from
-  the schema like every other kind, with a map cell picker as the one new widget.
+Endpoints added for it: `GET objects?map=&q=&limit=` (maps list when `map` is empty), `GET objscript?path=` (status), `POST objscript/create {path}`; `GET refs` also lists the binding ids.
+The save flow uses the server validator (`CheckObjects`), so a dangling dialog / item / map reference is refused with its path like for every other kind.

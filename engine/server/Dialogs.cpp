@@ -129,6 +129,14 @@ void Server::CloseDataDialogsOf(CritterId id) {
 void Server::TickDataDialogs() {
     for (auto it = ddlgs_.begin(); it != ddlgs_.end();) {   // walking away, death or a dead partner ends a conversation
         Critter* p = world_.GetCritter(it->first);
+        if (it->second.npc == 0 && it->second.obj != 0) {   // a conversation with a map object (data/objects): ends when the player walks away or the object is gone
+            Map* om = p ? world_.GetMap(p->mapId) : nullptr;
+            auto oi = om ? om->items.find(it->second.obj) : decltype(om->items.end()){};
+            if (p && om && !p->dead && oi != om->items.end() && ObjDist(oi->second, p->pos) <= 12) { ++it; continue; }
+            if (p) SendBuf(*p, gnet::PackG(gnet::DialogClose{}));
+            it = ddlgs_.erase(it);
+            continue;
+        }
         Critter* n = world_.GetCritter(it->second.npc);
         if (p && n && !p->dead && !n->dead && p->mapId == n->mapId && TileDist(p->pos, n->pos) <= 12) { ++it; continue; }
         if (p) SendBuf(*p, gnet::PackG(gnet::DialogClose{}));
@@ -137,7 +145,7 @@ void Server::TickDataDialogs() {
 }
 
 // Runs the effects in order. Returns true when the conversation was closed by an effect (end / attack): the caller must stop.
-bool Server::RunDlgEffects(Critter& pc, Critter& npc, const std::vector<DlgEffect>& fx) {
+bool Server::RunDlgEffects(Critter& pc, Critter* npc, const std::vector<DlgEffect>& fx) {
     for (const DlgEffect& e : fx) {
         switch (e.kind) {
             case DlgEffect::Give:
@@ -166,16 +174,19 @@ bool Server::RunDlgEffects(Critter& pc, Critter& npc, const std::vector<DlgEffec
                 QuestSet(pc, e.s, e.action == "done" ? 1 : e.action == "fail" ? 2 : 0);
                 break;
             }
-            case DlgEffect::Flag: SetGlobalFor(&pc, e.s, e.n); break;
+            case DlgEffect::Flag:
+                SetGlobalFor(e.action == "world" ? nullptr : &pc, e.s, e.n);
+                if (Map* fm = world_.GetMap(pc.mapId)) fm->dirty = true;   // objects hidden until a flag appear / vanish on the next visibility pass
+                break;
             case DlgEffect::Xp: AddXp(pc, e.n); break;
             case DlgEffect::Trade: TellK(pc, "msg.trade_missing"); break;   // stub: there is no store yet
             case DlgEffect::Attack:
                 DataDialogClose(pc);
-                if (npc.IsNpc() && !npc.isStatic && !npc.dead) { npc.target = pc.id; npc.nextRepathTick = 0; }
+                if (npc && npc->IsNpc() && !npc->isStatic && !npc->dead) { npc->target = pc.id; npc->nextRepathTick = 0; }
                 return true;
             case DlgEffect::End: DataDialogClose(pc); return true;
             case DlgEffect::Door: {
-                Map* m = world_.GetMap(npc.mapId);
+                Map* m = world_.GetMap(npc ? npc->mapId : pc.mapId);
                 if (!m || !m->InBounds(e.x, e.y)) break;
                 Item* o = nullptr;
                 auto dc = m->doorCell.find(e.y * m->width + e.x);
@@ -189,7 +200,7 @@ bool Server::RunDlgEffects(Critter& pc, Critter& npc, const std::vector<DlgEffec
                 break;
             }
             case DlgEffect::Lua:
-                if (scripting_) scripting_->Call(e.s.c_str(), &pc, &npc);
+                if (scripting_) scripting_->Call(e.s.c_str(), &pc, npc);
                 break;
         }
     }
@@ -200,13 +211,13 @@ bool Server::RunDlgEffects(Critter& pc, Critter& npc, const std::vector<DlgEffec
 void Server::DataDlgEnter(Critter& pc, const std::string& nodeId) {
     auto it = ddlgs_.find(pc.id);
     if (it == ddlgs_.end()) return;
-    Critter* npc = world_.GetCritter(it->second.npc);
+    Critter* npc = it->second.npc ? world_.GetCritter(it->second.npc) : nullptr;
     const DialogDef* def = content_.FindDialog(it->second.dialog);
     const DlgNode* node = def ? def->FindNode(nodeId) : nullptr;
-    if (!npc || !node) { DataDialogClose(pc); return; }   // removed by a reload / the speaker is gone
+    if ((it->second.npc && !npc) || !node) { DataDialogClose(pc); return; }   // removed by a reload / the speaker is gone
     it->second.node = node->id;
     const CritterId pcId = pc.id;
-    if (RunDlgEffects(pc, *npc, node->onEnter)) return;
+    if (RunDlgEffects(pc, npc, node->onEnter)) return;
     if (!ddlgs_.count(pcId)) return;
     // an on_enter effect (Lua) may have reloaded data: look the node up again
     def = content_.FindDialog(ddlgs_[pcId].dialog);
@@ -215,7 +226,7 @@ void Server::DataDlgEnter(Critter& pc, const std::string& nodeId) {
     DataDlg& d = ddlgs_[pcId];
     d.shown.clear();
     gnet::DialogNode m;
-    m.npc = npc->id;
+    m.npc = npc ? npc->id : 0;
     m.text = DataDlgText(pc, npc, *def, *node, -1);
     for (size_t i = 0; i < node->answers.size() && m.replies.size() < 24; ++i) {
         const DlgAnswer& a = node->answers[i];
@@ -256,21 +267,44 @@ bool Server::StartDataDialog(Critter& pc, Critter& npc) {
     return true;
 }
 
+// A data dialog whose speaker is a map object (terminal, lever, ...) instead of an NPC: same protocol, npc id 0 and the object's name.
+bool Server::StartObjectDialog(Critter& pc, const std::string& dialogId, const Item& obj, const std::string& speakerName) {
+    if (!pc.IsPlayer() || pc.dead) return false;
+    const DialogDef* def = content_.FindDialog(dialogId);
+    if (!def) { log::Warn("object dialog: unknown dialog '%s'", dialogId.c_str()); return false; }
+    if (ddlgs_.count(pc.id)) DataDialogClose(pc);
+    if (amx_) amx_->DialogClose(pc);
+    std::string first;
+    for (const DlgRoute& r : def->start)
+        if (!r.hasCond || EvalCond(pc, nullptr, r.cond)) { first = r.gotoNode; break; }
+    if (first.empty() || !def->FindNode(first)) { TellK(pc, "msg.dialog.nothing_to_say", {{"npc", speakerName}}); return true; }
+    DataDlg d;
+    d.pc = pc.id; d.npc = 0; d.obj = obj.id; d.dialog = def->id;
+    ddlgs_[pc.id] = std::move(d);
+    log::Info("data dialogue: %s <-> object '%s' dialog '%s' node '%s'", pc.name.c_str(), speakerName.c_str(), def->id.c_str(), first.c_str());
+    gnet::DialogOpen o;
+    o.npc = 0;
+    o.name = speakerName;
+    SendBuf(pc, gnet::PackG(o));
+    DataDlgEnter(pc, first);
+    return true;
+}
+
 void Server::DataDialogChoose(Critter& pc, int index) {
     auto it = ddlgs_.find(pc.id);
     if (it == ddlgs_.end()) return;
     DataDlg& d = it->second;
     if (index < 0 || static_cast<size_t>(index) >= d.shown.size()) return;
     const int ai = d.shown[static_cast<size_t>(index)];
-    Critter* npc = world_.GetCritter(d.npc);
+    Critter* npc = d.npc ? world_.GetCritter(d.npc) : nullptr;
     const DialogDef* def = content_.FindDialog(d.dialog);
     const DlgNode* node = def ? def->FindNode(d.node) : nullptr;
-    if (!npc || !node) { DataDialogClose(pc); return; }
+    if ((d.npc && !npc) || !node) { DataDialogClose(pc); return; }
     if (ai < 0 || static_cast<size_t>(ai) >= node->answers.size()) { DataDialogClose(pc); return; }   // the leave reply (or a node changed by a reload)
     const DlgAnswer a = node->answers[static_cast<size_t>(ai)];   // copy: effects may run Lua that reloads the data
     const CritterId pcId = pc.id;
     d.shown.clear();
-    if (RunDlgEffects(pc, *npc, a.effects)) return;
+    if (RunDlgEffects(pc, npc, a.effects)) return;
     if (!ddlgs_.count(pcId)) return;
     if (a.gotoNode.empty() || Lc(a.gotoNode) == "end") { DataDialogClose(pc); return; }
     DataDlgEnter(pc, a.gotoNode);

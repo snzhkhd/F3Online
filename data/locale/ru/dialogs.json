@@ -41,5 +41,13 @@
   "dialog.junktown_scrapper.thanks.text": "Это мой набор! Вот, за труды.",
   "dialog.junktown_scrapper.who.bye": "Увидимся.",
   "dialog.junktown_scrapper.who.help": "Возможно, я смогу помочь.",
-  "dialog.junktown_scrapper.who.text": "Меня зовут Джо. Я покупаю хлам, продаю хлам и чиню то, что можно починить. С тех пор как появились солдаты, торговля идёт вяло."
+  "dialog.junktown_scrapper.who.text": "Меня зовут Джо. Я покупаю хлам, продаю хлам и чиню то, что можно починить. С тех пор как появились солдаты, торговля идёт вяло.",
+  "dialog.vault_terminal.log.back": "Назад.",
+  "dialog.vault_terminal.log.bye": "Выйти.",
+  "dialog.vault_terminal.log.text": "Запись 4411: чип очистки воды всё ещё не найден. Запись 4412: обход защиты требует специалиста по науке у консоли. Запись 4413: хватит оставлять дверь открытой.",
+  "dialog.vault_terminal.main.bye": "Выйти.",
+  "dialog.vault_terminal.main.log": "Прочитать журнал обслуживания.",
+  "dialog.vault_terminal.main.text": "ТЕРМИНАЛ ОБСЛУЖИВАНИЯ УБЕЖИЩА 13. Доступ Смотрителя заблокирован. Доступен журнал обслуживания.",
+  "dialog.vault_terminal.unlocked.bye": "Выйти.",
+  "dialog.vault_terminal.unlocked.text": "ДОСТУП СМОТРИТЕЛЯ РАЗРЕШЁН. Дверь убежища открыта."
 }

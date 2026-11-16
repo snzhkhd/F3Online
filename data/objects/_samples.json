@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "kind": "objects",
+  "note": "Sample object bindings for the Vault 13 tutorial map (docs/object-scripts.md). Parked: the file name starts with an underscore, so the server ignores it (the original tutorial script already drives the computer). Rename it to samples.json to try them.",
+  "records": [
+    {
+      "id": "vault_computer",
+      "map": "00_04_Tutorial_Vault",
+      "object": "Computer07cDS_Tech_000",
+      "label": "Use",
+      "script": "objects/vault_computer.lua"
+    },
+    {
+      "id": "vault_lever",
+      "map": "00_04_Tutorial_Vault",
+      "object": "GeneratorDS_Tech_000",
+      "name": "Power lever",
+      "label": "Pull",
+      "one_shot": true,
+      "script": "objects/vault_lever.lua"
+    },
+    {
+      "id": "vault_door_note",
+      "map": "00_04_Tutorial_Vault",
+      "object": "Door01Vault13_003",
+      "name": "Reinforced vault door",
+      "desc": "A heavy door with a faded Vault-Tec stencil.",
+      "on_look": [
+        {
+          "message": "Someone scratched \"V13\" into the paint."
+        }
+      ]
+    }
+  ]
+}

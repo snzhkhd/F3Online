@@ -105,6 +105,41 @@ struct DialogDef {
     const DlgNode* FindNode(const std::string& nodeId) const;
 };
 
+// ---- object scripts (data/objects, docs/object-scripts.md): behaviour bound to a map object
+struct ObjStep {
+    enum Kind { Dialog, Door, SkillCheck, Effect, Message, Teleport, Play, Call, DefaultUse, End };
+    Kind kind = End;
+    bool hasCond = false;
+    DlgCond cond;                    // "if": the step is skipped unless it holds
+    std::string s;                   // Dialog: dialog id; Door: target instance name; Message: text; Teleport: map name; Play: effect name; Call: Lua function
+    std::string key;                 // Message: optional locale key
+    std::string action;              // Door: open | close | toggle | lock | unlock
+    int x = -1, y = -1;              // Door: target cell (when no name); Teleport: target cell
+    int entry = -1;                  // Teleport: entry point of the map
+    std::string skill;               // SkillCheck: skill name
+    int difficulty = 0, xp = 0;      // SkillCheck: needed skill value (roll: chance = skill - difficulty), xp on success
+    bool roll = false;               // SkillCheck: roll the percent chance instead of a plain threshold
+    std::vector<ObjStep> success, failure;
+    DlgEffect fx;                    // Effect: give / take / quest / flag / xp
+};
+struct ObjectDef {
+    std::string id, file;
+    std::string map, object;         // binding: map name + instance name (EntityDef.name of the original map data)
+    std::string proto;               // fallback binding: prototype key + cell
+    int cx = -1, cy = -1;
+    std::string label;               // use cursor label ("Use" when empty)
+    std::string name, desc;          // overrides (locale keys object.<id>.name / object.<id>.desc)
+    std::string script;              // scripts/<script>
+    bool usable = true;
+    int oneShot = 0;                 // 0 no, 1 once for the world, 2 once per player
+    int cooldown = 0;                // seconds
+    bool hasHidden = false;
+    DlgCond hiddenUntil;             // hidden from a player until the condition holds
+    int range = 0;                   // tiles, 0 = DoorOpenRange
+    std::vector<ObjStep> onUse, onLook;
+    std::vector<std::pair<std::string, std::vector<ObjStep>>> skills;   // skill name -> steps (C2S_UseSkill on the object)
+};
+
 struct SkillDef {   // base value = constant + sum(coef[i] * SPECIAL[i]) (S P E C I A L)
     int constant = 0;
     int coef[kSpecialCount] = {0, 0, 0, 0, 0, 0, 0};
@@ -161,6 +196,7 @@ public:
     std::vector<PerkDef> perks;
     std::vector<QuestDef> quests;
     std::vector<DialogDef> dialogs;
+    std::vector<ObjectDef> objects;
     std::vector<ItemRec> items;
     std::vector<NpcRec> npcs;
     SkillDef skills[kSkillSlots];              // built-in defaults, overridden by data/skills
@@ -177,6 +213,7 @@ public:
     const QuestDef* FindQuest(const std::string& id) const;
     const NpcRec* FindNpc(const std::string& protoKey) const;
     const DialogDef* FindDialog(const std::string& id) const;
+    const ObjectDef* FindObject(const std::string& id) const;
 
     // "perks: +1 -0 ~2 (added: a; changed: b, c)" lines for kinds that differ, empty when nothing changed.
     static std::vector<std::string> Diff(const ContentDb& before, const ContentDb& after);

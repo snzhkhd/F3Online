@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "kind": "dialogs",
+  "note": "Speaker-less dialog opened by the sample object bindings of data/objects/_samples.json (a terminal talks through the data dialog engine; docs/object-scripts.md). Russian text: data/locale/ru/dialogs.json.",
+  "records": [
+    {
+      "id": "vault_terminal",
+      "start": [ { "if": "flag:vault_terminal_hacked", "goto": "unlocked" }, { "goto": "main" } ],
+      "nodes": [
+        {
+          "id": "main",
+          "text": "VAULT 13 MAINTENANCE TERMINAL. Overseer access is locked. Maintenance log available.",
+          "answers": [
+            { "id": "log", "text": "Read the maintenance log.", "goto": "log" },
+            { "id": "bye", "text": "Log off." }
+          ]
+        },
+        {
+          "id": "unlocked",
+          "text": "OVERSEER ACCESS GRANTED. The vault door is released.",
+          "answers": [ { "id": "bye", "text": "Log off." } ]
+        },
+        {
+          "id": "log",
+          "text": "Entry 4411: water chip still missing. Entry 4412: the security bypass needs a Science expert at the console. Entry 4413: stop leaving the door open.",
+          "answers": [ { "id": "back", "text": "Back.", "goto": "main" }, { "id": "bye", "text": "Log off." } ]
+        }
+      ]
+    }
+  ]
+}

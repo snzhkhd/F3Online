@@ -184,6 +184,7 @@ void Scripting::BindApi(sol::state& L) {
                 e["proto"] = p ? p->key : std::string(); e["open"] = it.open; e["count"] = it.count; e["script"] = it.script; e["locked"] = it.locked;
                 e["flags"] = (int)it.lockFlags; e["lock_dc"] = it.lockDC; e["key"] = it.keyId;
                 e["state"] = it.open ? "open" : it.locked ? "locked" : "closed";
+                e["inst"] = it.instName; e["binding"] = it.bindId;
                 t[n++] = e;
             }
             return t;
@@ -285,10 +286,13 @@ void Scripting::BindApi(sol::state& L) {
         if (!p || p->cls != PClass::Critter) return nullptr;
         return S.SpawnCritterProto((MapId)map, *p, TilePos{(int16_t)x, (int16_t)y}, nullptr);
     };
-    L["spawn_item_proto"] = [&S](int map, const std::string& key, int x, int y, sol::optional<int> count) -> int {
+    // optional 6th argument: the instance name of the new object (the binding key of data/objects)
+    L["spawn_item_proto"] = [&S](int map, const std::string& key, int x, int y, sol::optional<int> count, sol::optional<std::string> name) -> int {
         const Proto* p = S.Data().FindProto(key);
         if (!p) return 0;
-        return (int)S.SpawnObjectProto((MapId)map, *p, TilePos{(int16_t)x, (int16_t)y}, (uint16_t)count.value_or(1), nullptr);
+        EntityDef inst;
+        if (name) inst.name = *name;
+        return (int)S.SpawnObjectProto((MapId)map, *p, TilePos{(int16_t)x, (int16_t)y}, (uint16_t)count.value_or(1), name ? &inst : nullptr);
     };
     // dev / test only (main.lua gates the /amxnative command on --dev-kit): run natives by name, see AmxHost::NativeTest
     L["amx_native"] = [&S](int owner, const std::string& program) -> std::string { return S.Amx() ? S.Amx()->NativeTest(static_cast<CritterId>(owner), program) : std::string("amx not available"); };
@@ -336,6 +340,81 @@ void Scripting::BindApi(sol::state& L) {
         if (!d || !m) return sol::make_object(sv, sol::nil);
         return sol::make_object(sv, std::string(Server::OperateResultName(S.Operate(by.value_or(nullptr), *m, *d, want))));
     };
+
+    // ---- object scripts (docs/object-scripts.md): MapObject handles for scripts/objects/*.lua and the global helpers
+    L.new_usertype<LuaObj>(
+        "MapObject", sol::no_constructor,
+        "id", sol::property([](LuaObj& o) { return o.id; }),
+        "valid", sol::property([](LuaObj& o) { return o.s && o.s->FindObject(o.id) != nullptr; }),
+        "name", sol::property([](LuaObj& o) { Item* it = o.s ? o.s->FindObject(o.id) : nullptr; return it ? it->instName : std::string(); }),
+        "display_name", sol::property([](LuaObj& o) { Item* it = o.s ? o.s->FindObject(o.id) : nullptr; return it ? it->name : std::string(); }),
+        "binding", sol::property([](LuaObj& o) { Item* it = o.s ? o.s->FindObject(o.id) : nullptr; return it ? it->bindId : std::string(); }),
+        "map", sol::property([](LuaObj& o) { Map* m = nullptr; Item* it = o.s ? o.s->FindObject(o.id, &m) : nullptr; return it && m ? m->name : std::string(); }),
+        "proto", sol::property([](LuaObj& o) {
+            Item* it = o.s ? o.s->FindObject(o.id) : nullptr;
+            const Proto* p = it ? o.s->Data().GetProto(it->pid) : nullptr;
+            return p ? p->key : std::string();
+        }),
+        "kind", sol::property([](LuaObj& o) {
+            static const char* kinds[4] = {"item", "door", "container", "usable"};
+            Item* it = o.s ? o.s->FindObject(o.id) : nullptr;
+            return std::string(it ? kinds[(int)it->kind] : "");
+        }),
+        "x", sol::property([](LuaObj& o) { Item* it = o.s ? o.s->FindObject(o.id) : nullptr; return it ? (int)it->pos.x : -1; }),
+        "y", sol::property([](LuaObj& o) { Item* it = o.s ? o.s->FindObject(o.id) : nullptr; return it ? (int)it->pos.y : -1; }),
+        "is_open", sol::property([](LuaObj& o) { Item* it = o.s ? o.s->FindObject(o.id) : nullptr; return it && it->open; }),
+        "is_locked", sol::property([](LuaObj& o) { Item* it = o.s ? o.s->FindObject(o.id) : nullptr; return it && it->locked; }),
+        // persistent per-object state (store table object_state): numbers by name, plus the one-shot "used" mark
+        "get_flag", [](LuaObj& o, const std::string& k) -> double {
+            Map* m = nullptr; Item* it = o.s ? o.s->FindObject(o.id, &m) : nullptr;
+            if (!it || !m) return 0;
+            auto& st = o.s->ObjStateOf(*m, *it);
+            auto f = st.flags.find(k);
+            return f == st.flags.end() ? 0.0 : f->second;
+        },
+        "set_flag", [](LuaObj& o, const std::string& k, double v) {
+            Map* m = nullptr; Item* it = o.s ? o.s->FindObject(o.id, &m) : nullptr;
+            if (!it || !m) return;
+            o.s->ObjStateOf(*m, *it).flags[k] = v;
+        },
+        "used", [](LuaObj& o) { Map* m = nullptr; Item* it = o.s ? o.s->FindObject(o.id, &m) : nullptr; return it && m && o.s->ObjStateOf(*m, *it).used; },
+        "set_used", [](LuaObj& o, bool v) {
+            Map* m = nullptr; Item* it = o.s ? o.s->FindObject(o.id, &m) : nullptr;
+            if (it && m) o.s->ObjStateOf(*m, *it).used = v;
+        },
+        "open", [](LuaObj& o) { Map* m = nullptr; Item* it = o.s ? o.s->FindObject(o.id, &m) : nullptr; if (it && m) o.s->DoorAction(*m, *it, "open"); },
+        "close", [](LuaObj& o) { Map* m = nullptr; Item* it = o.s ? o.s->FindObject(o.id, &m) : nullptr; if (it && m) o.s->DoorAction(*m, *it, "close"); },
+        "toggle", [](LuaObj& o) { Map* m = nullptr; Item* it = o.s ? o.s->FindObject(o.id, &m) : nullptr; if (it && m) o.s->DoorAction(*m, *it, "toggle"); },
+        "lock", [](LuaObj& o) { Map* m = nullptr; Item* it = o.s ? o.s->FindObject(o.id, &m) : nullptr; if (it && m) o.s->DoorAction(*m, *it, "lock"); },
+        "unlock", [](LuaObj& o) { Map* m = nullptr; Item* it = o.s ? o.s->FindObject(o.id, &m) : nullptr; if (it && m) o.s->DoorAction(*m, *it, "unlock"); },
+        "start_dialog", [](LuaObj& o, Critter& pc, const std::string& dialog) {
+            Item* it = o.s ? o.s->FindObject(o.id) : nullptr;
+            return it && o.s->StartObjectDialog(pc, dialog, *it, o.s->ObjectName(pc, *it));
+        });
+    // object_by_name(map_name, instance_name) / object_by_id(id) / bound_object(binding_id) -> MapObject or nil
+    L["object_by_name"] = [&S, &W](const std::string& map, const std::string& name, sol::this_state ts) -> sol::object {
+        sol::state_view sv(ts);
+        Map* m = W.FindMapByName(map);
+        if (m) for (auto& [id, it] : m->items) if (it.kind != ObjKind::Ground && it.instName == name) return sol::make_object(sv, LuaObj{&S, id});
+        return sol::make_object(sv, sol::nil);
+    };
+    L["object_by_id"] = [&S](int id, sol::this_state ts) -> sol::object {
+        sol::state_view sv(ts);
+        if (!S.FindObject((ItemId)id)) return sol::make_object(sv, sol::nil);
+        return sol::make_object(sv, LuaObj{&S, (ItemId)id});
+    };
+    L["bound_object"] = [&S, &W](const std::string& bindId, sol::this_state ts) -> sol::object {
+        sol::state_view sv(ts);
+        for (auto& mp : W.Maps()) for (auto& [id, it] : mp->items) if (it.bindId == bindId) return sol::make_object(sv, LuaObj{&S, id});
+        return sol::make_object(sv, sol::nil);
+    };
+    // start_dialog(player, dialog_id, obj): a data dialog spoken by a map object (npc id 0); true when it opened
+    L["start_dialog"] = [&S](Critter& pc, const std::string& dialog, LuaObj obj) {
+        Item* it = S.FindObject(obj.id);
+        return it && S.StartObjectDialog(pc, dialog, *it, S.ObjectName(pc, *it));
+    };
+    // skill_check(player, "Science", difficulty [, roll]) -> bool: skill value >= difficulty, or with roll = true a percent roll of (skill - difficulty)
+    L["skill_check"] = [&S](Critter& pc, const std::string& skill, int difficulty, sol::optional<bool> roll) { return S.SkillCheck(pc, skill, difficulty, roll.value_or(false)); };
     L["save_world"] = [&S]() { S.SaveWorldState(true); };   // writes the door / container state to the database now (also done periodically and at shutdown)
     L["set_lock_roll"] = [&S](int force) { S.Rt().ForceLockRoll = force; };   // dev/test only: 1 picks always succeed, 0 always fail, -1 random
     L["get_global"] = [&S](const std::string& k) { return S.GetGlobal(k); };
@@ -380,6 +459,36 @@ std::unique_ptr<sol::state> Scripting::BuildState() {
     return L;
 }
 
+bool Scripting::EnsureObjectScript(const std::string& rel, std::string* err) {
+    if (objEnvs_.count(rel)) return true;
+    if (objBad_.count(rel) || !L_) return false;
+    auto fail = [&](const std::string& m) { objBad_.insert(rel); if (err) *err = rel + ": " + m; log::Error("lua: object script %s: %s", rel.c_str(), m.c_str()); return false; };
+    sol::state_view L(*L_);
+    const std::filesystem::path path = dir_ / rel;
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) return fail("file not found (create it from the editor, tab Object scripts, or copy scripts/objects/_template.lua)");
+    sol::load_result lr = L.load_file(path.string());
+    if (!lr.valid()) { sol::error e = lr; return fail(e.what()); }
+    sol::environment env(L, sol::create, L.globals());
+    sol::protected_function fn = lr;
+    sol::set_environment(env, fn);
+    sol::protected_function_result r = fn();
+    if (!r.valid()) { sol::error e = r; return fail(e.what()); }
+    objEnvs_.emplace(rel, std::move(env));
+    return true;
+}
+
+std::vector<std::string> Scripting::LoadObjectScripts(const std::vector<std::string>& rels) {
+    std::vector<std::string> errs;
+    objEnvs_.clear();
+    objBad_.clear();
+    for (const std::string& rel : rels) {
+        std::string e;
+        if (!EnsureObjectScript(rel, &e) && !e.empty()) errs.push_back(e);
+    }
+    return errs;
+}
+
 bool Scripting::Load() {
     L_ = BuildState();
     if (!L_) return false;
@@ -396,6 +505,7 @@ bool Scripting::Reload() {
         log::Error("scripting: reload failed, keeping previous scripts");
         return false;
     }
+    objEnvs_.clear();   // they live in the old state; Server::BindObjects reloads the object scripts into the new one
     L_ = std::move(fresh);
     ++generation_;
     ApplyConfig(*L_);

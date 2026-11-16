@@ -151,6 +151,29 @@ const char* const kDialogs = R"J({
       {"key":"goto","type":"string","maxLen":48,"ref":"node"}]}}]}}
  ]})J";
 
+const char* const kObjects = R"J({
+ "id":"objects","label":"Object scripts","group":"Content","dir":"objects","nameField":"id","editor":"objects",
+ "help":"Behaviour bound to map objects (computers, terminals, levers, doors, containers), docs/object-scripts.md. Heavy logic: a Lua file in scripts/objects/; simple behaviour: the declarative steps below.",
+ "fields":[
+  {"key":"id","type":"string","required":true,"maxLen":64,"idPattern":true,"label":"Id"},
+  {"key":"map","type":"string","required":true,"maxLen":128,"ref":"map","label":"Map"},
+  {"key":"object","type":"string","maxLen":128,"label":"Object (instance name on the map; the stable binding key)"},
+  {"key":"proto","type":"string","maxLen":128,"label":"Prototype (fallback binding, with cell)"},
+  {"key":"cell","type":"cell","label":"Cell [x, y] (fallback binding)"},
+  {"key":"label","type":"string","maxLen":32,"label":"Cursor label ([Use] by default)"},
+  {"key":"name","type":"string","maxLen":128,"label":"Name override"},
+  {"key":"desc","type":"text","maxLen":600,"label":"Description override"},
+  {"key":"script","type":"scriptpath","maxLen":128,"label":"Lua script (below scripts/)"},
+  {"key":"usable","type":"bool","default":true,"label":"Usable"},
+  {"key":"one_shot","type":"oneshot","label":"One shot (true / world / player)"},
+  {"key":"cooldown","type":"int","min":0,"max":86400,"label":"Cooldown (seconds)"},
+  {"key":"range","type":"int","min":0,"max":50,"label":"Range (tiles, 0 = door range)"},
+  {"key":"hidden_until","type":"condition","label":"Hidden until"},
+  {"key":"on_use","type":"steps","maxCount":24,"label":"On use"},
+  {"key":"on_look","type":"steps","maxCount":24,"label":"On look"},
+  {"key":"skills","type":"stepmap","keys":"$skills","label":"On skill use"}
+ ]})J";
+
 const char* const kMisc = R"J({
  "conditions":{
   "ops":[">=","<=","==","!=",">","<"],
@@ -169,20 +192,32 @@ const char* const kMisc = R"J({
    {"id":"give","fields":[{"key":"give","type":"string","ref":"item","required":true},{"key":"count","type":"int","min":1,"max":9999,"default":1}]},
    {"id":"take","fields":[{"key":"take","type":"string","ref":"item","required":true},{"key":"count","type":"int","min":1,"max":9999,"default":1}]},
    {"id":"quest","fields":[{"key":"quest","type":"string","ref":"quest","required":true},{"key":"state","type":"enum","enum":"$questActions","required":true}]},
-   {"id":"flag","fields":[{"key":"flag","type":"string","required":true},{"key":"set","type":"flagvalue","default":true}]},
+   {"id":"flag","fields":[{"key":"flag","type":"string","required":true},{"key":"set","type":"flagvalue","default":true},{"key":"world","type":"bool","label":"shared by everyone"}]},
    {"id":"xp","fields":[{"key":"xp","type":"int","min":1,"max":100000,"required":true}]},
    {"id":"trade","fields":[{"key":"trade","type":"const","value":true}],"help":"stub: there is no store yet"},
    {"id":"attack","fields":[{"key":"attack","type":"const","value":true}],"help":"ends the dialog; the NPC turns hostile"},
    {"id":"end","fields":[{"key":"end","type":"const","value":true}],"help":"ends the dialog; later effects are skipped"},
    {"id":"door","fields":[{"key":"door","type":"cell","required":true},{"key":"action","type":"enum","enum":"$doorActions","required":true}]},
    {"id":"lua","fields":[{"key":"lua","type":"string","luaName":true,"required":true}]}]},
- "extensionPoints":{
-  "objectScripts":{
-   "status":"reserved, not implemented",
-   "doc":"docs/editor.md, section 'Extension point: object scripts'",
-   "idea":{"kind":"objects","dir":"objects","record":{
-     "id":"map object id or placed-object name","map":"map name","cell":"[x, y]",
-     "on_use":[{"run_dialog":"dialog id"},{"open_door":"[x, y]"},{"require_skill":"Science>=50","else":"dialog id"}]}}}}
+ "steps":{
+  "maxItems":24,
+  "doorActions":["open","close","toggle","lock","unlock"],
+  "kinds":[
+   {"id":"dialog","fields":[{"key":"dialog","type":"string","ref":"dialog","required":true}],"help":"starts a data dialog spoken by the object; the rest of the list is not run"},
+   {"id":"door","fields":[{"key":"door","type":"doortarget","required":true},{"key":"action","type":"enum","enum":["open","close","toggle","lock","unlock"],"required":true}],"help":"a door / container of the same map: its instance name or cell [x, y]"},
+   {"id":"skill","fields":[{"key":"skill","type":"enum","enum":"$skills","required":true},{"key":"difficulty","type":"int","min":-200,"max":400,"default":0},{"key":"roll","type":"bool","label":"roll a percent chance"},{"key":"reward_xp","type":"int","min":0,"max":100000,"label":"xp on success"},{"key":"success","type":"steps"},{"key":"failure","type":"steps"}]},
+   {"id":"give","fields":[{"key":"give","type":"string","ref":"item","required":true},{"key":"count","type":"int","min":1,"max":9999,"default":1}]},
+   {"id":"take","fields":[{"key":"take","type":"string","ref":"item","required":true},{"key":"count","type":"int","min":1,"max":9999,"default":1}]},
+   {"id":"quest","fields":[{"key":"quest","type":"string","ref":"quest","required":true},{"key":"state","type":"enum","enum":"$questActions","required":true}]},
+   {"id":"flag","fields":[{"key":"flag","type":"string","required":true},{"key":"set","type":"flagvalue","default":true},{"key":"world","type":"bool","label":"shared by everyone"}]},
+   {"id":"xp","fields":[{"key":"xp","type":"int","min":1,"max":100000,"required":true}]},
+   {"id":"message","fields":[{"key":"message","type":"text","maxLen":600,"required":true},{"key":"key","type":"string","maxLen":96,"label":"locale key (optional)"}]},
+   {"id":"teleport","fields":[{"key":"teleport","type":"string","ref":"map","required":true},{"key":"entry","type":"int","min":0,"max":255},{"key":"cell","type":"cell"}],"help":"map transition: entry point or cell"},
+   {"id":"play","fields":[{"key":"play","type":"string","maxLen":64,"required":true}],"help":"calls the Lua hook object_effect(player, obj, name); the protocol has no effect message yet"},
+   {"id":"call","fields":[{"key":"call","type":"string","luaName":true,"required":true}],"help":"global Lua function fn(player, obj)"},
+   {"id":"default_use","fields":[{"key":"default_use","type":"const","value":true}],"help":"the engine's own door / container use"},
+   {"id":"end","fields":[{"key":"end","type":"const","value":true}],"help":"stops the list"}]},
+ "extensionPoints":{}
 })J";
 
 // "$name" strings in the schema are replaced by the live lists below.
@@ -214,7 +249,7 @@ json Expand(json j, const std::map<std::string, json>& enums) {
 const std::vector<KindInfo>& Kinds() {
     static const std::vector<KindInfo> k = {
         {"items", "Items", "Content"}, {"npcs", "NPCs", "Content"}, {"perks", "Perks", "Content"}, {"traits", "Traits", "Content"},
-        {"skills", "Skills", "Content"}, {"quests", "Quests", "Content"}, {"dialogs", "Dialogs", "Content"}};
+        {"skills", "Skills", "Content"}, {"quests", "Quests", "Content"}, {"dialogs", "Dialogs", "Content"}, {"objects", "Object scripts", "Content"}};
     return k;
 }
 
@@ -235,7 +270,7 @@ json BuildSchema() {
     out["contentSchema"] = kContentSchema;
     out["enums"] = enums;
     json kinds = json::object();
-    for (const char* src : {kItems, kNpcs, kPerks, kTraits, kSkills, kQuests, kDialogs}) {
+    for (const char* src : {kItems, kNpcs, kPerks, kTraits, kSkills, kQuests, kDialogs, kObjects}) {
         json k = json::parse(src);
         const std::string id = k["id"].get<std::string>();
         kinds[id] = Expand(k, enums);
@@ -247,6 +282,7 @@ json BuildSchema() {
     json misc = Expand(json::parse(kMisc), enums);
     out["conditions"] = misc["conditions"];
     out["effects"] = misc["effects"];
+    out["steps"] = misc["steps"];
     out["extensionPoints"] = misc["extensionPoints"];
     out["statEffect"] = json{{"stat", {{"type", "enum"}, {"enum", enums["stats"]}}}, {"add", {{"type", "int"}, {"min", -1000}, {"max", 1000}}}};
     return out;

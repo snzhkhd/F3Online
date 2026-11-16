@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "kind": "objects",
+  "note": "Declarative bindings used by f3_gametest --objects (copied next to the samples into a throw-away data folder by smoke_test.ps1). Not part of the shipped data.",
+  "records": [
+    {
+      "id": "t_box_ok",
+      "map": "00_04_Tutorial_Vault",
+      "object": "Box_BlueDS_Vault_000",
+      "label": "Search",
+      "on_use": [ { "message": "T-BOX-USED" } ],
+      "skills": {
+        "Science": [
+          { "skill": "Science", "difficulty": 0, "roll": true, "reward_xp": 5,
+            "success": [ { "message": "T-OK" }, { "flag": "t_box_flag" }, { "door": "Door01Vault13_005", "action": "open" } ],
+            "failure": [ { "message": "T-FAIL" } ] }
+        ]
+      }
+    },
+    {
+      "id": "t_shelf",
+      "map": "00_04_Tutorial_Vault",
+      "object": "StorageShelfDS_Vault_000",
+      "name": "Hidden stash",
+      "hidden_until": "flag:t_box_flag"
+    },
+    {
+      "id": "t_yellow",
+      "map": "00_04_Tutorial_Vault",
+      "object": "Box_YellowDS_Vault_000",
+      "label": "Grab",
+      "one_shot": true,
+      "on_use": [ { "message": "T-ONCE" }, { "flag": "t_once", "set": 3 } ]
+    }
+  ]
+}

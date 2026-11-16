@@ -100,6 +100,7 @@ bool Server::Init() {
     scripting_ = std::make_unique<Scripting>(*this, cfg_.scriptsDir);
     if (!scripting_->Load()) { log::Error("scripts failed to load from %s", cfg_.scriptsDir.string().c_str()); return false; }
     if (!world_.FirstMap()) { log::Error("scripts created no map (call create_map in on_init)"); return false; }
+    BindObjects();   // data/objects: bindings -> map objects, scripts/objects/*.lua
     log::Info("f3_server listening on UDP %u, %d Hz, %zu map(s)", cfg_.port, cfg_.tickRate, world_.Maps().size());
     return true;
 }
@@ -697,12 +698,12 @@ void Server::UpdateVisibility(Map& m) {
 
         std::unordered_set<ItemId> nowItems;
         for (auto& [iid, it] : m.items)
-            if (InRange(it.pos, p->pos, ViewCells(*p))) nowItems.insert(iid);
+            if (InRange(it.pos, p->pos, ViewCells(*p)) && !ObjectHiddenFor(*p, it)) nowItems.insert(iid);   // hidden_until of a data/objects binding
         for (ItemId iid : nowItems)
             if (!p->visItems.count(iid)) {
                 const Item& it = m.items[iid];
                 net::ItemAdd ia;
-                ia.id = it.id; ia.pid = it.pid; ia.name = it.name; ia.x = it.pos.x; ia.y = it.pos.y;
+                ia.id = it.id; ia.pid = it.pid; ia.name = ObjectName(*p, it); ia.x = it.pos.x; ia.y = it.pos.y;
                 SendMsg(*p, ia);
                 if (it.kind != ObjKind::Ground) SendObjectInfo(*p, it);
             }

@@ -59,14 +59,10 @@ const char* Server::OperateResultName(OperateResult r) {
 
 void Server::NotifyObject(Map& m, const Item& o) {
     if (o.kind == ObjKind::Ground) return;
-    ByteBuffer b;
-    {
-        gnet::ObjectInfo oi;
-        oi.id = o.id; oi.kind = static_cast<gnet::ObjectKind>(o.kind); oi.open = o.open ? 1 : 0; oi.locked = o.locked ? 1 : 0; oi.flags = o.lockFlags;
-        b = gnet::PackG(oi);
-    }
+    gnet::ObjectInfo oi;
+    oi.id = o.id; oi.kind = static_cast<gnet::ObjectKind>(o.kind); oi.open = o.open ? 1 : 0; oi.locked = o.locked ? 1 : 0; oi.flags = o.lockFlags;
     for (Critter* p : m.critters)
-        if (p->IsPlayer() && p->visItems.count(o.id)) Send(*p, b);
+        if (p->IsPlayer() && p->visItems.count(o.id)) { oi.label = ObjectLabel(*p, o); Send(*p, gnet::PackG(oi)); }
 }
 
 // A closed door keeps its doorway cells blocked, an open one releases them.
@@ -215,7 +211,17 @@ bool Server::UseObject(Critter& c, ItemId objId) {
     auto it = m->items.find(objId);
     if (it == m->items.end()) return false;
     Item& o = it->second;
-    if (ObjDist(o, c.pos) > rt_.DoorOpenRange) return false;
+    if (ObjDist(o, c.pos) > ObjectRange(o, rt_.DoorOpenRange)) return false;
+    if (o.kind == ObjKind::Ground) return false;
+    if (ObjectUse(c, *m, o)) return true;   // a data/objects binding took over (docs/object-scripts.md)
+    DefaultUseObject(c, *m, o);
+    const Proto* p = data_.GetProto(o.pid);
+    if (scripting_) scripting_->Call("on_use", &c, static_cast<int>(objId), p ? p->key : std::string(), o.script);
+    return true;
+}
+
+void Server::DefaultUseObject(Critter& c, Map& mref, Item& o) {
+    Map* m = &mref;
     switch (o.kind) {
         case ObjKind::Door: {
             OperateResult r = Operate(&c, *m, o, -1);
@@ -228,11 +234,8 @@ bool Server::UseObject(Critter& c, ItemId objId) {
             break;
         }
         case ObjKind::Usable: break;
-        case ObjKind::Ground: return false;
+        case ObjKind::Ground: break;
     }
-    const Proto* p = data_.GetProto(o.pid);
-    if (scripting_) scripting_->Call("on_use", &c, static_cast<int>(objId), p ? p->key : std::string(), o.script);
-    return true;
 }
 
 int Server::ObjDist(const Item& o, TilePos from) const {
@@ -384,6 +387,7 @@ void Server::SaveWorldState(bool force) {
         if (store_.SaveWorldObjects(m.name, rows)) { done.push_back(&m); ++saved; }
         else log::Error("world state of map %s: save FAILED", m.name.c_str());
     }
+    SaveObjectStates();   // scripted objects (data/objects): one-shot marks and flags
     if (!tx.Commit()) { log::Error("world state: commit FAILED, will retry"); return; }   // objDirty stays set
     for (Map* m : done) m->objDirty = false;
     if (saved) log::Info("saved door / container state of %d map(s)", saved);

@@ -166,6 +166,7 @@ function clsOf(rec) {
 function nameOf(kind, rec) {
   if (kind === 'quests') return rec.title || '';
   if (kind === 'dialogs') return rec.speaker || '';
+  if (kind === 'objects') return rec.object || (rec.proto ? rec.proto + (rec.cell ? '@' + rec.cell.join(',') : '') : '');
   if (kind === 'skills') return (rec.desc || '').slice(0, 50);
   if (rec.name) return rec.name;
   const b = S.protoName && (S.protoName[lower(rec.id)] || S.protoName[lower(rec.base)]);
@@ -187,7 +188,7 @@ function recordRows(kind) {
 }
 
 // ------------------------------------------------------------------------------------------------------------------ navigation
-const NAV = [['Content', ['items', 'npcs', 'perks', 'traits', 'skills', 'quests', 'dialogs']], ['Text', ['locale']], ['Planned', ['objects']]];
+const NAV = [['Content', ['items', 'npcs', 'perks', 'traits', 'skills', 'quests', 'dialogs', 'objects']], ['Text', ['locale']]];
 function renderNav() {
   const nav = $('nav'); nav.textContent = '';
   for (const [grp, ids] of NAV) {
@@ -195,10 +196,9 @@ function renderNav() {
     for (const id of ids) {
       let label, count = '', dirty = false;
       if (id === 'locale') { label = 'Locale (en / ru)'; dirty = Object.values(S.files).some((f) => f.kind.startsWith('locale/') && isDirty(f)); }
-      else if (id === 'objects') label = 'Object scripts';
       else { const ki = S.info && S.info.kinds.find((k) => k.id === id); label = ki ? ki.label : id; count = ki ? String(S.loaded[id] ? filesOfKind(id).reduce((a, f) => a + f.doc.records.length, 0) : ki.records) : ''; dirty = Object.values(S.files).some((f) => f.kind === id && isDirty(f)); }
-      nav.append(h('div', { class: 'nav-item' + (S.kind === id ? ' active' : '') + (id === 'objects' ? ' disabled' : ''), onclick: () => openKind(id) },
-        h('span', {}, label, dirty ? h('span', { class: 'dot' }) : null), h('span', { class: 'count' }, id === 'objects' ? 'planned' : count)));
+      nav.append(h('div', { class: 'nav-item' + (S.kind === id ? ' active' : ''), onclick: () => openKind(id) },
+        h('span', {}, label, dirty ? h('span', { class: 'dot' }) : null), h('span', { class: 'count' }, count)));
     }
   }
 }
@@ -207,7 +207,7 @@ async function openKind(kind) {
   S.kind = kind; S.sel = null; S.tab = kind === 'dialogs' ? 'graph' : 'form'; S.baseRec = null;
   location.hash = kind;
   renderNav();
-  if (kind === 'locale' || kind === 'objects') { renderList(); renderMain(); return; }
+  if (kind === 'locale') { renderList(); renderMain(); return; }
   $('listPane').textContent = ''; $('listPane').append(h('div', { class: 'empty' }, 'Loading ' + kind + '...'));
   const r = await api('GET', 'list', undefined, { kind });
   if (!r.ok) { $('listPane').textContent = r.j.error || 'cannot list'; return; }
@@ -223,7 +223,7 @@ async function openKind(kind) {
 function renderList() {
   const pane = $('listPane');
   if (S.kind === 'locale') { pane.textContent = ''; if (Ed.renderLocaleList) Ed.renderLocaleList(pane); return; }
-  if (S.kind === 'objects' || !S.loaded[S.kind]) return;
+  if (!S.loaded[S.kind]) return;
   const kind = S.kind, F = S.filters, ks = kindSchema(kind);
   const own = recordRows(kind);
   const ids = new Set(own.map((r) => lower(r.id)));
@@ -288,7 +288,6 @@ function renderMain() {
   const scroll = main.scrollTop;
   main.textContent = '';
   if (S.kind === 'locale') { if (Ed.renderLocaleMain) Ed.renderLocaleMain(main); return; }
-  if (S.kind === 'objects') { main.append(objectsPlaceholder()); return; }
   if (!S.sel) { main.append(h('div', { class: 'empty' }, 'Select a record on the left, or create one with + New.')); renderDirty(); return; }
   if (S.sel.baseId) { main.append(baseOnlyView()); renderDirty(); return; }
   const f = curFile(), rec = curRec();
@@ -332,15 +331,6 @@ function baseOnlyView() {
   h('div', { class: 'banner info' }, 'This is an original prototype (read-only). Overriding writes a small record into a data file that changes only the fields you edit.'),
   b ? h('pre', { class: 'json mono' }, JSON.stringify(b.record, null, 2)) : h('div', { class: 'empty' }, 'Base record unavailable.'));
 }
-function objectsPlaceholder() {
-  const ep = S.schema && S.schema.extensionPoints && S.schema.extensionPoints.objectScripts;
-  return h('div', {}, h('h2', {}, 'Object scripts'),
-    h('div', { class: 'ext-note' }, h('p', {}, h('b', {}, 'EXTENSION POINT, not implemented. '), 'Object scripts will let a designer attach behaviour to a placed map object: a computer terminal that runs a dialog, a switch that opens a door, an object that needs a skill check. The editor will get a new kind next to the others; nothing here writes files today.'),
-      h('p', {}, 'Intended schema idea (served by /api/schema under extensionPoints.objectScripts, described in docs/editor.md):'),
-      h('pre', { class: 'json mono' }, JSON.stringify(ep ? ep.idea : {}, null, 2)),
-      h('p', {}, 'To add it: a new kind in EditorSchema.cpp and Content.cpp (same recipe as docs/editor.md, "Adding a new kind"), then register a renderer with Ed.ext.objects in tools/editor/.')));
-}
-Ed.ext.objects = null;   // EXTENSION POINT (object scripts): a future module sets Ed.ext.objects = (container) => {...}
 
 // ------------------------------------------------------------------------------------------------------------------ record actions
 function nextId(kind, base) {
@@ -356,6 +346,7 @@ function template(kind, id, base) {
   if (kind === 'traits') return { id, name: id, index: nextTraitIndex() };
   if (kind === 'quests') return { id, title: id };
   if (kind === 'skills') return { id };
+  if (kind === 'objects') return { id, map: '', object: '' };
   if (kind === 'dialogs') return { id, nodes: [{ id: 'start', text: 'Hello.', answers: [{ id: 'bye', text: 'Goodbye.' }] }] };
   return { id };
 }
@@ -724,6 +715,7 @@ function renderStatMods(C, f, path, val, unset) {
 
 function renderRecordForm() {
   const C = ctxNow();
+  if (C.ks && C.ks.editor === 'objects' && Ed.renderObjectForm) return Ed.renderObjectForm();
   const form = h('div', { class: 'form', id: 'recForm' });
   const probs = h('div', { id: 'recProblems' });
   form.append(probs);

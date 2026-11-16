@@ -8,6 +8,7 @@
 #include <sstream>
 #include <system_error>
 #include "DataFormat.h"
+#include "Scripting.h"
 #include "common/protocol_game.h"
 #ifdef _WIN32
 #include <process.h>
@@ -230,6 +231,9 @@ Response Api::Route(const Request& req) {
     if (ep == "locale-status") return need("GET") ? LocaleStatusResp() : Error(405, "method", "GET");
     if (ep == "refs") return need("GET") ? Refs() : Error(405, "method", "GET");
     if (ep == "stf") return need("GET") ? StfLookup(req) : Error(405, "method", "GET");
+    if (ep == "objects") return need("GET") ? ObjectsResp(req) : Error(405, "method", "GET");
+    if (ep == "objscript") return need("GET") ? ObjScriptStatus(req) : Error(405, "method", "GET");
+    if (ep == "objscript/create") return need("POST") ? ObjScriptCreate(req) : Error(405, "method", "POST");
     return Error(404, "not_found", "unknown endpoint /api/" + ep);
 }
 
@@ -409,6 +413,99 @@ Response Api::StfLookup(const Request& req) {
     out["ok"] = true;
     out["id"] = n;
     out["text"] = host_.stf(n);
+    return Ok(out);
+}
+
+// ---------------------------------------------------------------------------------------------------------------- object scripts
+
+// scripts/objects/<name>.lua as "objects/<name>.lua": flat names only, nothing that could leave scripts/objects/
+static bool ValidObjScriptPath(const std::string& rel, std::string& why) {
+    if (rel.size() < 14 || rel.size() > 128 || rel.compare(0, 8, "objects/") != 0) { why = "expected objects/<name>.lua"; return false; }
+    if (Low(rel.substr(rel.size() - 4)) != ".lua") { why = "the file must end in .lua"; return false; }
+    const std::string name = rel.substr(8);
+    if (name.find('/') != std::string::npos || name[0] == '.' || name.find("..") != std::string::npos) { why = "a flat file name below scripts/objects/ is required"; return false; }
+    for (unsigned char c : name) if (!(std::isalnum(c) || c == '_' || c == '.' || c == '-')) { why = "the name may only contain letters, digits, _ . -"; return false; }
+    if (ReservedDeviceName(name)) { why = "reserved device name"; return false; }
+    return true;
+}
+
+static std::string UrlPath(const std::filesystem::path& p) {
+    std::string s = p.generic_string();
+    std::string out;
+    for (unsigned char c : s) {
+        if (std::isalnum(c) || c == '/' || c == '-' || c == '_' || c == '.' || c == ':') out.push_back(static_cast<char>(c));
+        else { char b[4]; std::snprintf(b, sizeof b, "%%%02X", c); out += b; }
+    }
+    return out;
+}
+
+json Api::ObjScriptInfo(const std::string& rel) const {
+    json j = json::object();
+    j["path"] = rel;
+    const std::filesystem::path abs = opt_.scriptsDir / rel;
+    std::error_code ec;
+    const std::filesystem::path full = std::filesystem::weakly_canonical(abs, ec);
+    j["abs"] = (ec ? abs : full).string();
+    j["vscode"] = "vscode://file/" + UrlPath(ec ? abs : full);   // opens the file when VS Code is installed (a hint; the browser asks first)
+    const Scripting::ScriptCheck c = Scripting::CheckScript(abs);
+    j["exists"] = c.exists;
+    j["valid"] = c.ok;   // the file parses (the API's own "ok" is added by the caller)
+    j["error"] = c.error;
+    j["warning"] = c.warning;
+    j["hooks"] = c.hooks;
+    return j;
+}
+
+Response Api::ObjectsResp(const Request& req) {
+    if (!host_.objects) return Error(503, "no_server", "the object list needs the running server");
+    auto get = [&](const char* k) { auto it = req.query.find(k); return it == req.query.end() ? std::string() : it->second; };
+    int limit = 500;
+    try { if (!get("limit").empty()) limit = std::clamp(std::stoi(get("limit")), 1, 5000); } catch (...) { return Error(400, "bad_request", "limit must be an integer"); }
+    const std::string text = host_.objects(get("map"), get("q"), limit);
+    json out = json::parse(text, nullptr, false);
+    if (out.is_discarded()) return Error(500, "internal", "bad object list");
+    out["ok"] = !out.contains("error");
+    return Ok(out);
+}
+
+Response Api::ObjScriptStatus(const Request& req) {
+    if (opt_.scriptsDir.empty()) return Error(503, "no_scripts", "no scripts/ folder is configured");
+    auto it = req.query.find("path");
+    std::string why;
+    if (it == req.query.end() || !ValidObjScriptPath(it->second, why)) return Error(400, "bad_path", why.empty() ? "path required" : why);
+    json out = ObjScriptInfo(it->second);
+    out["ok"] = true;
+    return Ok(out);
+}
+
+Response Api::ObjScriptCreate(const Request& req) {
+    if (opt_.scriptsDir.empty()) return Error(503, "no_scripts", "no scripts/ folder is configured");
+    json b = json::parse(req.body, nullptr, false);
+    if (b.is_discarded() || !b.is_object() || !b.contains("path") || !b["path"].is_string()) return Error(400, "bad_request", "body must be {\"path\": \"objects/<name>.lua\"}");
+    const std::string rel = b["path"].get<std::string>();
+    std::string why;
+    if (!ValidObjScriptPath(rel, why)) return Error(400, "bad_path", why);
+    std::lock_guard<std::mutex> lk(fileMutex_);
+    const std::filesystem::path abs = opt_.scriptsDir / rel;
+    std::error_code ec;
+    bool created = false;
+    if (!std::filesystem::exists(abs, ec)) {
+        std::string text;
+        std::ifstream t(opt_.scriptsDir / "objects" / "_template.lua", std::ios::binary);
+        if (t) { std::stringstream ss; ss << t.rdbuf(); text = ss.str(); }
+        else text = "-- Object script (docs/object-scripts.md). Return true from a hook to mean \"handled\".\n"
+                    "function on_use(player, obj)\n"
+                    "    player:tell(\"You use \" .. obj.display_name .. \".\")\n"
+                    "    return true\n"
+                    "end\n";
+        std::filesystem::create_directories(abs.parent_path(), ec);
+        std::string err;
+        if (!WriteAtomic(abs, text, err)) return Error(500, "write_failed", err);
+        created = true;
+    }
+    json out = ObjScriptInfo(rel);
+    out["ok"] = true;
+    out["created"] = created;
     return Ok(out);
 }
 
@@ -689,7 +786,7 @@ Response Api::Refs() {
                     if (r.contains("spawns") && r["spawns"].is_array()) for (const auto& s : r["spawns"]) if (s.is_object() && !GetStr(s, "map").empty()) maps.insert(GetStr(s, "map"));
                 } else {
                     ids[kind].insert(id);
-                    if (kind == "dialogs") CollectFlags(r, flags);
+                    if (kind == "dialogs" || kind == "objects") CollectFlags(r, flags);
                 }
             }
         }
@@ -703,7 +800,7 @@ Response Api::Refs() {
     out["ok"] = true;
     out["items"] = items;
     out["npcs"] = npcs;
-    for (const char* k : {"perks", "traits", "quests", "dialogs"}) {
+    for (const char* k : {"perks", "traits", "quests", "dialogs", "objects"}) {
         json a = json::array();
         for (const std::string& id : ids[k]) a.push_back(id);
         out[k] = a;

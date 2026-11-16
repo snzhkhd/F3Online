@@ -106,9 +106,20 @@ CREATE INDEX events_kind  ON events(kind, id);
 CREATE INDEX events_actor ON events(actor COLLATE NOCASE, id);
 )SQL";
 
+// v2: runtime state of scripted map objects (data/objects): one JSON document per (map, object key), see docs/object-scripts.md
+const char* const kSchemaV2 = R"SQL(
+CREATE TABLE object_state(
+  map       TEXT NOT NULL,
+  obj_key   TEXT NOT NULL,                        -- instance name, or "<proto key>@x,y"
+  data      TEXT NOT NULL,                        -- JSON {"used":0|1,"flags":{name:number}}
+  PRIMARY KEY(map, obj_key)
+) WITHOUT ROWID;
+)SQL";
+
 const std::vector<DbMigration>& StoreMigrations() {
     static const std::vector<DbMigration> m = {
         {1, "initial schema", kSchemaV1},
+        {2, "object_state (scripted map objects)", kSchemaV2},
     };
     return m;
 }
@@ -435,6 +446,27 @@ std::vector<WorldObjRow> Store::LoadWorldObjects(const std::string& map) {
     return r;
 }
 
+bool Store::SaveObjectState(const std::string& map, const std::vector<ObjStateRow>& rows) {
+    try {
+        Db::Tx tx(db_);
+        { Stmt s = db_.Prepare("DELETE FROM object_state WHERE map=?"); s.BindText(1, map).Run(); }
+        Stmt s = db_.Prepare("INSERT OR REPLACE INTO object_state(map, obj_key, data) VALUES(?,?,?)");
+        for (const ObjStateRow& r : rows) { s.BindText(1, map).BindText(2, r.key).BindText(3, r.data); s.Run(); }
+        tx.Commit();
+        return true;
+    } catch (const std::exception& e) { Fail("object state save", e.what()); return false; }
+}
+
+std::vector<ObjStateRow> Store::LoadObjectState(const std::string& map) {
+    std::vector<ObjStateRow> r;
+    try {
+        Stmt s = db_.Prepare("SELECT obj_key, data FROM object_state WHERE map=? ORDER BY obj_key");
+        s.BindText(1, map);
+        while (s.Step()) r.push_back(ObjStateRow{s.ColText(0), s.ColText(1)});
+    } catch (const std::exception& e) { Fail("object state load", e.what()); }
+    return r;
+}
+
 int64_t Store::WorldObjectCount(const std::string& map) {
     try {
         if (map.empty()) return db_.ScalarInt("SELECT count(*) FROM world_objects");
@@ -516,7 +548,7 @@ DbInfo Store::Info() {
         wal += "-wal";
         const auto wsz = fs::file_size(wal, ec);
         d.walBytes = ec ? 0 : static_cast<int64_t>(wsz);
-        for (const char* t : {"accounts", "characters", "friends", "quests", "mail", "world_objects", "events", "meta", "schema_version"})
+        for (const char* t : {"accounts", "characters", "friends", "quests", "mail", "world_objects", "object_state", "events", "meta", "schema_version"})
             d.tables.push_back({t, db_.ScalarInt(std::string("SELECT count(*) FROM ") + t)});
     } catch (const std::exception& e) { Fail("info", e.what()); }
     return d;

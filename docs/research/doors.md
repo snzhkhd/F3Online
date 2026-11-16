@@ -54,6 +54,13 @@ drawn (not fogged). Result: "closed" doors you can walk through, doors that vani
 * **Tests**: `f3_gametest --doors 1|2` (player stops at a closed door, an NPC (dev `/npcspawn /npcgo /npckey`) walks through an unlocked one, is blocked by a locked one, passes with the key, AMX `A_MoveToPosition` too; state transitions, locked door blocks path, lockpick success and failure, key, container
   lock, persistence across a server restart); part 4 of `engine/tests/smoke_test.ps1`.
 
+## Object scripts on top of doors and containers
+
+`docs/object-scripts.md`: a binding (`data/objects/*.json`, key = map + instance name) can intercept `UseObject` before the engine's own door logic and run steps or a Lua hook;
+the `door` step and `obj:open() / close() / lock() / unlock()` go through the same `Operate` / `SetDoorLocked` paths as the original model (so the lock state, the persistence of
+`door / container state` and the `lock_changed` hook behave as described above). The step `default_use` and a hook that returns `false` fall back to the engine's use. Science (and
+any other skill) on a bound object is offered to `on_skill` and the binding's `skills` steps before the lockpick logic.
+
 ## Known gaps
 
 No per-instance GDOR overrides from maps; no auto-close; containers have no open clip; Junktown doors have no footprint so they never

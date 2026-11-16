@@ -173,7 +173,7 @@ static void TestReadEndpoints() {
     std::printf("kinds / list / get / refs / stf\n");
     Fixture f("read", true);
     json k = J(f.api->Handle(Req("GET", "/api/kinds")));
-    CHECK(k["ok"] == true && k["hasGamedata"] == true && k["kinds"].size() == 7, "kinds");
+    CHECK(k["ok"] == true && k["hasGamedata"] == true && k["kinds"].size() == 8, "kinds");
     json langs = k["langs"];
     CHECK(langs.size() == 2 && langs[0] == "en" && langs[1] == "ru", "locale languages");
     bool genFlag = false;
@@ -212,7 +212,7 @@ static void TestReadEndpoints() {
     CHECK(stf["available"] == true && stf["text"] == "Original line", "stf preview");
     CHECK(J(f.api->Handle(Req("GET", "/api/stf", {{"id", "x"}}))).value("ok", true) == false, "stf bad id");
     json sch = J(f.api->Handle(Req("GET", "/api/schema")));
-    CHECK(sch["kinds"].contains("dialogs") && sch["enums"]["skills"].size() == 14 && sch["extensionPoints"].contains("objectScripts"), "schema served");
+    CHECK(sch["kinds"].contains("dialogs") && sch["enums"]["skills"].size() == 14 && sch["kinds"].contains("objects") && sch["steps"]["kinds"].size() == 14, "schema served");
 }
 
 static void TestSaveFlow() {
@@ -583,6 +583,7 @@ static void TestSchemaMatchesValidator() {
         const json& k = schema["kinds"][kind];
         json base = SampleObject(k["fields"]);
         if (kind == "dialogs") base["nodes"] = json::array({json{{"id", "a"}, {"text", "x"}}});
+        if (kind == "objects") base["object"] = "Obj_000";   // a binding needs an instance name or a cell
         const ContentReport rep = pr.Run(kind, base);
         CHECK(rep.Ok(), "%s: the minimal record built from the schema validates%s", kind.c_str(), Dump(rep).c_str());
         json env = json::object();
@@ -668,6 +669,85 @@ static void TestConditionsAndEffects() {
     std::printf("  %d condition / effect samples\n", n);
 }
 
+static void TestObjectScripts() {
+    std::printf("object scripts: object picker endpoint, script status / create, objects kind save\n");
+    Fixture f("objs", true);
+    int calls = 0;
+    std::string lastMap, lastQuery;
+    int lastLimit = 0;
+    f.host.objects = [&](const std::string& map, const std::string& q, int limit) {
+        ++calls; lastMap = map; lastQuery = q; lastLimit = limit;
+        if (map.empty()) return std::string(R"({"maps":[{"name":"town","width":10,"height":10,"objects":2}]})");
+        if (map == "nowhere") return std::string(R"({"error":"map 'nowhere' is not loaded"})");
+        return std::string(R"({"map":"town","width":10,"height":10,"total":1,"objects":[{"id":5,"name":"Comp_000","display":"Computer","proto":"X.USE","model":"m","kind":"usable","x":3,"y":4,"binding":""}],"unresolved":[]})");
+    };
+    Options o = f.api->options();
+    o.scriptsDir = f.root / "scripts";
+    f.api = std::make_unique<Api>(o, f.host);
+    // the picker endpoint
+    json m = J(f.api->Handle(Req("GET", "/api/objects")));
+    CHECK(m["ok"] == true && m["maps"][0]["name"] == "town", "maps list: %s", m.dump().c_str());
+    json l = J(f.api->Handle(Req("GET", "/api/objects", {{"map", "town"}, {"q", "comp"}, {"limit", "50"}})));
+    CHECK(l["ok"] == true && l["objects"][0]["name"] == "Comp_000" && lastMap == "town" && lastQuery == "comp" && lastLimit == 50, "object list passes map / query / limit through: %s", l.dump().c_str());
+    CHECK(J(f.api->Handle(Req("GET", "/api/objects", {{"map", "nowhere"}})))["ok"] == false, "an unknown map is reported");
+    CHECK(f.api->Handle(Req("GET", "/api/objects", {{"limit", "x"}})).status == 400, "bad limit");
+    CHECK(f.api->Handle(Req("GET", "/api/objects", {}, "", false)).status == 401, "the picker needs the token");
+    CHECK(f.api->Handle(Req("POST", "/api/objects")).status == 405, "GET only");
+    {
+        Fixture g("objs_nohost");   // no server behind the editor
+        CHECK(g.api->Handle(Req("GET", "/api/objects")).status == 503, "without a server the picker answers 503");
+    }
+    // script status / create
+    json st = J(f.api->Handle(Req("GET", "/api/objscript", {{"path", "objects/t1.lua"}})));
+    CHECK(st["ok"] == true && st["exists"] == false && st["path"] == "objects/t1.lua", "missing script: %s", st.dump().c_str());
+    Response cr = f.api->Handle(Req("POST", "/api/objscript/create", {}, R"({"path":"objects/t1.lua"})"));
+    json cj = J(cr);
+    CHECK(cr.status == 200 && cj["created"] == true && cj["exists"] == true && cj["valid"] == true, "create from the template: %s", cr.body.c_str());
+    CHECK(fs::exists(f.root / "scripts/objects/t1.lua"), "the file was written below scripts/objects");
+    bool onUse = false;
+    for (auto& h : cj["hooks"]) if (h == "on_use") onUse = true;
+    CHECK(onUse, "the template defines on_use (hooks: %s)", cj["hooks"].dump().c_str());
+    CHECK(cj["vscode"].get<std::string>().rfind("vscode://file/", 0) == 0 && cj["abs"].get<std::string>().find("t1.lua") != std::string::npos, "VS Code hint and absolute path: %s", cj["vscode"].dump().c_str());
+    const std::string before = Slurp(f.root / "scripts/objects/t1.lua");
+    Put(f.root / "scripts/objects/t1.lua", before + "\n-- my edit\n");
+    cj = J(f.api->Handle(Req("POST", "/api/objscript/create", {}, R"({"path":"objects/t1.lua"})")));
+    CHECK(cj["created"] == false && Slurp(f.root / "scripts/objects/t1.lua").find("my edit") != std::string::npos, "an existing file is never overwritten");
+    Put(f.root / "scripts/objects/bad.lua", "function on_use(player, obj\n  return true\nend\n");
+    st = J(f.api->Handle(Req("GET", "/api/objscript", {{"path", "objects/bad.lua"}})));
+    CHECK(st["exists"] == true && st["valid"] == false && !st["error"].get<std::string>().empty(), "a syntax error is reported by the Lua loader: %s", st.dump().c_str());
+    Put(f.root / "scripts/objects/two.lua", "function on_skill(p, o, s) return false end\nfunction on_look(p, o) end\nfunction helper() end\n");
+    st = J(f.api->Handle(Req("GET", "/api/objscript", {{"path", "objects/two.lua"}})));
+    CHECK(st["valid"] == true && st["hooks"].size() == 2 && st["hooks"][0] == "on_skill" && st["hooks"][1] == "on_look", "hooks found: %s", st.dump().c_str());
+    Put(f.root / "scripts/objects/top.lua", "undefined_api_call()\nfunction on_use() end\n");
+    st = J(f.api->Handle(Req("GET", "/api/objscript", {{"path", "objects/top.lua"}})));
+    CHECK(st["valid"] == true && !st["warning"].get<std::string>().empty(), "top-level code that needs the server API is only a warning: %s", st.dump().c_str());
+    for (const char* bad : {"../x.lua", "objects/../x.lua", "objects/a/b.lua", "objects/x.txt", "x.lua", "objects/.hid.lua", "objects/con.lua", "objects/a b.lua", "objects//x.lua", "/objects/x.lua", "objects/x.lua "}) {
+        CHECK(f.api->Handle(Req("GET", "/api/objscript", {{"path", bad}})).status == 400, "status refuses path '%s'", bad);
+        CHECK(f.api->Handle(Req("POST", "/api/objscript/create", {}, std::string("{\"path\":\"") + bad + "\"}")).status == 400, "create refuses path '%s'", bad);
+    }
+    CHECK(!fs::exists(f.root / "x.lua") && !fs::exists(f.root / "scripts/x.lua"), "nothing was written outside scripts/objects");
+    CHECK(f.api->Handle(Req("POST", "/api/objscript/create", {}, "{}")).status == 400, "create needs a path");
+    CHECK(f.api->Handle(Req("POST", "/api/objscript/create", {}, R"({"path":"objects/y.lua"})", false)).status == 401, "create needs the token");
+    // the objects kind goes through the normal save flow with the real validator
+    {
+        Fixture g("objs_save", true);
+        const std::string good = R"({"schema":1,"kind":"objects","records":[{"id":"o1","map":"town","object":"Comp_000","on_use":[{"dialog":"d1"}]}]})";
+        Response ok = g.api->Handle(Req("PUT", "/api/put", {}, PutBody("objects", "o.json", good)));
+        CHECK(ok.status == 200 && fs::exists(g.data / "objects/o.json"), "an objects file saves: %s", ok.body.c_str());
+        const std::string badDoc = R"({"schema":1,"kind":"objects","records":[{"id":"o9","map":"town","object":"Other_000","on_use":[{"dialog":"nope"}]}]})";
+        Response br = g.api->Handle(Req("PUT", "/api/put", {}, PutBody("objects", "o2.json", badDoc)));
+        CHECK(br.status == 422 && br.body.find("unknown dialog") != std::string::npos && !fs::exists(g.data / "objects/o2.json"), "a dangling dialog reference is refused with its path: %s", br.body.c_str());
+        json kinds = J(g.api->Handle(Req("GET", "/api/kinds")));
+        bool listed = false;
+        for (auto& k : kinds["kinds"]) if (k["id"] == "objects" && k["records"] == 1) listed = true;
+        CHECK(listed, "the kind list shows the objects kind with its record count");
+        json refs = J(g.api->Handle(Req("GET", "/api/refs")));
+        bool hasObj = false;
+        for (auto& o2 : refs["objects"]) if (o2 == "o1") hasObj = true;
+        CHECK(hasObj, "refs list the binding ids");
+    }
+}
+
 int main(int argc, char** argv) {
     std::srand(static_cast<unsigned>(std::time(nullptr)));
     TestSecurity();
@@ -678,6 +758,7 @@ int main(int argc, char** argv) {
     TestEmitterOnRepoData(argc > 0 ? argv[0] : "");
     TestSchemaMatchesValidator();
     TestConditionsAndEffects();
+    TestObjectScripts();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

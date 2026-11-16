@@ -44,6 +44,8 @@ struct Item {
     std::vector<InvItem> contents;     // containers
     std::vector<TilePos> footprint;    // doors: the 0x1b doorway cells of the grid (blocked while the door is closed)
     std::string script;                // original AMX script name (informational / AMX host)
+    std::string instName;              // instance name from the map data (EntityDef.name): the stable binding key of data/objects
+    std::string bindId;                // id of the data/objects binding that owns this object (empty = unscripted), see ObjectScripts.cpp
 };
 
 enum class PendingType : uint8_t { None, Pickup, Use, Take, Loot, Put };

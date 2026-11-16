@@ -1308,6 +1308,202 @@ static int RunDialogTests(uint16_t port) {
     return g_failed ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Object scripts suite (data/objects, docs/object-scripts.md): f3_gametest --objects 1|2 against `f3_server --data ... --content <copy of data/ with the
+// samples renamed to samples.json and engine/tests/objdata/test_objects.json> --dev-kit` (saves dir shared by both phases, server RESTARTED in between).
+// Phase 1: cursor label + name override reach the client, a bound computer opens a dialog (npc 0), the Science gate (roll forced with /lockroll)
+// fails and succeeds, a declarative skill check with success / failure steps, hidden_until, the server-side range check, one-shot objects.
+// Phase 2: after the restart the one-shot marks and the object flag of the computer are still there.
+// ---------------------------------------------------------------------------------------------------------------------
+static int RunObjectTests(uint16_t port, int phase) {
+    Bot a;
+    if (!a.Connect(port)) { std::printf("FAIL: cannot connect\n"); return 1; }
+    a.Login("ObjBot");
+    CHECK(WaitFor({&a}, 8, [&] { return a.loggedIn && a.havePos && a.haveStats; }), "logged in");
+    if (!a.loggedIn) return 1;
+    auto say = [&](const std::string& t) { net::ChatReq c; c.text = t; a.Send(net::Pack(c)); };
+    auto idle = [&](double sec) { WaitFor({&a}, sec, [] { return false; }); };
+    auto said = [&](size_t from, const char* needle) { for (size_t i = from; i < a.chat.size(); ++i) if (a.chat[i].find(needle) != std::string::npos) return true; return false; };
+    auto objAt = [&](int x, int y) -> ItemId {
+        for (auto& [id, it] : a.items)
+            if (it.x == x && it.y == y && a.objInfo.count(id) && a.objInfo[id].kind != gnet::ObjectKind::Ground) return id;
+        return 0;
+    };
+    auto tpNear = [&](int x, int y, int minR = 0) {   // the first walkable cell around (x, y) that /tp accepts
+        for (int r = minR; r <= 12; ++r)
+            for (int dy = -r; dy <= r; ++dy)
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (std::max(std::abs(dx), std::abs(dy)) != r || !Walkable(a, x + dx, y + dy)) continue;
+                    say("/tp Tutorial_Vault " + std::to_string(x + dx) + " " + std::to_string(y + dy));
+                    if (WaitFor({&a}, 1.5, [&] { return a.pos == TilePos{(int16_t)(x + dx), (int16_t)(y + dy)}; })) { idle(1.0); return true; }
+                }
+        return false;
+    };
+    // the map grid is only known after a /tp into the vault: the first teleport targets a cell known to be walkable
+    say("/tp Tutorial_Vault 143 220");
+    WaitFor({&a}, 6, [&] { return a.map.name == "00_04_Tutorial_Vault" && a.pos == TilePos{143, 220}; });
+    idle(1.0);
+    say("/amxattacks off");
+    auto use = [&](ItemId id) { gnet::Use u; u.id = id; a.Send(gnet::PackG(u)); };
+    auto skill = [&](ItemId id, int sk) { gnet::UseSkill us; us.skill = (uint8_t)sk; us.kind = 2; us.target = id; a.Send(gnet::PackG(us)); };
+    auto gvar = [&](const char* name) -> double {
+        size_t n = a.chat.size();
+        say(std::string("/gvar ") + name);
+        double v = -1;
+        WaitFor({&a}, 3, [&] {
+            for (size_t i = n; i < a.chat.size(); ++i) {
+                size_t p = a.chat[i].find(std::string(name) + " = ");
+                if (p != std::string::npos) { v = std::atof(a.chat[i].c_str() + p + std::strlen(name) + 3); return true; }
+            }
+            return false;
+        });
+        return v;
+    };
+    const int kScience = 9;
+    const int compX = 98, compY = 165, leverX = 215, leverY = 56, yelX = 226, yelY = 198, blueX = 211, blueY = 243, shelfX = 182, shelfY = 246;
+
+    // ---- the computer (sample binding vault_computer: Lua script, label "Use")
+    CHECK(tpNear(compX, compY), "teleported next to the computer");
+    ItemId comp = objAt(compX, compY);
+    CHECK(comp != 0 && a.objInfo[comp].kind == gnet::ObjectKind::Usable, "the computer is in view (id %u)", comp);
+    if (!comp) return 1;
+    if (phase == 1) {
+        CHECK(a.objInfo[comp].label == "Use", "the server sends the cursor label of the binding (\"%s\")", a.objInfo[comp].label.c_str());
+        {
+            size_t n = a.chat.size();
+            say("/objs");
+            CHECK(WaitFor({&a}, 3, [&] { return said(n, "vault_computer"); }), "/objs lists the bound computer");
+        }
+        size_t d0 = a.dlgNodes.size();
+        use(comp);
+        CHECK(WaitFor({&a}, 8, [&] { return a.dlgNodes.size() > d0; }), "using the bound computer opens a data dialog");
+        CHECK(!a.dlgOpens.empty() && a.dlgOpens.back().npc == 0 && !a.dlgOpens.back().name.empty(), "an object speaker has npc id 0 and a name");
+        CHECK(!a.dlgNodes.empty() && a.dlgNodes.back().text.find("MAINTENANCE TERMINAL") != std::string::npos, "the node text comes from data/dialogs");
+        {
+            int c0 = a.dlgCloses;
+            gnet::DialogCloseReq cl; a.Send(gnet::PackG(cl));
+            WaitFor({&a}, 3, [&] { return a.dlgCloses > c0; });
+        }
+        // Science gate: a forced failed roll, then a forced success
+        say("/lockroll 0");
+        idle(0.5);
+        size_t n = a.chat.size();
+        skill(comp, kScience);
+        CHECK(WaitFor({&a}, 5, [&] { return said(n, "rejects your attempt"); }), "Science gate: a failed check is reported");
+        CHECK(gvar("vault_terminal_hacked") <= 0, "a failed check changes nothing");
+        say("/lockroll 1");
+        idle(1.5);
+        n = a.chat.size();
+        skill(comp, kScience);
+        CHECK(WaitFor({&a}, 5, [&] { return said(n, "overseer door unlocks"); }), "Science gate: a successful check opens the vault door");
+        CHECK(gvar("vault_terminal_hacked") == 1, "the success set the player flag read by the dialog");
+        idle(1.5);
+        n = a.chat.size();
+        skill(comp, kScience);
+        CHECK(WaitFor({&a}, 5, [&] { return said(n, "already unlocked"); }), "the object flag \"hacked\" is remembered (second attempt)");
+        { gnet::DialogCloseReq cl; a.Send(gnet::PackG(cl)); idle(0.5); }   // an ambient AMX dialogue (Frank) must not block the use
+        d0 = a.dlgNodes.size();
+        use(comp);
+        CHECK(WaitFor({&a}, 8, [&] { return a.dlgNodes.size() > d0; }) && a.dlgNodes.back().text.find("ACCESS GRANTED") != std::string::npos, "the dialog now starts at the unlocked node (flag condition)");
+        { gnet::DialogCloseReq cl; a.Send(gnet::PackG(cl)); idle(0.5); }
+        // the door itself: open on the server
+        CHECK(tpNear(301, 102, 2), "teleported to the overseer door");
+        ItemId od = objAt(301, 102);
+        CHECK(od != 0 && a.objInfo[od].open == 1 && a.objInfo[od].locked == 0, "the overseer door was unlocked and opened by the script (open %d locked %d)", od ? a.objInfo[od].open : -1, od ? a.objInfo[od].locked : -1);
+    } else {
+        say("/lockroll 0");
+        idle(0.5);
+        size_t n = a.chat.size();
+        skill(comp, kScience);
+        CHECK(WaitFor({&a}, 5, [&] { return said(n, "already unlocked"); }), "the object flag \"hacked\" survived the server restart");
+    }
+
+    // ---- the lever (sample binding vault_lever: one_shot, name override, label "Pull")
+    CHECK(tpNear(leverX, leverY), "teleported next to the lever");
+    ItemId lever = objAt(leverX, leverY);
+    CHECK(lever != 0, "the lever object is in view (id %u)", lever);
+    if (!lever) return 1;
+    if (phase == 1) {
+        CHECK(a.items[lever].name == "Power lever" && a.objInfo[lever].label == "Pull", "name override and label reach the client (\"%s\" / \"%s\")", a.items[lever].name.c_str(), a.objInfo[lever].label.c_str());
+        size_t n = a.chat.size();
+        use(lever);
+        CHECK(WaitFor({&a}, 8, [&] { return said(n, "grinds open"); }), "using the lever runs its on_use");
+        idle(1.5);
+        n = a.chat.size();
+        use(lever);
+        CHECK(WaitFor({&a}, 8, [&] { return said(n, "nothing more to do"); }) && !said(n, "grinds open"), "a one-shot object refuses the second use");
+    } else {
+        size_t n = a.chat.size();
+        use(lever);
+        CHECK(WaitFor({&a}, 8, [&] { return said(n, "nothing more to do"); }) && !said(n, "grinds open"), "the one-shot mark survived the server restart");
+    }
+
+    // ---- declarative bindings (test_objects.json)
+    CHECK(tpNear(yelX, yelY, 6), "teleported near the yellow box (outside its use range)");
+    ItemId yel = objAt(yelX, yelY);
+    CHECK(yel != 0, "the yellow box is in view (id %u)", yel);
+    if (!yel) return 1;
+    if (phase == 1) {
+        CHECK(a.objInfo[yel].label == "Grab", "declarative binding: label \"Grab\" (got \"%s\")", a.objInfo[yel].label.c_str());
+        size_t n = a.chat.size();
+        say("/useobj " + std::to_string(yel));
+        CHECK(WaitFor({&a}, 4, [&] { return said(n, "useobj false"); }), "range check: the server refuses a use from %d cells away", std::max(std::abs(a.pos.x - yelX), std::abs(a.pos.y - yelY)));
+        CHECK(!said(n, "T-ONCE") && gvar("t_once") <= 0, "the refused use did nothing and did not consume the one-shot");
+        CHECK(tpNear(yelX, yelY), "teleported next to the yellow box");
+        n = a.chat.size();
+        say("/useobj " + std::to_string(yel));
+        CHECK(WaitFor({&a}, 4, [&] { return said(n, "T-ONCE"); }) && gvar("t_once") == 3, "declarative on_use: message and flag effect (t_once = 3)");
+        n = a.chat.size();
+        say("/useobj " + std::to_string(yel));
+        CHECK(WaitFor({&a}, 4, [&] { return said(n, "nothing more to do"); }) && !said(n, "T-ONCE"), "declarative one_shot: the second use is refused");
+    } else {
+        CHECK(tpNear(yelX, yelY), "teleported next to the yellow box");
+        size_t n = a.chat.size();
+        say("/useobj " + std::to_string(yel));
+        CHECK(WaitFor({&a}, 4, [&] { return said(n, "nothing more to do"); }) && !said(n, "T-ONCE"), "the declarative one-shot mark survived the restart");
+    }
+    if (phase == 1) {
+        // hidden_until: the shelf is not sent while the flag is unset
+        CHECK(tpNear(shelfX, shelfY, 1), "teleported next to the shelf");
+        idle(0.5);
+        CHECK(objAt(shelfX, shelfY) == 0, "hidden_until: the shelf is not sent to a player without the flag");
+        // declarative skill check on the blue box
+        CHECK(tpNear(blueX, blueY), "teleported next to the blue box");
+        ItemId blue = objAt(blueX, blueY);
+        CHECK(blue != 0, "the blue box is in view (id %u)", blue);
+        if (!blue) return 1;
+        say("/lockroll 0");
+        idle(0.5);
+        size_t n = a.chat.size();
+        skill(blue, kScience);
+        CHECK(WaitFor({&a}, 5, [&] { return said(n, "T-FAIL"); }) && !said(n, "T-OK"), "declarative skill check: the failure steps run");
+        CHECK(gvar("t_box_flag") <= 0, "a failed check sets no flag");
+        say("/lockroll 1");
+        idle(1.5);
+        n = a.chat.size();
+        skill(blue, kScience);
+        CHECK(WaitFor({&a}, 5, [&] { return said(n, "T-OK"); }) && !said(n, "T-FAIL"), "declarative skill check: the success steps run");
+        CHECK(gvar("t_box_flag") == 1, "the success steps set the flag");
+        idle(1.0);
+        n = a.chat.size();
+        say("/useobj " + std::to_string(blue));
+        CHECK(WaitFor({&a}, 4, [&] { return said(n, "T-BOX-USED"); }), "declarative on_use takes over from the default container use");
+        CHECK(tpNear(152, 219, 2), "teleported to the door of the success steps");
+        ItemId d5 = objAt(152, 219);
+        CHECK(d5 != 0 && a.objInfo[d5].open == 1, "the door step opened Door01Vault13_005 (open %d)", d5 ? a.objInfo[d5].open : -1);
+        CHECK(tpNear(shelfX, shelfY, 1), "teleported next to the shelf again");
+        CHECK(WaitFor({&a}, 3, [&] { return objAt(shelfX, shelfY) != 0; }), "hidden_until: the shelf appears once the flag is set");
+        say("/saveworld");
+        idle(1.0);
+    }
+    say("/lockroll off");
+    idle(0.3);
+    for (auto& t : a.chat) std::printf("chat: %s\n", t.c_str());
+    std::printf(g_failed ? "OBJECTTEST %d FAILED (%d)\n" : "OBJECTTEST %d PASSED\n", phase, g_failed);
+    enet_deinitialize();
+    return g_failed ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
     uint16_t port = 4048;
     std::string expectMap = "00_03_Tutorial_Junktown";
@@ -1326,6 +1522,7 @@ int main(int argc, char** argv) {
     if (enet_initialize() != 0) return 2;
     if (accountPhase) return RunAccountTests(port, accountPhase, stateFile);
     for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--doors")) return RunDoorTests(port, std::atoi(argv[i + 1]), stateFile);
+    for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--objects")) return RunObjectTests(port, std::atoi(argv[i + 1]));
     for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--tutorial")) return RunTutorialTests(port);
     for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--locale")) return RunLocaleTests(port);
     for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--content")) return RunContentTests(port, argv[i + 1]);

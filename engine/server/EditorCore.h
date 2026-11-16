@@ -50,11 +50,14 @@ struct Host {
     std::function<std::vector<std::string>(const std::string& what)> reload;   // "data": the report lines of Server::ReloadAll
     std::function<std::string(int id)> stf;                                    // original English.stf string
     std::function<std::vector<std::pair<int, std::string>>(const std::string& needle, size_t limit)> stfSearch;
+    // Object picker (Server::ObjectsJson): map "" = the list of loaded maps, else the objects of that map filtered by `query`. Returns JSON text.
+    std::function<std::string(const std::string& map, const std::string& query, int limit)> objects;
 };
 
 struct Options {
     std::filesystem::path contentDir;                // data/
     std::filesystem::path uiDir;                     // tools/editor/ (static front end); empty = no UI (API only)
+    std::filesystem::path scriptsDir;                // scripts/ (object scripts live in scripts/objects/); empty = the script endpoints are off
     std::string token;                               // required in the X-F3-Token header of every /api call (and ?token= for the first page load)
     int port = 0;                                    // for the Host header check
     int validateTimeoutMs = 20000;
@@ -89,6 +92,10 @@ private:
     Response Refs();
     Response StfLookup(const Request& req);
     Response LocaleStatusResp();
+    Response ObjectsResp(const Request& req);        // GET /api/objects?map=&q=&limit=
+    Response ObjScriptStatus(const Request& req);    // GET /api/objscript?path=objects/x.lua
+    Response ObjScriptCreate(const Request& req);    // POST /api/objscript/create {path}
+    json ObjScriptInfo(const std::string& rel) const;
 
     struct FileInfo {
         std::string kind, file;

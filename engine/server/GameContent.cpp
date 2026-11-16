@@ -145,6 +145,7 @@ std::vector<std::string> Server::ReloadContent() {
     if (nc.protosBuilt) data_.Commit(std::move(nc.protoSet));   // existing instances keep their pid; new spawns / pickups use the new numbers
     content_ = std::move(nc);
     ++contentRev_;
+    BindObjects();   // data/objects may have changed
     out.push_back("data reloaded: " + content_.Summary());
     if (diff.empty()) out.push_back("  no changes");
     for (const std::string& d : diff) out.push_back("  " + d);
@@ -169,6 +170,7 @@ std::string Server::ReloadAll(const std::string& whatIn) {
     if (what == "scripts" || what == "all") {
         const bool ok = scripting_ && scripting_->Reload();
         rep += ok ? "scripts reloaded\n" : "scripts reload FAILED (previous scripts kept)\n";
+        if (ok) BindObjects();   // the object scripts live in the Lua state: load them into the new one
     }
     if (what == "data" || what == "all") for (const std::string& l : ReloadContent()) rep += l + "\n";
     if (what != "data" && what != "scripts" && what != "all") rep = "usage: reload [data|scripts|all]\n";

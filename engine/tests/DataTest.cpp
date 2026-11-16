@@ -371,6 +371,111 @@ static void TestDialogs() {
     }
 }
 
+static void TestObjects() {
+    std::printf("objects: bindings, steps, references, duplicates, reload diff\n");
+    const std::string dlg = R"([{"id":"talk1","speaker":"F3_Talker.CRT","nodes":[{"id":"n","text":"x"}]}])";
+    auto setup = [&](Fixture& f, const std::string& objects) {
+        Put(f.data / "quests/q.json", Env("quests", kDlgQuest));
+        Put(f.data / "npcs/n.json", Env("npcs", std::string("[") + kDlgNpc + "]"));
+        Put(f.data / "dialogs/d.json", DlgFile(dlg));
+        Put(f.data / "objects/o.json", Env("objects", objects));
+    };
+    const std::string good = R"([{
+        "id":"term1","map":"town","object":"Computer07c_000","label":"Hack","name":"Old terminal","desc":"Hums.","script":"objects/term1.lua",
+        "usable":true,"one_shot":"player","cooldown":30,"range":3,"hidden_until":"flag:power_on",
+        "on_use":[
+          {"dialog":"talk1"},
+          {"if":"skill:Science>=40","door":"Door01_000","action":"unlock"},
+          {"door":[3,4],"action":"toggle"},
+          {"skill":"Science","difficulty":50,"roll":true,"reward_xp":10,
+             "success":[{"message":"ok","key":"object.term1.ok"},{"give":"Junk.ITM","count":2},{"quest":"q1","state":"add"},{"flag":"hacked","set":true,"world":true},{"xp":5}],
+             "failure":[{"take":"Junk.ITM"},{"call":"on_fail"},{"play":"spark"}]},
+          {"teleport":"town","entry":1},{"teleport":"town","cell":[2,3]},{"default_use":true},{"end":true}],
+        "on_look":[{"message":"A terminal."}],
+        "skills":{"Security":[{"message":"locked"}],"Science":[{"flag":"x"}]}},
+      {"id":"lever1","map":"town","proto":"Junk.ITM","cell":[5,6],"one_shot":true}])";
+    {
+        Fixture f("obj_ok");
+        setup(f, good);
+        ContentDb db; ContentReport rep;
+        const bool ok = f.Build(false, db, rep);
+        CHECK(ok && rep.errors.empty(), "a record using every step kind validates\n%s", Dump(rep).c_str());
+        CHECK(db.objects.size() == 2, "two bindings (%zu)", db.objects.size());
+        const ObjectDef* t = db.FindObject("TERM1");
+        CHECK(t && t->map == "town" && t->object == "Computer07c_000" && t->label == "Hack" && t->oneShot == 2 && t->cooldown == 30 && t->range == 3 && t->hasHidden && t->script == "objects/term1.lua",
+              "fields are read");
+        CHECK(t && t->onUse.size() == 8 && t->onUse[0].kind == ObjStep::Dialog && t->onUse[1].hasCond && t->onUse[1].action == "unlock" && t->onUse[2].x == 3 && t->onUse[3].kind == ObjStep::SkillCheck &&
+                  t->onUse[3].success.size() == 5 && t->onUse[3].failure.size() == 3 && t->onUse[3].roll && t->onUse[3].xp == 10 && t->onUse[3].success[3].fx.action == "world",
+              "steps are parsed, nested lists too");
+        CHECK(t && t->skills.size() == 2 && t->skills[0].first == "Science" && t->onLook.size() == 1, "skills map and on_look are parsed");
+        const ObjectDef* l = db.FindObject("lever1");
+        CHECK(l && l->object.empty() && l->cx == 5 && l->cy == 6 && l->proto == "Junk.ITM" && l->oneShot == 1, "cell + proto fallback binding");
+        // reload diff
+        Fixture g("obj_ok2");
+        setup(g, good);
+        std::string edited = good;
+        edited.replace(edited.find("Hack"), 4, "Poke");
+        Put(g.data / "objects/o.json", Env("objects", edited));
+        ContentDb db2; ContentReport rep2;
+        g.Build(false, db2, rep2);
+        bool changed = false;
+        for (auto& line : ContentDb::Diff(db, db2)) if (line.find("objects:") == 0 && line.find("changed: term1") != std::string::npos) changed = true;
+        CHECK(changed, "the reload diff lists the changed binding");
+    }
+    auto bad = [&](const char* label, const std::string& objects, const char* needle) {
+        Fixture f("obj_bad");
+        setup(f, objects);
+        ContentDb db; ContentReport rep;
+        const bool ok = f.Build(false, db, rep);
+        CHECK(!ok && Has(rep.errors, "data/objects/o.json") && Has(rep.errors, needle), "%s: expected an error containing '%s'\n%s", label, needle, Dump(rep).c_str());
+    };
+    auto rec = [](const std::string& extra) { return std::string(R"([{"id":"o1","map":"town","object":"X_000")") + (extra.empty() ? "" : "," + extra) + "}]"; };
+    bad("no binding key", R"([{"id":"o1","map":"town"}])", "needs \"object\"");
+    bad("no map", R"([{"id":"o1","object":"X"}])", "map");
+    bad("bad id", R"([{"id":"a b","map":"town","object":"X"}])", "invalid id");
+    bad("unknown dialog", rec(R"("on_use":[{"dialog":"nope"}])"), "unknown dialog 'nope'");
+    bad("unknown item", rec(R"("on_use":[{"give":"Nothing.ITM"}])"), "unknown item 'Nothing.ITM'");
+    bad("unknown quest", rec(R"("on_use":[{"quest":"ghost","state":"add"}])"), "unknown quest 'ghost'");
+    bad("unknown quest in condition", rec(R"("hidden_until":"quest:ghost==done")"), "unknown quest 'ghost'");
+    bad("unknown proto", R"([{"id":"o1","map":"town","proto":"Nope.ITM","cell":[1,1]}])", "unknown prototype 'Nope.ITM'");
+    bad("unknown skill", rec(R"("on_use":[{"skill":"Juggling","difficulty":1}])"), "Juggling");
+    bad("unknown skill key", rec(R"("skills":{"Juggling":[{"end":true}]})"), "Juggling");
+    bad("two step keys", rec(R"("on_use":[{"dialog":"talk1","end":true}])"), "exactly one of");
+    bad("bad door action", rec(R"("on_use":[{"door":"D","action":"smash"}])"), "open, close, toggle, lock or unlock");
+    bad("bad door target", rec(R"("on_use":[{"door":5,"action":"open"}])"), ".door");
+    bad("teleport entry and cell", rec(R"("on_use":[{"teleport":"town","entry":1,"cell":[1,1]}])"), "either");
+    bad("bad lua name", rec(R"("on_use":[{"call":"not a name"}])"), "valid Lua function name");
+    bad("script outside scripts", rec(R"("script":"../evil.lua")"), "relative path");
+    bad("script not lua", rec(R"("script":"objects/x.txt")"), "relative path");
+    bad("bad one_shot", rec(R"("one_shot":"sometimes")"), "one_shot");
+    bad("cooldown range", rec(R"("cooldown":999999)"), "cooldown");
+    bad("range range", rec(R"("range":99)"), "range");
+    bad("unknown field", rec(R"("bogus":1)"), "unknown field");
+    bad("too many steps", rec(std::string(R"("on_use":[)") + [] { std::string s; for (int i = 0; i < 25; ++i) s += (i ? "," : "") + std::string(R"({"end":true})"); return s; }() + "]"), "more than 24 steps");
+    bad("nested too deep", rec(R"("on_use":[{"skill":"Science","success":[{"skill":"Science","success":[{"skill":"Science","success":[{"skill":"Science","success":[{"skill":"Science","success":[{"end":true}]}]}]}]}]}])"), "deeper than 3");
+    bad("duplicate id", R"([{"id":"o1","map":"town","object":"A"},{"id":"O1","map":"town","object":"B"}])", "duplicate id");
+    bad("same object twice", R"([{"id":"o1","map":"town","object":"A"},{"id":"o2","map":"TOWN","object":"a"}])", "already bound by 'o1'");
+    bad("malformed condition", rec(R"("on_use":[{"if":"skill:Barter","end":true}])"), ".if");
+    {   // the same name on another map is fine; a parked (_) file is ignored; lenient drops only the broken binding
+        Fixture f("obj_misc");
+        setup(f, R"([{"id":"o1","map":"town","object":"A"},{"id":"o2","map":"other","object":"A"}])");
+        Put(f.data / "objects/_parked.json", Env("objects", R"([{"id":"zz","map":"town","object":"A"}])"));
+        ContentDb db; ContentReport rep;
+        const bool ok = f.Build(false, db, rep);
+        CHECK(ok && db.objects.size() == 2 && !db.FindObject("zz"), "same object name on two maps, parked file ignored\n%s", Dump(rep).c_str());
+        Fixture g("obj_len");
+        setup(g, R"([{"id":"ok1","map":"town","object":"A"},{"id":"bad1","map":"town","object":"B","on_use":[{"dialog":"ghost"}]}])");
+        ContentDb db2; ContentReport rep2;
+        g.Build(true, db2, rep2);
+        CHECK(db2.FindObject("ok1") && !db2.FindObject("bad1") && !rep2.warnings.empty(), "lenient: the broken binding is dropped, the good one stays\n%s", Dump(rep2).c_str());
+        Fixture h("obj_nodata");
+        Put(h.data / "objects/o.json", Env("objects", R"([{"id":"o1","map":"town","object":"A","on_use":[{"give":"Whatever.ITM"}]}])"));
+        ContentDb db3; ContentReport rep3;
+        const bool ok3 = h.Build(false, db3, rep3, false);
+        CHECK(ok3 && db3.objects.size() == 1, "without gamedata item references are not checked\n%s", Dump(rep3).c_str());
+    }
+}
+
 static void TestExtendedFields() {
     std::printf("generator / note keys, item model + modes, ammo, skill original, perk placeholder\n");
     Fixture f("ext");
@@ -400,6 +505,7 @@ int main() {
     TestLoadAndMerge();
     TestValidation();
     TestDialogs();
+    TestObjects();
     TestExtendedFields();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

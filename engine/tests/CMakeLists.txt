@@ -21,7 +21,7 @@ target_link_libraries(f3_localetest PRIVATE f3_locale f3_common nlohmann_json::n
 add_test(NAME f3_localetest COMMAND f3_localetest)
 
 # Content editor core (docs/editor.md): request handler, path confinement, token / host checks, atomic saves, schema vs. validator drift. No server, no sockets, no game data.
-add_executable(f3_editortest EditorTest.cpp ../server/EditorCore.cpp ../server/EditorSchema.cpp ../server/DataFormat.cpp ../server/LocaleCheck.cpp ../server/Content.cpp ../server/DataStore.cpp)
+add_executable(f3_editortest EditorTest.cpp ../server/EditorCore.cpp ../server/EditorSchema.cpp ../server/ScriptCheck.cpp ../server/DataFormat.cpp ../server/LocaleCheck.cpp ../server/Content.cpp ../server/DataStore.cpp)
 target_include_directories(f3_editortest PRIVATE ../server)
 target_link_libraries(f3_editortest PRIVATE f3_locale f3_common nlohmann_json::nlohmann_json)
 add_test(NAME f3_editortest COMMAND f3_editortest)

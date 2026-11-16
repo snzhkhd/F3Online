@@ -64,6 +64,7 @@ struct ClientItem {
     bool open = false;     // doors / containers
     bool locked = false;   // lock block of ObjectInfo
     uint8_t flags = 0;     // LockFlag bits (types.h)
+    std::string label;     // scripted object: use cursor label from the server (empty = default)
     // State shown to the player: 0 Closed, 1 Open, 2 Locked (docs/research/doors.md)
     int State() const { return open ? 1 : locked ? 2 : 0; }
 };

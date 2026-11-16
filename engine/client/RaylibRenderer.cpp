@@ -1426,7 +1426,9 @@ private:
                 auto it = ui.core->items().find(pr.item);
                 if (it != ui.core->items().end()) {
                     const ClientItem& o = it->second;
-                    if (mode == CursorMode::Use && (o.kind == gnet::ObjectKind::Door || o.kind == gnet::ObjectKind::Container))
+                    if (mode == CursorMode::Use && !o.label.empty())
+                        t = "[" + o.label + "]";   // scripted object (data/objects "label"): [Hack], [Pull], ...
+                    else if (mode == CursorMode::Use && (o.kind == gnet::ObjectKind::Door || o.kind == gnet::ObjectKind::Container))
                         t = "[" + ObjectActionLabel(o) + "]";   // [Open] / [Close] / [Locked] / [Jammed] instead of [Use]
                     t += " " + o.name;
                 }

@@ -322,6 +322,22 @@ function commands.npckey(c, arg)
     local n = id and dev_npc(c, id)
     if n then c:tell("npckey " .. tostring(n:give(key, 1))) end
 end
+-- object scripts (data/objects, docs/object-scripts.md): /objs lists the bound objects within 12 cells; dev (--dev-kit): /useobj <id> uses an
+-- object from where you stand (server range check, no walking: tells "useobj true|false")
+function commands.objs(c)
+    local n = 0
+    for _, o in ipairs(get_map(c.map_id):objects()) do
+        if o.binding ~= "" and math.max(math.abs(o.x - c.x), math.abs(o.y - c.y)) <= 12 then
+            n = n + 1
+            if n <= 8 then c:tell(string.format("%d %s '%s' -> %s at %d,%d", o.id, o.kind, o.inst, o.binding, o.x, o.y)) end
+        end
+    end
+    if n == 0 then c:tell("no bound objects within 12 cells") end
+end
+function commands.useobj(c, arg)
+    if not dev_kit() then c:tell("useobj needs a --dev-kit server"); return end
+    c:tell("useobj " .. tostring(c:use_object(tonumber(arg) or 0)))
+end
 function commands.saveworld(c)
     if not dev_kit() then c:tell("saveworld needs a --dev-kit server"); return end
     save_world(); c:tell("world state saved")

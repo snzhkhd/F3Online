@@ -219,6 +219,13 @@ Dialog graphs for NPCs: speaker, nodes, answers with conditions and effects. A c
 runs the data dialog through the normal dialog protocol; any other `dialog` value still names an original AMX dialog. Full
 schema, conditions, effects and locale keys: **`docs/dialogs.md`**. Example: `data/dialogs/junktown.json`.
 
+### 3.8 objects
+
+Behaviour bound to placed map objects (computers, levers, doors, containers): a binding by map + object instance name (fallback prototype + cell),
+declarative steps (the dialog conditions and effects plus dialog / door / skill-check / message / teleport steps) and/or a Lua script
+(`scripts/objects/*.lua`, hooks `on_use`, `on_skill`, `on_look`). State (one-shot marks, object flags) is persisted in the world database. Files whose
+name starts with `_` are ignored. Full reference: **`docs/object-scripts.md`**. Examples: `data/objects/_samples.json`.
+
 ## 4b. Exporter (`--export-data`)
 
 The original prototypes stay the base layer; the exporter turns the parts a designer may want to tweak into editable records, so a

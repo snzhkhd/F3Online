@@ -5,6 +5,7 @@
 #  0. Data layer: f3_datatest (loader / merge / validation unit tests), f3_server --validate-data on data/ (must pass) and on the
 #     deliberately broken engine/tests/data_bad (must fail with a status code, must pass with --lenient).
 #  0d. Content editor (--editor): f3_editortest, then a live server on a copy of data/: token / Host / path-confinement rejections, get / put / validate / reload.
+#  5c. Object scripts (data/objects + scripts/objects): f3_gametest --objects 1|2 with a server restart in between.
 #  2. If gamedata/server exists (run f3_dataimport first): f3_server on the real data + f3_gametest
 #     (real map grid, stats, inventory, walk, pickup, combat, map transition, door). Skipped otherwise.
 param(
@@ -364,6 +365,30 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
     Get-Content $log5b | Select-Object -Last 8
     if ($code -ne 0) { $exit = $code }
     foreach ($d in $dsaves2, $ddata2) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
+
+    # ---- 5c. object scripts end to end (data/objects, scripts/objects): the sample bindings (renamed from _samples.json) plus the declarative test bindings
+    # on a throw-away copy of data/; two phases with a server RESTART in between (one-shot marks and object flags persist in the SQLite world state)
+    $osaves = Join-Path $env:TEMP ("f3_smoke_obj_saves_" + $PID)
+    $odata = Join-Path $env:TEMP ("f3_smoke_obj_data_" + $PID)
+    foreach ($d in $osaves, $odata) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
+    Copy-Item -Recurse $contentDir $odata
+    Copy-Item (Join-Path $odata "objects\_samples.json") (Join-Path $odata "objects\samples.json")
+    Copy-Item (Join-Path $PSScriptRoot "objdata\test_objects.json") (Join-Path $odata "objects\test_objects.json")
+    foreach ($phase in 1, 2) {
+        $log5c = Join-Path $env:TEMP "f3_server_smoke_objects$phase.log"
+        $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 13) --data `"$DataDir`" --content `"$odata`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$osaves`" --seed $Seed --run-seconds 120" `
+            -RedirectStandardOutput $log5c -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
+        try {
+            Start-Sleep -Milliseconds 2500
+            $code = Run-GameTest @("--port", ($Port + 13), "--objects", $phase)
+        } finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+        }
+        Write-Host "---- server log (object scripts, phase $phase) ----"
+        Get-Content $log5c | Select-Object -Last 8
+        if ($code -ne 0) { $exit = $code; break }
+    }
+    foreach ($d in $osaves, $odata) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
 
     # ---- 6. localization end to end: the language each player announces at login selects the language of server messages and
     # of the data names (perks / traits); /lang switches at run time; UTF-8 (Cyrillic) names and chat are validated in code points

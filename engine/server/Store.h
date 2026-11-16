@@ -45,6 +45,11 @@ struct WorldObjRow {
     std::string contents;            // JSON array text [{proto,count}], empty = not a container
 };
 
+struct ObjStateRow {
+    std::string key;                 // instance name or "<proto key>@x,y"
+    std::string data;                // JSON {"used":0|1,"flags":{name:number}}
+};
+
 struct EventRow {
     int64_t id = 0, ts = 0;
     std::string kind, actor, data;   // data: JSON text
@@ -99,6 +104,8 @@ public:
     // ---- door / container state per map: replaces all rows of the map atomically
     bool SaveWorldObjects(const std::string& map, const std::vector<WorldObjRow>& rows);
     std::vector<WorldObjRow> LoadWorldObjects(const std::string& map);
+    bool SaveObjectState(const std::string& map, const std::vector<ObjStateRow>& rows);   // scripted objects (data/objects)
+    std::vector<ObjStateRow> LoadObjectState(const std::string& map);
     int64_t WorldObjectCount(const std::string& map = std::string());
 
     // ---- audit log

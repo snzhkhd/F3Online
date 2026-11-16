@@ -361,6 +361,7 @@ void ParseDlgEffects(Ctx& c, const std::string& path, const json* arr, std::vect
             fx.kind = DlgEffect::Flag;
             if (auto s = e.Str("flag", true, 64)) { fx.s = *s; if (!ValidName(fx.s)) c.Err(ep + ".flag", "invalid flag name (letters, digits, _ . -)"); }
             fx.n = 1;
+            if (auto w = e.Bool("world")) { if (*w) fx.action = "world"; }   // shared flag (everyone sees it) instead of the player's own
             if (const json* v = e.Get("set")) {
                 if (v->is_boolean()) fx.n = v->get<bool>() ? 1 : 0;
                 else if (v->is_number_integer() && v->get<long long>() >= -1000000 && v->get<long long>() <= 1000000) fx.n = v->get<int>();
@@ -406,6 +407,93 @@ void ParseDlgText(Obj& o, const std::string& path, std::string& text, int& stf) 
 void CollectCondRefs(const DlgCond& d, std::vector<const DlgCond*>& out) {
     out.push_back(&d);
     for (const DlgCond& k : d.kids) CollectCondRefs(k, out);
+}
+
+
+// ------------------------------------------------------------------ object scripts (data/objects, docs/object-scripts.md)
+
+int SkillIndexByName(const std::string& n) {
+    for (int i = 0; i < kSkillCount; ++i) if (Low(kSkillNames[i]) == Low(n)) return i;
+    return -1;
+}
+
+void ParseObjSteps(Ctx& c, const std::string& path, const json* arr, std::vector<ObjStep>& out, int depth = 0) {
+    if (!arr) return;
+    if (depth > 3) { c.Err(path, "skill checks nested deeper than 3 levels"); return; }
+    if (arr->size() > 24) { c.Err(path, "more than 24 steps"); return; }
+    static const char* const kActs[] = {"dialog", "door", "skill", "give", "take", "quest", "flag", "xp", "message", "teleport", "play", "call", "default_use", "end"};
+    for (size_t i = 0; i < arr->size(); ++i) {
+        const std::string ep = path + "[" + std::to_string(i) + "]";
+        const json& j = (*arr)[i];
+        if (!j.is_object()) { c.Err(ep, std::string("expected object, got ") + TypeName(j)); continue; }
+        std::vector<std::string> present;
+        for (const char* a : kActs) if (j.contains(a)) present.push_back(a);
+        if (present.size() != 1) { c.Err(ep, "a step needs exactly one of: dialog, door, skill, give, take, quest, flag, xp, message, teleport, play, call, default_use, end"); continue; }
+        const std::string& a = present[0];
+        ObjStep st;
+        json body = j;
+        if (j.contains("if")) {   // optional condition (same vocabulary as dialog answers); the rest of the object is the step itself
+            if (auto cd = ParseCond(c, ep + ".if", j["if"])) { st.hasCond = true; st.cond = std::move(*cd); }
+            body.erase("if");
+        }
+        if (a == "give" || a == "take" || a == "quest" || a == "flag" || a == "xp") {
+            std::vector<DlgEffect> v;
+            json one = json::array();
+            one.push_back(body);
+            ParseDlgEffects(c, ep, &one, v);
+            if (v.size() == 1) { st.kind = ObjStep::Effect; st.fx = v[0]; out.push_back(std::move(st)); }
+            continue;
+        }
+        Obj e(c, body, ep);
+        if (a == "dialog") {
+            st.kind = ObjStep::Dialog;
+            if (auto v = e.Str("dialog", true, 64)) st.s = *v;
+        } else if (a == "door") {
+            st.kind = ObjStep::Door;
+            const json* t = e.Get("door");
+            if (t && t->is_string() && !t->get<std::string>().empty()) st.s = t->get<std::string>();
+            else if (t && t->is_array() && t->size() == 2 && (*t)[0].is_number_integer() && (*t)[1].is_number_integer() && (*t)[0].get<int>() >= 0 && (*t)[1].get<int>() >= 0) { st.x = (*t)[0].get<int>(); st.y = (*t)[1].get<int>(); }
+            else c.Err(ep + ".door", "expected the instance name of a door / container on this map, or its cell [x, y]");
+            if (auto act = e.Str("action", true, 16)) {
+                st.action = Low(*act);
+                if (st.action != "open" && st.action != "close" && st.action != "toggle" && st.action != "lock" && st.action != "unlock") c.Err(ep + ".action", "expected open, close, toggle, lock or unlock");
+            }
+        } else if (a == "skill") {
+            st.kind = ObjStep::SkillCheck;
+            if (auto v = e.Str("skill", true, 32)) { st.skill = *v; if (SkillIndexByName(*v) < 0) c.Err(ep + ".skill", "unknown skill '" + *v + "'"); }
+            st.difficulty = e.Int("difficulty", -200, 400).value_or(0);
+            st.xp = e.Int("reward_xp", 0, 100000).value_or(0);
+            st.roll = e.Bool("roll").value_or(false);
+            ParseObjSteps(c, ep + ".success", e.ArrField("success"), st.success, depth + 1);
+            ParseObjSteps(c, ep + ".failure", e.ArrField("failure"), st.failure, depth + 1);
+        } else if (a == "message") {
+            st.kind = ObjStep::Message;
+            if (auto v = e.Str("message", true, 600)) st.s = *v;
+            if (auto k = e.Str("key", false, 96)) { st.key = *k; if (!st.key.empty() && !ValidName(st.key, 96)) c.Err(ep + ".key", "invalid locale key"); }
+        } else if (a == "teleport") {
+            st.kind = ObjStep::Teleport;
+            if (auto v = e.Str("teleport", true, 128)) st.s = *v;
+            if (auto en = e.Int("entry", 0, 255)) st.entry = *en;
+            if (const json* cell = e.Get("cell")) {
+                if (!cell->is_array() || cell->size() != 2 || !(*cell)[0].is_number_integer() || !(*cell)[1].is_number_integer() || (*cell)[0].get<int>() < 0 || (*cell)[1].get<int>() < 0) c.Err(ep + ".cell", "expected [x, y]");
+                else { st.x = (*cell)[0].get<int>(); st.y = (*cell)[1].get<int>(); }
+            }
+            if (st.entry < 0 && st.x < 0) st.entry = 0;
+            if (st.entry >= 0 && st.x >= 0) c.Err(ep, "give either \"entry\" or \"cell\", not both");
+        } else if (a == "play") {
+            st.kind = ObjStep::Play;
+            if (auto v = e.Str("play", true, 64)) st.s = *v;
+        } else if (a == "call") {
+            st.kind = ObjStep::Call;
+            if (auto v = e.Str("call", true, 64)) { st.s = *v; if (!ValidHook(st.s)) c.Err(ep + ".call", "'" + st.s + "' is not a valid Lua function name"); }
+        } else {
+            st.kind = a == "end" ? ObjStep::End : ObjStep::DefaultUse;
+            auto b = e.Bool(a.c_str());
+            if (b && !*b) c.Err(ep + "." + a, "expected true");
+        }
+        e.Done();
+        out.push_back(std::move(st));
+    }
 }
 
 struct Loader {
@@ -750,6 +838,71 @@ struct Loader {
         });
     }
 
+    // ---- objects (cross references are checked in CheckObjects, after the prototypes are known)
+    void LoadObjects() {
+        EachFile("objects", {}, [&](Ctx& c, const json& j, const std::string& path) {
+            Obj o(c, j, path);
+            ObjectDef d;
+            auto id = o.Str("id", true, 64);
+            if (id && !ValidId(*id)) c.Err(path + ".id", "invalid id (letters, digits, _ . -)");
+            if (auto v = o.Str("map", true, 128)) d.map = *v;
+            if (auto v = o.Str("object", false, 128)) d.object = *v;
+            if (auto v = o.Str("proto", false, 128)) d.proto = *v;
+            if (const json* cell = o.Get("cell")) {
+                if (!cell->is_array() || cell->size() != 2 || !(*cell)[0].is_number_integer() || !(*cell)[1].is_number_integer() || (*cell)[0].get<int>() < 0 || (*cell)[1].get<int>() < 0) c.Err(path + ".cell", "expected [x, y]");
+                else { d.cx = (*cell)[0].get<int>(); d.cy = (*cell)[1].get<int>(); }
+            }
+            if (d.object.empty() && d.cx < 0) c.Err(path, "the binding needs \"object\" (instance name) and / or \"cell\" ([x, y], with an optional \"proto\")");
+            if (auto v = o.Str("label", false, 32)) d.label = *v;
+            if (auto v = o.Str("name", false, 128)) d.name = *v;
+            if (auto v = o.Str("desc", false, 600)) d.desc = *v;
+            if (auto v = o.Str("script", false, 128)) {
+                d.script = *v;
+                if (!d.script.empty()) {
+                    const bool bad = d.script.find("..") != std::string::npos || d.script.find('\\') != std::string::npos || d.script[0] == '/' || d.script.find(':') != std::string::npos ||
+                                     d.script.size() < 5 || Low(d.script.substr(d.script.size() - 4)) != ".lua";
+                    if (bad) c.Err(path + ".script", "expected a relative path of a .lua file below scripts/, e.g. \"objects/computer.lua\"");
+                }
+            }
+            if (auto v = o.Bool("usable")) d.usable = *v;
+            if (const json* os = o.Get("one_shot")) {
+                if (os->is_boolean()) d.oneShot = os->get<bool>() ? 1 : 0;
+                else if (os->is_string() && os->get<std::string>() == "player") d.oneShot = 2;
+                else if (os->is_string() && os->get<std::string>() == "world") d.oneShot = 1;
+                else c.Err(path + ".one_shot", "expected true, false, \"world\" or \"player\"");
+            }
+            d.cooldown = o.Int("cooldown", 0, 86400).value_or(0);
+            d.range = o.Int("range", 0, 50).value_or(0);
+            if (const json* h = o.Get("hidden_until"))
+                if (auto cd = ParseCond(c, path + ".hidden_until", *h)) { d.hasHidden = true; d.hiddenUntil = std::move(*cd); }
+            ParseObjSteps(c, path + ".on_use", o.ArrField("on_use"), d.onUse);
+            ParseObjSteps(c, path + ".on_look", o.ArrField("on_look"), d.onLook);
+            if (const json* sk = o.ObjField("skills")) {
+                for (auto it = sk->begin(); it != sk->end(); ++it) {
+                    const std::string sp = path + ".skills." + it.key();
+                    const int si = SkillIndexByName(it.key());
+                    if (si < 0) { c.Err(sp, "unknown skill '" + it.key() + "'"); continue; }
+                    if (!it.value().is_array()) { c.Err(sp, std::string("expected array of steps, got ") + TypeName(it.value())); continue; }
+                    std::vector<ObjStep> v;
+                    ParseObjSteps(c, sp, &it.value(), v);
+                    d.skills.emplace_back(kSkillNames[si], std::move(v));
+                }
+            }
+            if (d.script.empty() && d.onUse.empty() && d.onLook.empty() && d.skills.empty() && !d.hasHidden && d.name.empty() && d.desc.empty())
+                rep.Warn(c.file, path, "object binding '" + (id ? *id : std::string("?")) + "' has no behaviour (no script, on_use, on_look, skills, name or desc)");
+            o.Done();
+            if (!id || c.bad) return;
+            for (const ObjectDef& e : db.objects)   // one binding per object
+                if (Low(e.map) == Low(d.map) && ((!d.object.empty() && Low(e.object) == Low(d.object)) || (d.object.empty() && e.object.empty() && e.cx == d.cx && e.cy == d.cy)))
+                    c.Err(path, "object '" + (d.object.empty() ? "cell " + std::to_string(d.cx) + "," + std::to_string(d.cy) : d.object) + "' on map " + d.map + " is already bound by '" + e.id + "' (" + e.file + ")");
+            if (Dup(c, "objects", *id, path) || c.bad) return;
+            d.id = *id;
+            d.file = c.file;
+            db.fingerprint["objects:" + Low(d.id)] = j.dump();
+            db.objects.push_back(std::move(d));
+        });
+    }
+
     // ---- items / npcs (structure only; applied to the prototypes in BuildProtoSet)
     void LoadItems() {
         EachFile("items", {}, [&](Ctx& c, const json& j, const std::string& path) {
@@ -1047,6 +1200,48 @@ void CheckDialogs(ContentDb& db, const DataStore* base, ContentReport& rep, bool
     db.dialogs = std::move(keep);
 }
 
+// Cross references of the object bindings: dialogs, quests and (with game data) items and the bound prototype.
+void CheckObjects(ContentDb& db, ContentReport& rep, bool haveProtos) {
+    std::vector<ObjectDef> keep;
+    for (ObjectDef& d : db.objects) {
+        Ctx c{rep, d.file};
+        const std::string op = "object '" + d.id + "'";
+        auto item = [&](const std::string& key, const std::string& where) {
+            if (!haveProtos) return;
+            auto it = db.protoSet.byKey.find(Low(key));
+            if (it == db.protoSet.byKey.end()) c.Err(where, "unknown item '" + key + "'");
+            else if (db.protoSet.protos[it->second].cls == PClass::Critter) c.Err(where, "'" + key + "' is a critter, not an item");
+        };
+        std::function<void(const DlgCond&, const std::string&)> cond = [&](const DlgCond& cd, const std::string& where) {
+            if (cd.kind == DlgCond::Item) item(cd.name, where);
+            if (cd.kind == DlgCond::Quest && !db.FindQuest(cd.name)) c.Err(where, "unknown quest '" + cd.name + "' (define it in data/quests)");
+            for (const DlgCond& k : cd.kids) cond(k, where);
+        };
+        std::function<void(const std::vector<ObjStep>&, const std::string&)> steps = [&](const std::vector<ObjStep>& v, const std::string& where) {
+            for (size_t i = 0; i < v.size(); ++i) {
+                const ObjStep& s = v[i];
+                const std::string sp = where + "[" + std::to_string(i) + "]";
+                if (s.hasCond) cond(s.cond, sp + ".if");
+                if (s.kind == ObjStep::Dialog && !db.FindDialog(s.s)) c.Err(sp + ".dialog", "unknown dialog '" + s.s + "' (define it in data/dialogs)");
+                if (s.kind == ObjStep::Effect) {
+                    if (s.fx.kind == DlgEffect::Give || s.fx.kind == DlgEffect::Take) item(s.fx.s, sp);
+                    if (s.fx.kind == DlgEffect::Quest && !db.FindQuest(s.fx.s)) c.Err(sp + ".quest", "unknown quest '" + s.fx.s + "' (define it in data/quests)");
+                }
+                steps(s.success, sp + ".success");
+                steps(s.failure, sp + ".failure");
+            }
+        };
+        steps(d.onUse, op + ".on_use");
+        steps(d.onLook, op + ".on_look");
+        for (auto& [sk, v] : d.skills) steps(v, op + ".skills." + sk);
+        if (d.hasHidden) cond(d.hiddenUntil, op + ".hidden_until");
+        if (haveProtos && !d.proto.empty() && !db.protoSet.byKey.count(Low(d.proto))) c.Err(op + ".proto", "unknown prototype '" + d.proto + "'");
+        if (!c.bad) keep.push_back(d);
+        else db.fingerprint.erase("objects:" + Low(d.id));
+    }
+    db.objects = std::move(keep);
+}
+
 std::string JoinIds(const std::vector<std::string>& v, size_t maxN = 6) {
     std::string s;
     for (size_t i = 0; i < v.size() && i < maxN; ++i) s += (i ? ", " : "") + v[i];
@@ -1139,6 +1334,11 @@ const QuestDef* ContentDb::FindQuest(const std::string& id) const {
     for (const QuestDef& q : quests) if (Low(q.id) == l) return &q;
     return nullptr;
 }
+const ObjectDef* ContentDb::FindObject(const std::string& id) const {
+    for (const ObjectDef& o : objects) if (Low(o.id) == Low(id)) return &o;
+    return nullptr;
+}
+
 const DialogDef* ContentDb::FindDialog(const std::string& id) const {
     const std::string l = Low(id);
     for (const DialogDef& d : dialogs) if (Low(d.id) == l) return &d;
@@ -1157,12 +1357,12 @@ const NpcRec* ContentDb::FindNpc(const std::string& protoKey) const {
 
 std::string ContentDb::Summary() const {
     return std::to_string(traits.size()) + " traits, " + std::to_string(perks.size()) + " perks, " + std::to_string(items.size()) + " item records, " +
-           std::to_string(npcs.size()) + " npc records, " + std::to_string(quests.size()) + " quests, " + std::to_string(dialogs.size()) + " dialogs, " + std::to_string(files.size()) + " files";
+           std::to_string(npcs.size()) + " npc records, " + std::to_string(quests.size()) + " quests, " + std::to_string(dialogs.size()) + " dialogs, " + std::to_string(objects.size()) + " object bindings, " + std::to_string(files.size()) + " files";
 }
 
 std::vector<std::string> ContentDb::Diff(const ContentDb& a, const ContentDb& b) {
     std::vector<std::string> lines;
-    static const char* const kinds[] = {"skills", "traits", "perks", "items", "npcs", "quests", "dialogs"};
+    static const char* const kinds[] = {"skills", "traits", "perks", "items", "npcs", "quests", "dialogs", "objects"};
     for (const char* k : kinds) {
         const std::string pre = std::string(k) + ":";
         std::vector<std::string> added, removed, changed;
@@ -1213,7 +1413,7 @@ bool ContentDb::Build(const fs::path& dir, const DataStore* base, bool lenient, 
         }
         for (auto& e : fs::directory_iterator(dir, ec)) {
             const std::string n = e.path().filename().string();
-            if (e.is_directory() && n != "skills" && n != "traits" && n != "perks" && n != "items" && n != "npcs" && n != "quests" && n != "dialogs" && n != "locale")
+            if (e.is_directory() && n != "skills" && n != "traits" && n != "perks" && n != "items" && n != "npcs" && n != "quests" && n != "dialogs" && n != "objects" && n != "locale")
                 rep.Warn(L.root + "/" + n, "$", "unknown folder ignored");
         }
     }
@@ -1224,12 +1424,14 @@ bool ContentDb::Build(const fs::path& dir, const DataStore* base, bool lenient, 
     L.LoadNpcs();
     L.LoadQuests();
     L.LoadDialogs();
+    L.LoadObjects();
     const bool haveBase = base && base->Loaded();
     if (haveBase) BuildProtoSet(*base, out, rep);
     else if (!out.items.empty() || !out.npcs.empty() || std::any_of(out.quests.begin(), out.quests.end(), [](const QuestDef& q) { return !q.items.empty(); }))
         rep.Warn(L.root, "$", "no gamedata loaded: item / npc records and quest reward items are not validated or applied");
     CheckQuestItems(out, rep, haveBase);
     CheckDialogs(out, base, rep, haveBase);
+    CheckObjects(out, rep, haveBase);
     std::sort(out.files.begin(), out.files.end());
     out.loaded = true;
     if (!rep.errors.empty() && lenient) {

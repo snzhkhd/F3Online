@@ -202,11 +202,13 @@ struct ObjectInfo {
     uint8_t open = 0;  // doors / containers: 1 = open
     uint8_t locked = 0;
     uint8_t flags = 0;
-    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU8(static_cast<uint8_t>(kind)); b.WriteU8(open); b.WriteU8(locked); b.WriteU8(flags); }
+    std::string label;   // use cursor label of a scripted object (data/objects "label"); empty = the default one
+    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU8(static_cast<uint8_t>(kind)); b.WriteU8(open); b.WriteU8(locked); b.WriteU8(flags); b.WriteString(label); }
     bool Read(ByteBuffer& b) {
         id = b.ReadU32(); kind = static_cast<ObjectKind>(b.ReadU8()); open = b.ReadU8();
         locked = b.Remaining() >= 2 ? b.ReadU8() : 0;
         flags = b.Remaining() >= 1 ? b.ReadU8() : 0;
+        label = b.Remaining() >= 2 ? b.ReadString(32) : std::string();
         return b.Ok();
     }
 };

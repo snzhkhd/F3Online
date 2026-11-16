@@ -275,7 +275,7 @@ void ClientCore::Handle(const uint8_t* data, size_t len) {
             ClientItem it;
             it.id = m.id; it.pid = m.pid; it.name = m.name; it.pos = TilePos{m.x, m.y};
             if (auto pi = pendingInfo_.find(m.id); pi != pendingInfo_.end()) {
-                it.kind = pi->second.kind; it.open = pi->second.open != 0; it.locked = pi->second.locked != 0; it.flags = pi->second.flags;
+                it.kind = pi->second.kind; it.open = pi->second.open != 0; it.locked = pi->second.locked != 0; it.flags = pi->second.flags; it.label = pi->second.label;
                 pendingInfo_.erase(pi);
             }
             items_[m.id] = std::move(it);
@@ -372,7 +372,7 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
             gnet::ObjectInfo m;
             if (!m.Read(b)) return;
             auto it = items_.find(m.id);
-            if (it != items_.end()) { it->second.kind = m.kind; it->second.open = m.open != 0; it->second.locked = m.locked != 0; it->second.flags = m.flags; }
+            if (it != items_.end()) { it->second.kind = m.kind; it->second.open = m.open != 0; it->second.locked = m.locked != 0; it->second.flags = m.flags; it->second.label = m.label; }
             else pendingInfo_[m.id] = m;
             break;
         }

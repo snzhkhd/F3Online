@@ -121,6 +121,11 @@ struct EditorServer::Impl {
             OnServer<std::string>([s, id] { return s->Data().String(id); }, t, to);
             return t;
         };
+        h.objects = [this, s, to](const std::string& map, const std::string& query, int limit) {
+            std::string text;
+            if (!OnServer<std::string>([s, map, query, limit] { return s->ObjectsJson(map, query, limit); }, text, to)) return std::string("{\"error\":\"the server main loop did not answer in time\"}");
+            return text;
+        };
         h.stfSearch = [this, s, to](const std::string& needle, size_t limit) {
             std::vector<std::pair<int, std::string>> v;
             OnServer<std::vector<std::pair<int, std::string>>>([s, needle, limit] { return s->Data().SearchStrings(needle, limit); }, v, to);
@@ -166,6 +171,7 @@ bool EditorServer::Start(std::string& err) {
     editor::Options o;
     o.contentDir = content;
     o.uiDir = FindUiDir(m.cfg.uiDir);
+    o.scriptsDir = m.server.GetConfig().scriptsDir;
     o.token = m.token;
     o.port = m.cfg.port;
     if (o.uiDir.empty()) log::Warn("editor: tools/editor (the web front end) was not found; only /api is served (use --editor-dir DIR)");

@@ -161,3 +161,28 @@ textarea.json.bad { border-color: var(--err); }
   .frow { grid-template-columns: 1fr; }
 }
 .dlg > div { min-width: 0; }
+
+/* object scripts editor (objects.js) */
+.form h4 { margin: 14px 0 4px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--border); padding-bottom: 2px; }
+.stepcard { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin: 4px 0; background: var(--panel2); }
+.nest { border-left: 3px solid var(--accent); padding-left: 8px; margin: 4px 0 2px 4px; }
+.inl { display: inline-flex; align-items: center; gap: 2px; }
+.script-status { margin-top: 4px; }
+.script-status .good { color: var(--ok); }
+.script-status .bad { color: var(--err); }
+.picker { border: 1px dashed var(--border); border-radius: 6px; padding: 6px 8px; }
+.pk-body { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; margin-top: 6px; }
+.pk-plot { flex: 0 0 340px; max-width: 100%; }
+.pk-list { flex: 1 1 340px; max-height: 340px; overflow: auto; min-width: 0; }
+svg.scatter { width: 100%; height: auto; max-width: 340px; border: 1px solid var(--border); border-radius: 4px; display: block; }
+svg.scatter .sc-bg { fill: var(--panel); }
+svg.scatter .sc-grid { stroke: var(--border); stroke-width: .4; }
+svg.scatter .sc-dot { cursor: pointer; opacity: .85; stroke: none; }
+svg.scatter .sc-dot:hover { opacity: 1; stroke: var(--text); stroke-width: .6; }
+svg.scatter .sc-dot.bound { stroke: var(--text); stroke-width: .5; }
+svg.scatter .sc-dot.cur { stroke: var(--err); stroke-width: 1.2; opacity: 1; }
+.pk-table td, .pk-table th { padding: 2px 6px; text-align: left; }
+.pk-row { cursor: pointer; }
+.pk-row:hover { background: var(--panel2); }
+.pk-row.sel { outline: 2px solid var(--accent); }
+.legend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 3px; }
