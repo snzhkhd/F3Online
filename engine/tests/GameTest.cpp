@@ -78,6 +78,7 @@ struct Bot {
     std::vector<std::string> chat, chatFrom;
     // dialogue
     std::vector<gnet::DialogOpen> dlgOpens;
+    std::unordered_map<CritterId, int> talkFlag;   // CritterProto.talk by critter id (the server says the NPC can be talked to)
     std::vector<gnet::DialogNode> dlgNodes;
     int dlgCloses = 0;
     // real-time state (continuous-move capable clients only)
@@ -175,6 +176,7 @@ struct Bot {
                 break;
             }
             case (uint8_t)GMsgChar::S2C_CharSheet: { if (sheet.Read(b)) ++sheetCount; break; }
+            case (uint8_t)GMsgView::S2C_CritterProto: { gnet::CritterProto m; if (m.Read(b)) talkFlag[m.id] = m.talk; break; }
             case (uint8_t)GMsgDlg::S2C_DialogOpen: { gnet::DialogOpen m; if (m.Read(b)) dlgOpens.push_back(m); break; }
             case (uint8_t)GMsgDlg::S2C_DialogNode: { gnet::DialogNode m; if (m.Read(b)) dlgNodes.push_back(m); break; }
             case (uint8_t)GMsgDlg::S2C_DialogClose: { ++dlgCloses; break; }
@@ -719,10 +721,47 @@ static int RunTutorialTests(uint16_t port) {
             WaitFor({&a}, 1, [] { return false; });
         }
     }
+    // ---- regression (insurgent vanished after one attack): Frank sets the persisted flag CleanupJunktown; the tutorial insurgents of Junktown
+    // delete themselves when it is set (original OnUpdate). A living NPC the player can see must never be removed that way.
+    {
+        say("/amxattacks off");
+        say("/gvar CleanupJunktown 1");
+        say("/near Insurgent");
+        WaitFor({&a}, 2, [] { return false; });
+        CritterId ins = 0;
+        for (auto& [id, c] : a.critters) if (c.kind == CritterKind::Npc && c.name == "Communist Insurgent") { ins = id; break; }
+        if (!ins) std::printf("note: no Communist Insurgent near the Junktown start, cleanup regression not exercised\n");
+        else {
+            WaitFor({&a}, 25, [&] { return !a.critters.count(ins); });
+            CHECK(a.critters.count(ins) != 0, "a visible insurgent is not removed by the CleanupJunktown script flag");
+        }
+        say("/gvar CleanupJunktown 0");
+    }
     // ---- Vault: Frank
     const size_t opensBefore = a.dlgOpens.size();
     say("/goto 00_04_Tutorial_Vault");
     CHECK(WaitFor({&a}, 8, [&] { return a.map.name == "00_04_Tutorial_Vault" && a.mapInfoCount >= 2; }), "entered the Vault");
+    // NPC-initiated dialogue needs the player close: from 10-11 cells away (inside the view, outside the start range) Frank must not open one
+    {
+        WaitFor({&a}, 1, [] { return false; });
+        CritterId f0 = 0;
+        for (auto& [id, c] : a.critters) if (c.name == "Frank") f0 = id;
+        if (f0) {
+            const int fx = a.critters[f0].x, fy = a.critters[f0].y;
+            bool placed = false;
+            for (int dx = -11; dx <= 11 && !placed; ++dx)
+                for (int dy = -11; dy <= 11 && !placed; ++dy) {
+                    const int d = std::max(std::abs(dx), std::abs(dy));
+                    if (d < 10 || d > 11 || !Walkable(a, fx + dx, fy + dy)) continue;
+                    say("/tp " + std::to_string(fx + dx) + " " + std::to_string(fy + dy));
+                    placed = WaitFor({&a}, 2, [&] { return a.pos == TilePos{(int16_t)(fx + dx), (int16_t)(fy + dy)}; });
+                }
+            if (placed) {
+                WaitFor({&a}, 8, [&] { return a.dlgOpens.size() > opensBefore; });
+                CHECK(a.dlgOpens.size() == opensBefore, "Frank does not open a dialogue from 10+ cells away");
+            }
+        }
+    }
     say("/tp 141 203");
     WaitFor({&a}, 2, [] { return false; });
     CritterId frank = 0;
@@ -1222,6 +1261,7 @@ static int RunDialogTests(uint16_t port) {
     const CritterId joe = findNpc("Scrapper Joe");
     CHECK(joe != 0, "Scrapper Joe (data NPC, dialog junktown_scrapper) is in view");
     if (!joe) return 1;
+    CHECK(a.talkFlag.count(joe) && a.talkFlag[joe] == 1, "the server marks the data-dialog NPC as talkable (Talk cursor)");
 
     // greeting: the skill-gated answer is hidden at a low Barter, the others are shown
     CHECK(talk(joe) && !a.dlgOpens.empty() && a.dlgOpens.back().name == "Scrapper Joe", "Talk opens the data dialog with the speaker name");

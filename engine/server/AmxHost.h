@@ -104,6 +104,14 @@ private:
     };
     void Present(Critter& pc);   // builds the replies of the current node and sends it (or ends the conversation)
     std::string DlgText(int id, const Critter* viewer = nullptr) const;   // stf text (colour tags stripped) in the viewer's language
+    // NPC-initiated conversations (StartDialogue native): range, line of sight, combat, cooldown; see RequestNpcDialog
+    static constexpr int kNpcDialogStartCells = 8, kNpcDialogCooldownSec = 30, kNpcDialogWaitSec = 60;   // the conversation ends at 12 cells (Tick)
+    struct NpcDlgRequest { CritterId npc = 0, pc = 0; uint64_t expire = 0; };
+    std::vector<NpcDlgRequest> npcDialogWait_;
+    std::unordered_map<CritterId, uint64_t> npcDialogCooldown_;   // NPC -> tick before which it starts no new conversation
+    bool NpcDialogReady(const Critter& pc, const Critter& npc) const;
+    bool RequestNpcDialog(Critter& npc, Critter& pc);
+    void TickNpcDialogRequests(uint64_t tick);
     std::unordered_map<CritterId, Dlg> dialogs_;   // by player id
     Dlg* active_ = nullptr;                        // conversation the natives currently write to
     std::unordered_map<std::string, std::shared_ptr<AmxScript>> dlgScripts_;

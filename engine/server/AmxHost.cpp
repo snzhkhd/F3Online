@@ -73,7 +73,17 @@ void AmxHost::BindNatives() {
     N["GetGender"] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };
     N["GetRace"] = [](AmxInstance&, const AmxCell*, int) -> AmxCell { return 0; };
     N["DestroyEntity"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell {
-        if (Critter* c = CritterOf(a[0])) { if (c->IsNpc()) server_.RemoveCritter(c->id); return 1; }
+        if (Critter* c = CritterOf(a[0])) {
+            if (!c->IsNpc()) return 1;
+            // Scripts use DestroyEntity to tidy up off-screen (the tutorial "CleanupJunktown" flag set by Frank). A living NPC that a
+            // player can currently see is never removed: it would just vanish in front of the player. The script retries on its next update.
+            const Map* mp = server_.GetWorld().GetMap(c->mapId);
+            if (!c->dead && mp && Visible(*mp, c->fx * 0.5f + mp->originX, c->fy * 0.5f + mp->originZ)) {
+                return 0;
+            }
+            server_.RemoveCritter(c->id);
+            return 1;
+        }
         return 0;
     };
     // game clock: the demo starts at 13:13 (sys.ini [World]); 1 real second = 1 game second
@@ -160,7 +170,8 @@ void AmxHost::BindNatives() {
     N["StartDialogue"] = [this](AmxInstance&, const AmxCell* a, int n) -> AmxCell {  // (npc, pc): called by behaviours such as 00_TutorialFrank
         if (n < 2) return 0;
         Critter* npc = CritterOf(a[0]); Critter* pc = CritterOf(a[1]);
-        return npc && pc && pc->IsPlayer() && StartDialog(*pc, *npc) ? 1 : 0;
+        if (!npc || !pc || !pc->IsPlayer() || npc->dead || pc->dead || npc->mapId != pc->mapId || npc->dialog.empty()) return 0;
+        return RequestNpcDialog(*npc, *pc) ? 1 : 0;
     };
     BindActionNatives();   // overrides the stubs above (squads, ranks, ClearActions) and adds the A_* queue
     BindSpatialNatives();  // geometry (Distance, GetPosition, GetFacing...), LOS, FindObjects, waypoints, FOW, VEG, HasItem, IsDead / HasDied
@@ -201,6 +212,45 @@ AmxHost::DlgView AmxHost::DialogView(CritterId pc) const {
     v.open = true; v.textId = it->second.textId; v.text = DlgText(it->second.textId, viewer); v.node = it->second.node;
     for (auto& r : it->second.replies) v.replies.push_back(DlgText(r.textId, viewer));
     return v;
+}
+
+// NPC-initiated conversation (the StartDialogue native). The original engine only starts one when the NPC is next to the player, so the
+// request is checked here: same map, both alive, neither in a conversation, nobody in combat, NPC within kNpcDialogStartCells of the player with
+// a clear line of sight, and the NPC's cooldown over. Too far / busy: the request waits (the script believes the dialogue started) and is
+// retried every tick until it can start or kNpcDialogWaitSec passes. Returns false only when the request is hopeless.
+bool AmxHost::NpcDialogReady(const Critter& pc, const Critter& npc) const {
+    if (InDialog(pc.id) || InDialog(npc.id)) return false;
+    const uint64_t now = server_.NowMs();
+    if (now < pc.battleEndMs || now < npc.battleEndMs || npc.target != 0) return false;
+    auto cd = npcDialogCooldown_.find(npc.id);
+    if (cd != npcDialogCooldown_.end() && server_.Tick() < cd->second) return false;
+    if (TileDist(pc.pos, npc.pos) > kNpcDialogStartCells) return false;
+    const Map* mp = server_.GetWorld().GetMap(pc.mapId);
+    return mp && LineClear(*mp, pc.fx * 0.5f + mp->originX, pc.fy * 0.5f + mp->originZ, npc.fx * 0.5f + mp->originX, npc.fy * 0.5f + mp->originZ);
+}
+
+bool AmxHost::RequestNpcDialog(Critter& npc, Critter& pc) {
+    if (NpcDialogReady(pc, npc) && StartDialog(pc, npc)) {
+        npcDialogCooldown_[npc.id] = server_.Tick() + static_cast<uint64_t>(kNpcDialogCooldownSec) * server_.GetConfig().tickRate;
+        return true;
+    }
+    for (const NpcDlgRequest& r : npcDialogWait_) if (r.npc == npc.id && r.pc == pc.id) return true;
+    npcDialogWait_.push_back({npc.id, pc.id, server_.Tick() + static_cast<uint64_t>(kNpcDialogWaitSec) * server_.GetConfig().tickRate});
+    return true;
+}
+
+void AmxHost::TickNpcDialogRequests(uint64_t tick) {
+    for (size_t i = 0; i < npcDialogWait_.size();) {
+        const NpcDlgRequest r = npcDialogWait_[i];
+        Critter* npc = server_.GetWorld().GetCritter(r.npc);
+        Critter* pc = server_.GetWorld().GetCritter(r.pc);
+        bool drop = tick >= r.expire || !npc || !pc || npc->dead || pc->dead || npc->mapId != pc->mapId || !pc->IsPlayer();
+        if (!drop && NpcDialogReady(*pc, *npc)) {
+            if (StartDialog(*pc, *npc)) npcDialogCooldown_[npc->id] = tick + static_cast<uint64_t>(kNpcDialogCooldownSec) * server_.GetConfig().tickRate;
+            drop = true;
+        }
+        if (drop) npcDialogWait_.erase(npcDialogWait_.begin() + i); else ++i;
+    }
 }
 
 bool AmxHost::StartDialog(Critter& pc, Critter& npc) {
@@ -358,6 +408,7 @@ void AmxHost::Tick(uint64_t tick, const std::unordered_set<MapId>& active) {
         if (p) server_.SendBuf(*p, gnet::PackG(gnet::DialogClose{}));
         it = dialogs_.erase(it);
     }
+    TickNpcDialogRequests(tick);
     objectLists_.clear();   // FindObjects lists live one tick (the original frame lookup caches)
     TickActions(active);
     static const char* traceName = std::getenv("F3_AMX_TRACE");   // debugging: trace the natives of scripts whose name contains this text
