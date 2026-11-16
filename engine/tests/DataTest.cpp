@@ -272,11 +272,135 @@ static void TestValidation() {
     }
 }
 
+static const char* kDlgNpc = R"({"id":"F3_Talker.CRT","base":"Thug.CRT","name":"Talker","dialog":"talk1"})";
+static const char* kDlgQuest = R"([{"id":"q1","title":"Quest","text":"Do it","xp":10}])";
+
+static std::string DlgFile(const std::string& dialogs) { return Env("dialogs", dialogs); }
+
+static void TestDialogs() {
+    std::printf("dialogs: parsing, conditions, effects, references, reload diff\n");
+    const std::string good = R"([{
+        "id":"talk1","speaker":"F3_Talker.CRT",
+        "start":[{"if":"quest:q1==done","goto":"after"},{"goto":"hi"}],
+        "nodes":[
+          {"id":"hi","text":"Hello {player}.","answers":[
+             {"id":"a","text":"Work?","if":["skill:Barter>=30","stat:level>=2","!flag:met"],"do":[{"quest":"q1","state":"add"},{"flag":"met","set":true},{"give":"Junk.ITM","count":2}],"goto":"after"},
+             {"id":"b","text":"Hmm","if":{"any":["item:Junk.ITM>=1",{"not":"flag:x"}]},"do":[{"take":"Junk.ITM"},{"xp":5},{"trade":true},{"door":[3,4],"action":"open"},{"lua":"hook_fn"}]},
+             {"id":"c","text":"Fight","do":[{"attack":true}]},
+             {"id":"d","text":"Bye","goto":"end"}]},
+          {"id":"after","text":"Thanks.","on_enter":[{"flag":"seen","set":2}]}]}])";
+    {
+        Fixture f("dlg_ok");
+        Put(f.data / "quests/q.json", Env("quests", kDlgQuest));
+        Put(f.data / "npcs/n.json", Env("npcs", std::string("[") + kDlgNpc + "]"));
+        Put(f.data / "dialogs/d.json", DlgFile(good));
+        ContentDb db; ContentReport rep;
+        const bool ok = f.Build(false, db, rep);
+        CHECK(ok && rep.Ok(), "valid dialog loads\n%s", Dump(rep).c_str());
+        if (!ok) return;
+        const DialogDef* d = db.FindDialog("TALK1");
+        CHECK(d && d->speaker == "F3_Talker.CRT" && d->nodes.size() == 2 && d->start.size() == 2, "dialog record parsed, ids case-insensitive");
+        if (d) {
+            const DlgNode* hi = d->FindNode("hi");
+            CHECK(hi && hi->answers.size() == 4 && hi->answers[0].cond.kind == DlgCond::All && hi->answers[0].cond.kids.size() == 3, "AND list of three conditions");
+            if (hi && hi->answers[0].cond.kids.size() == 3) {
+                const auto& k = hi->answers[0].cond.kids;
+                CHECK(k[0].kind == DlgCond::Skill && k[0].op == DlgCond::Ge && k[0].value == 30, "skill:Barter>=30");
+                CHECK(k[1].kind == DlgCond::Stat && k[1].value == 2, "stat:level>=2");
+                CHECK(k[2].kind == DlgCond::Flag && k[2].neg, "!flag:met negates");
+            }
+            if (hi && hi->answers.size() == 4) {
+                CHECK(hi->answers[0].effects.size() == 3 && hi->answers[0].effects[0].kind == DlgEffect::Quest && hi->answers[0].effects[0].action == "add", "quest effect");
+                CHECK(hi->answers[0].effects[2].kind == DlgEffect::Give && hi->answers[0].effects[2].n == 2, "give with count");
+                CHECK(hi->answers[1].cond.kind == DlgCond::Any && hi->answers[1].cond.kids.size() == 2 && hi->answers[1].cond.kids[1].kind == DlgCond::Not, "any / not combinators");
+                const auto& e = hi->answers[1].effects;
+                CHECK(e.size() == 5 && e[0].kind == DlgEffect::Take && e[2].kind == DlgEffect::Trade && e[3].kind == DlgEffect::Door && e[3].x == 3 && e[3].y == 4 && e[3].action == "open" && e[4].kind == DlgEffect::Lua && e[4].s == "hook_fn", "take / xp / trade / door / lua effects");
+                CHECK(hi->answers[2].effects.size() == 1 && hi->answers[2].effects[0].kind == DlgEffect::Attack, "attack effect");
+                CHECK(hi->answers[3].gotoNode == "end" || hi->answers[3].gotoNode.empty(), "goto end closes");
+            }
+            const DlgNode* af = d->FindNode("AFTER");
+            CHECK(af && af->onEnter.size() == 1 && af->onEnter[0].kind == DlgEffect::Flag && af->onEnter[0].n == 2, "on_enter flag with an integer value");
+        }
+        CHECK(db.dialogs.size() == 1, "one dialog");
+
+        // reload diff: an edited dialog is reported as changed
+        std::string edited = good;
+        edited.replace(edited.find("Thanks."), 7, "Thank you.");
+        Put(f.data / "dialogs/d.json", DlgFile(edited));
+        ContentDb db2; ContentReport rep2;
+        CHECK(f.Build(false, db2, rep2), "edited dialog loads");
+        bool changed = false;
+        for (auto& l : ContentDb::Diff(db, db2)) if (l.find("dialogs:") == 0 && l.find("changed: talk1") != std::string::npos) changed = true;
+        CHECK(changed, "Diff reports the edited dialog");
+    }
+    auto bad = [&](const char* label, const std::string& dialogs, const char* needle) {
+        Fixture f("dlg_bad");
+        Put(f.data / "quests/q.json", Env("quests", kDlgQuest));
+        Put(f.data / "npcs/n.json", Env("npcs", std::string("[") + kDlgNpc + "]"));
+        Put(f.data / "dialogs/d.json", DlgFile(dialogs));
+        ContentDb db; ContentReport rep;
+        const bool ok = f.Build(false, db, rep);
+        CHECK(!ok && Has(rep.errors, "data/dialogs/d.json") && Has(rep.errors, needle), "%s: expected an error containing '%s'\n%s", label, needle, Dump(rep).c_str());
+    };
+    auto one = [](const std::string& answer) {
+        return std::string(R"([{"id":"talk1","speaker":"F3_Talker.CRT","nodes":[{"id":"n","text":"x","answers":[)") + answer + "]}]}]";
+    };
+    bad("bad goto", one(R"({"id":"a","text":"t","goto":"nowhere"})"), "unknown node 'nowhere'");
+    bad("unknown quest in effect", one(R"({"id":"a","text":"t","do":[{"quest":"ghost","state":"add"}]})"), "unknown quest 'ghost'");
+    bad("unknown quest in condition", one(R"({"id":"a","text":"t","if":"quest:ghost==done"})"), "unknown quest 'ghost'");
+    bad("unknown item", one(R"({"id":"a","text":"t","do":[{"give":"Nothing.ITM"}]})"), "unknown item 'Nothing.ITM'");
+    bad("unknown speaker", R"([{"id":"talk1","speaker":"Nobody.CRT","nodes":[{"id":"n","text":"x"}]}])", "unknown prototype 'Nobody.CRT'");
+    bad("speaker not a critter", R"([{"id":"talk1","speaker":"Junk.ITM","nodes":[{"id":"n","text":"x"}]}])", "is not a critter");
+    bad("unknown stf", one(R"({"id":"a","stf":999999})"), "unknown English.stf string id 999999");
+    bad("text and stf", one(R"({"id":"a","text":"t","stf":11})"), "either");
+    bad("no text", one(R"({"id":"a"})"), "missing \"text\"");
+    bad("duplicate node", R"([{"id":"talk1","speaker":"F3_Talker.CRT","nodes":[{"id":"n","text":"x"},{"id":"N","text":"y"}]}])", "duplicate node id");
+    bad("duplicate answer", one(R"({"id":"a","text":"t"},{"id":"A","text":"u"})"), "duplicate answer id");
+    bad("duplicate dialog", R"([{"id":"talk1","nodes":[{"id":"n","text":"x"}]},{"id":"TALK1","nodes":[{"id":"n","text":"x"}]}])", "duplicate id");
+    bad("malformed condition", one(R"({"id":"a","text":"t","if":"skill:Barter"})"), ".if");
+    bad("unknown skill", one(R"({"id":"a","text":"t","if":"skill:Juggling>=3"})"), "Juggling");
+    bad("two effect keys", one(R"({"id":"a","text":"t","do":[{"give":"Junk.ITM","flag":"x"}]})"), ".do");
+    bad("unknown field", one(R"({"id":"a","text":"t","bogus":1})"), "unknown field");
+    bad("no nodes", R"([{"id":"talk1","nodes":[]}])", "at least one node");
+    {   // lenient mode drops only the broken dialog
+        Fixture f("dlg_len");
+        Put(f.data / "dialogs/d.json", DlgFile(R"([{"id":"ok1","nodes":[{"id":"n","text":"x"}]},{"id":"bad1","nodes":[{"id":"n","text":"x","answers":[{"id":"a","text":"t","goto":"zzz"}]}]}])"));
+        ContentDb db; ContentReport rep;
+        f.Build(true, db, rep);
+        CHECK(db.FindDialog("ok1") && !db.FindDialog("bad1") && !rep.warnings.empty(), "lenient: the broken dialog is dropped, the good one stays\n%s", Dump(rep).c_str());
+    }
+}
+
+static void TestExtendedFields() {
+    std::printf("generator / note keys, item model + modes, ammo, skill original, perk placeholder\n");
+    Fixture f("ext");
+    Put(f.data / "skills/s.json", R"({"schema":1,"kind":"skills","generator":"f3_server --export-data","note":"x","records":[{"id":"firearms","original":{"const":2,"agility":4},"base":{"const":10,"agility":3}}]})");
+    Put(f.data / "perks/p.json", R"({"schema":1,"kind":"perks","note":"n","records":[{"id":"toughness","name":"Toughness","placeholder":true,"requires":{"level":3}}]})");
+    Put(f.data / "items/i.json", Env("items", R"([
+        {"id":"Pistol.WEA","model":"hand/pistol","held_model":"hpistol","weapon":{"caliber":9,"modes":[{"type":2,"cost":15,"dmg_min":6,"dmg_max":12,"ap":4,"shots":1,"damage_type":0},{"type":1,"cost":15,"dmg_min":6,"dmg_max":12,"ap":6,"shots":3}]}},
+        {"id":"Ammo9.AMO","ammo":{"caliber":9,"armor_adj":-10,"accuracy_adj":5}}])"));
+    ContentDb db; ContentReport rep;
+    const bool ok = f.Build(false, db, rep);
+    CHECK(ok && rep.Ok(), "extended fields load\n%s", Dump(rep).c_str());
+    if (!ok) return;
+    const PerkDef* p = db.FindPerk("toughness");
+    CHECK(p && p->placeholder, "perk placeholder flag");
+    auto it = db.protoSet.byKey.find("pistol.wea");
+    CHECK(it != db.protoSet.byKey.end(), "protoSet built");
+    if (it != db.protoSet.byKey.end()) {
+        const Proto& pr = db.protoSet.protos[it->second];
+        CHECK(pr.heldModel == "hpistol" && pr.modes.size() == 2 && pr.modes[1].shots == 3 && pr.modes[1].apRef == 6, "weapon modes replace the attack modes (shots, real AP)");
+    }
+    ExpectError("modes need a type", "items/i.json", Env("items", R"([{"id":"Pistol.WEA","weapon":{"modes":[{"cost":1}]}}])"), "modes");
+}
+
 int main() {
     TestEmptyAndMissing();
     TestSkillDefaults();
     TestLoadAndMerge();
     TestValidation();
+    TestDialogs();
+    TestExtendedFields();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

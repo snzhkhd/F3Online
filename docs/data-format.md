@@ -13,6 +13,8 @@ data/
   items/*.json           overrides of / additions to the item prototypes (weapons, armor, ammo, misc)
   npcs/*.json            overrides of / additions to the critter prototypes (+ spawn defaults)
   quests/*.json          quest definitions for the Pip-Boy log (title, text, rewards)
+  dialogs/*.json         dialog graphs run by the server next to the original AMX dialogs (docs/dialogs.md)
+  locale/<lang>/*.json   translations of the texts above (docs/localization.md)
 ```
 
 Files are read in file-name order. Files whose name starts with `_` or `.` (or that do not end in `.json`) are ignored, which is
@@ -59,6 +61,8 @@ Every file in a kind folder has the same envelope:
 | `kind` | required, must equal the folder name (catches files dropped in the wrong folder) |
 | `records` | array of record objects, required (may be empty) |
 | `max_picks` | `traits` files only, see 3.2 |
+| `generator` | optional string. Marks a file written by `f3_server --export-data`: the exporter overwrites it on the next run (see "Exporter") |
+| `note` | optional string, free text for humans (ignored) |
 
 `manifest.json` carries its own `schema` (the schema of the folder as a whole). Rules for changing the format: adding an optional
 field keeps the schema; renaming, removing or re-typing a field bumps it, and the loader keeps reading the old schemas.
@@ -99,6 +103,9 @@ spent skill points and effects come on top. `data/skills/skills.json` lists all 
 * `effects` and `hook`: see 4. The shipped 16 traits (the original list) have **no effects yet**, which keeps the game exactly as
   before; their descriptions say "(no effect yet)" until a designer gives them one.
 
+The skill record may carry an `original` object with the original game's bonus formula (`const` and the SPECIAL keys, like `base`).
+It is reference only: it is parsed and checked but never applied, so the shipped `base` formulas (which the tests pin) stay in force.
+
 ### 3.3 perks
 
 ```json
@@ -119,6 +126,10 @@ spent skill points and effects come on top. `data/skills/skills.json` lists all 
 | `requires.perks` / `requires.traits` | perk / trait ids that must be held (references are checked; cycles are errors) |
 | `effects` | declarative stat modifiers, see 4 |
 | `hook` | optional name of a Lua function in `scripts/`, called as `fn(critter, perk_id, rank)` right after the perk is taken |
+| `placeholder` | optional bool. `true` = the numbers (level, requirements, effects) are our placeholder, not read from the original game |
+
+The original game files carry no perk list that the importer reads (perk names live in the AMX scripts / stf, the numbers in the
+original executable), so the shipped perks are all `placeholder: true`. Replace the numbers and drop the flag once they are known.
 
 A character earns a perk point every `PerkRate` levels (`config.lua`, default 3). Spend flow: `/perks` lists every perk with
 `[*]` taken, `[+]` available now, `[ ]` locked (with the reason), `/perk take <id>` spends a point. Perks are stored per character
@@ -136,9 +147,20 @@ A character earns a perk point every `PerkRate` levels (`config.lua`, default 3)
 ] }
 ```
 Fields (all optional except `id`): `base` (new record, see 1), `name`, `desc`, `weight` (0..10000; wins over `ItemWeights` of
-`config.lua`), `weapon{range, dmg_min, dmg_max}` (weapons only), `armor{values[7]}` and `head_armor` (armor only), `ammo{dmg_min,
-dmg_max}` (ammunition only). A group for the wrong class of item is an error. `id` must not name a critter (use `npcs`). A new
-item clones the **original** prototype `base` (model, icon and the rest), independent of the order of records.
+`config.lua`), `model` and `held_model` (strings, see below), `weapon{range, dmg_min, dmg_max, caliber, modes[]}` (weapons only),
+`armor{values[7]}` and `head_armor` (armor only), `ammo{dmg_min, dmg_max, caliber, armor_adj, accuracy_adj}` (ammunition only). A
+group for the wrong class of item is an error. `id` must not name a critter (use `npcs`). A new item clones the **original**
+prototype `base` (model, icon and the rest), independent of the order of records.
+
+* `model` is the original inventory / ground art name of the item, `held_model` the model held in the hand (weapons) or worn
+  (armor), both read from the original item record. They are informational today: the server stores them and the content sync
+  does not send them, so changing them has no visible effect yet.
+* `weapon.modes` replaces the attack modes as a whole: `{ "type", "cost", "dmg_min", "dmg_max", "ap", "shots", "damage_type" }`.
+  `type` and `cost` are the values combat uses today (`cost` is the original word that the server converts to a cooldown, which the
+  decompilation showed to be the weapon *range*, not action points). `ap` (real action points), `shots` and `damage_type` (0
+  ballistic, 1 biological, 2 electrical, 3 EMP, 4 normal, 5 heat) are reference values; combat does not read them yet.
+* `weapon.caliber` / `ammo.caliber` are the original caliber ids that tie ammunition to weapons. `ammo.armor_adj` and
+  `ammo.accuracy_adj` are the original ammunition modifiers (reference only).
 
 ### 3.5 npcs
 
@@ -150,7 +172,7 @@ item clones the **original** prototype `base` (model, icon and the rest), indepe
     "spawns": [ { "map": "00_03_Tutorial_Junktown", "cell": [120, 80], "count": 2 } ] }
 ] }
 ```
-Fields: `base` (new record), `name`, `team` (0..255), `level` (1..99, the starting level of the HP formula), `max_hp` (fixes the
+Fields: `base` (new record), `name`, `model` (original critter art name, informational), `team` (0..255), `level` (1..99, the starting level of the HP formula), `max_hp` (fixes the
 maximum HP), `xp` (experience for killing it; replaces the `XpByProto` table of `config.lua`, which still works as a fallback),
 `special{...}` (partial: the omitted SPECIAL values keep the original), `script`, `dialog`, `equipment` (worn on spawn),
 `inventory` (carried / loot), `spawns` (see below). Every item in `equipment` / `inventory` must exist (checked). Map instances that
@@ -191,6 +213,67 @@ an error that lists the valid names.
 
 SPECIAL modifiers are not supported yet (many derived values read the raw SPECIAL).
 
+### 3.7 dialogs
+
+Dialog graphs for NPCs: speaker, nodes, answers with conditions and effects. A critter whose record has `"dialog": "<dialog id>"`
+runs the data dialog through the normal dialog protocol; any other `dialog` value still names an original AMX dialog. Full
+schema, conditions, effects and locale keys: **`docs/dialogs.md`**. Example: `data/dialogs/junktown.json`.
+
+## 4b. Exporter (`--export-data`)
+
+The original prototypes stay the base layer; the exporter turns the parts a designer may want to tweak into editable records, so a
+change is a one-line diff in `data/` instead of a patch of the original data. Run it from the repo root, with the game data
+available (`--data`, default: the usual gamedata folder):
+
+```
+f3_server --export-data [--content DIR] [--data DIR] [--export-out DIR] [--force] [--check]
+```
+
+| flag | meaning |
+|---|---|
+| `--export-out DIR` | write the files into `DIR` instead of the data folder (a dry run into a temp folder, then diff) |
+| `--force` | also overwrite files that carry no `generator` key (see below) |
+| `--check` | write nothing; exit 1 when a generated file differs from what the exporter would write (used by `smoke_test.ps1`) |
+
+**Ownership.** A generated file has `"generator": "f3_server --export-data"` in its envelope and is overwritten on every run. To
+take a file over, delete the `generator` key: the exporter then skips it (and says so) unless `--force`. Hand-written files such
+as `data/npcs/junktown_test.json`, `data/quests/*`, `data/perks/*` and `data/dialogs/*` are never touched, because the exporter does
+not know those kinds (skills excepted, see below).
+
+**Output** (stable: records sorted by id, fixed field order, LF line endings, two-space indent, small flat objects on one line, so
+a re-run produces no diff):
+
+| file | content |
+|---|---|
+| `items/weapons.json` | every weapon of the base layer: name, description, weight, model, held model, range, damage, caliber, attack modes with real AP / shots / damage type |
+| `items/armor.json` | every armor: name, weight, models, the 7 armor words, head flag |
+| `items/ammo.json` | every ammunition: caliber, damage range, armor / accuracy modifiers |
+| `items/kits.json` | kits, keys and the other misc items (set dressing `DS_*` excluded) |
+| `npcs/original.json` | the critter templates placed by the shipped maps: level, HP, team, SPECIAL, AI script, dialog, equipment, loot |
+| `skills/skills.json` | the 14 skills with the **current** formulas and descriptions and the original game's formula in `original` |
+
+Items are exported from the **base** layer only, so an exported file never copies a value that another data file overrides, and a
+fresh export changes no gameplay: item and NPC records repeat the effective base values. NPC `max_hp` is written only where the
+original template has a level above 1 (it pins the HP the server already used); other NPCs keep the level formula. Critters that
+exist only as scenery (`static`) are skipped. Dialog files are never exported: the original dialogs stay in the AMX scripts and the
+English.stf, and our dialog records reference the original text by `stf` id instead of copying it.
+
+**What is not exported, and stays in the base layer:** map data and map instances (spawn cells, per-instance scripts, inventories),
+sprites / models / sounds, the AMX scripts and `English.stf`, the full critter prototype table (only shipped-map templates are
+exported), doors, containers, scenery and "item" art of no gameplay value, and the original perk list (the data holds none).
+
+**Differences found against the original** (documented here, deliberately not "corrected" because the tests pin the current
+behaviour and the combat code still reads the old words; each is now visible in the exported records):
+
+* The attack-mode word the server used as action points (`cost`) is the weapon range; the real AP are exported as `ap`.
+* The original critter templates have level 1..N with about 20 HP at level 1; the server computes about 31 HP from its own formula
+  and the level. NPCs whose original level is above 1 get `level` and a pinned `max_hp`.
+* The original skill formulas use different SPECIAL weights than the shipped ones; both are in `skills.json` (`base` = in force,
+  `original` = reference).
+* Armor words and ammunition modifiers keep their original meaning in the data, but combat treats the armor words as per-damage-type
+  thresholds and ignores ammunition modifiers.
+* Weights come from `ItemWeights` of `config.lua`; the original item weights are not exported.
+
 ## 5. Validation
 
 At startup the whole folder is validated; **any error stops the server** (exit code 1) unless it is started with `--lenient`, in
@@ -205,7 +288,8 @@ data/perks/b.json: records[0].id: duplicate id 'X' (first defined in data/perks/
 ```
 Checked: JSON syntax, envelope and schema version, types and ranges, unknown fields, duplicate ids, unknown base / override ids,
 unknown items in loot / equipment / quest rewards, unknown maps in spawns, perk and trait references, perk requirement cycles, trait
-index collisions, stat names, Lua hook names (syntax only). Without game data (`--no-data`) only the structure and the references
+index collisions, stat names, Lua hook names (syntax only), and for dialogs: duplicate node / answer ids, `goto` targets, unknown
+quests / items / skills / stf ids / speakers, malformed conditions and effects (`docs/dialogs.md`). Without game data (`--no-data`) only the structure and the references
 between data files can be checked; item / npc records are then not applied and a warning says so.
 
 Command line (`f3_server`):
@@ -216,9 +300,11 @@ Command line (`f3_server`):
 | `--lenient` | errors become warnings, bad records are dropped |
 | `--validate-data` | validate `data/` (against the gamedata when present, `--no-data` to skip it), print the report, exit 0 (ok) / 1 (errors) / 2 (setup problem), do not start the server |
 | `--dev-commands` | allow `/reload` from player chat (implied by `--dev-kit`) |
+| `--export-data` | write the exported data files (see "Exporter"); also `--export-out`, `--force`, `--check` |
 
 `engine/tests/smoke_test.ps1` runs `f3_datatest` (loader unit tests on a synthetic gamedata), `--validate-data` on `data/` and on the
-deliberately broken `engine/tests/data_bad/`, and a server end-to-end test (`f3_gametest --content`).
+deliberately broken `engine/tests/data_bad/`, `--export-data --check` (the generated files are up to date), a server end-to-end
+test (`f3_gametest --content`) and one for the data dialogs (`f3_gametest --dialogs`).
 
 ## 6. Reloading
 
@@ -250,7 +336,11 @@ data text. The content sync (7) is built per player language. Details: `docs/loc
 ## 8. Known gaps
 
 * Effects cover the stats listed in 4; no SPECIAL modifiers, no conditional or per-weapon effects yet.
-* The shipped traits have no effects; the shipped perks are placeholder numbers.
+* The shipped traits have no effects; the shipped perks are placeholder numbers (`placeholder: true`).
+* Exported reference values (`ap`, `shots`, `damage_type`, ammunition modifiers, `held_model`, `model`) are not used by combat or the
+  client yet; the effective values are the old ones.
+* The exporter has no inverse for hand edits: to change a generated file, drop its `generator` key first or the next export
+  overwrites the edit.
 * Perk spending is a chat command (`/perk take`); the client has no perk window yet (the data is already synced to it).
 * NPC `spawns` run only at startup. Values copied into a critter at spawn time are not refreshed by `/reload`.
 * Item records cannot add a prototype class from scratch (new records clone an existing one) and cannot change a model or icon.

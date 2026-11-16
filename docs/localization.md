@@ -39,6 +39,7 @@ Chosen approach: **convention keys, data JSON stays English-only**. The English 
 | `trait.<id>.name`, `trait.<id>.desc` | trait |
 | `skill.<EnglishName>.name`, `skill.<EnglishName>.desc` | skill |
 | `quest.<id>.title`, `quest.<id>.text` | quest |
+| `dialog.<dialog>.<node>.text`, `dialog.<dialog>.<node>.<answer id>` | text of a node / answer of a data dialog (`a1`, `a2` ... without an answer id); see `docs/dialogs.md` |
 | `stf.<id>` | text of the original English.stf (1-based id; item / NPC names, UI labels) |
 
 The server resolves them per player when it syncs content definitions and when it writes quest texts; a missing key falls back to the English

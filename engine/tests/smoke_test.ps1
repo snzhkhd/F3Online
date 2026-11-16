@@ -100,6 +100,10 @@ $hasGame = Test-Path (Join-Path $DataDir "manifest.json")
 $vdata = if ($hasGame) { @("--data", $DataDir) } else { @("--no-data") }
 & $server --validate-data --content $contentDir @vdata
 if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: --validate-data rejects data/ (exit $LASTEXITCODE)"; $exit = 1 } else { Write-Host "ok:   --validate-data accepts data/" }
+if ($hasGame) {
+    & $server --export-data --check --content $contentDir --data $DataDir | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: --export-data --check: the exported data/ files differ from the original data (exit $LASTEXITCODE)"; $exit = 1 } else { Write-Host "ok:   data/ exports are up to date with the original data" }
+}
 $vout = & $server --validate-data --content $badDir @vdata
 $vcode = $LASTEXITCODE
 $vout | Write-Host
@@ -206,6 +210,8 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
     $cdata = Join-Path $env:TEMP ("f3_smoke_content_data_" + $PID)
     foreach ($d in $csaves, $cdata) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
     Copy-Item -Recurse $contentDir $cdata
+    # the test overrides records that the exporter also writes (Autoloader, Bobby): ids must be unique in data/, so the copy drops the generated files
+    foreach ($g in "items\weapons.json", "npcs\original.json") { Remove-Item -Force (Join-Path $cdata $g) -ErrorAction SilentlyContinue }
     $log5 = Join-Path $env:TEMP "f3_server_smoke_content.log"
     $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 4) --data `"$DataDir`" --content `"$cdata`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$csaves`" --seed $Seed --run-seconds 150" `
         -RedirectStandardOutput $log5 -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
@@ -219,6 +225,26 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
     Get-Content $log5 | Select-Object -Last 25
     if ($code -ne 0) { $exit = $code }
     foreach ($d in $csaves, $cdata) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
+
+    # ---- 5b. data dialogs end to end (data/dialogs): conditions, effects, quest/flag state on a throw-away copy of data/
+    $dsaves2 = Join-Path $env:TEMP ("f3_smoke_dlg_saves_" + $PID)
+    $ddata2 = Join-Path $env:TEMP ("f3_smoke_dlg_data_" + $PID)
+    foreach ($d in $dsaves2, $ddata2) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
+    Copy-Item -Recurse $contentDir $ddata2
+    $log5b = Join-Path $env:TEMP "f3_server_smoke_dialogs.log"
+    $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 12) --data `"$DataDir`" --content `"$ddata2`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$dsaves2`" --run-seconds 100" `
+        -RedirectStandardOutput $log5b -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
+    try {
+        Start-Sleep -Milliseconds 2500
+        & $gametest --port ($Port + 12) --dialogs
+        $code = $LASTEXITCODE
+    } finally {
+        if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+    }
+    Write-Host "---- server log (data dialogs) ----"
+    Get-Content $log5b | Select-Object -Last 8
+    if ($code -ne 0) { $exit = $code }
+    foreach ($d in $dsaves2, $ddata2) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
 
     # ---- 6. localization end to end: the language each player announces at login selects the language of server messages and
     # of the data names (perks / traits); /lang switches at run time; UTF-8 (Cyrillic) names and chat are validated in code points

@@ -1175,6 +1175,139 @@ static int RunContentTests(uint16_t port, const std::string& contentDir) {
     return g_failed ? 1 : 0;
 }
 
+// ---- data dialogs (data/dialogs): conditions, effects, quest/flag state, stf answers, Lua hook, attack/end
+static int RunDialogTests(uint16_t port) {
+    Bot a;
+    if (!a.Connect(port)) { std::printf("FAIL: cannot connect\n"); return 1; }
+    a.Login("DlgBot");
+    CHECK(WaitFor({&a}, 8, [&] { return a.loggedIn && a.mapInfoCount > 0 && a.haveStats; }), "login");
+    if (!a.loggedIn) return 1;
+    auto say = [&](const std::string& t) { net::ChatReq c; c.text = t; a.Send(net::Pack(c)); };
+    auto pause = [&](double s) { WaitFor({&a}, s, [] { return false; }); };
+    auto gvar = [&](const char* name) -> double {
+        size_t n = a.chat.size();
+        say(std::string("/gvar ") + name);
+        double v = -1;
+        WaitFor({&a}, 3, [&] {
+            for (size_t i = n; i < a.chat.size(); ++i) {
+                size_t p = a.chat[i].find(std::string(name) + " = ");
+                if (p != std::string::npos) { v = std::atof(a.chat[i].c_str() + p + std::strlen(name) + 3); return true; }
+            }
+            return false;
+        });
+        return v;
+    };
+    auto findNpc = [&](const char* name) -> CritterId { for (auto& [id, c] : a.critters) if (c.kind == CritterKind::Npc && c.name == name) return id; return 0; };
+    auto hasReply = [](const gnet::DialogNode& n, const char* part) { for (auto& r : n.replies) if (r.text.find(part) != std::string::npos) return true; return false; };
+    auto textHas = [&](const char* part) { return !a.dlgNodes.empty() && a.dlgNodes.back().text.find(part) != std::string::npos; };
+    auto talk = [&](CritterId npc) {
+        size_t n = a.dlgNodes.size();
+        gnet::Talk t; t.critter = npc;
+        a.Send(gnet::PackG(t));
+        return WaitFor({&a}, 5, [&] { return a.dlgNodes.size() > n; });
+    };
+    auto choose = [&](int idx) {
+        size_t n = a.dlgNodes.size(); int c0 = a.dlgCloses;
+        gnet::DialogChoose c; c.index = (uint8_t)idx;
+        a.Send(gnet::PackG(c));
+        return WaitFor({&a}, 5, [&] { return a.dlgNodes.size() > n || a.dlgCloses > c0; });
+    };
+    auto closeDlg = [&] { int c0 = a.dlgCloses; gnet::DialogCloseReq cl; a.Send(gnet::PackG(cl)); WaitFor({&a}, 3, [&] { return a.dlgCloses > c0; }); };
+    auto questState = [&]() -> int { PipOp(a, gnet::PipOp::Request); pause(0.6); auto* q = FindQuest(a, "scrapper_toolkit"); return q ? (int)q->state : -1; };
+    auto invCount = [&](const char* part) { int n = 0; for (auto& e : a.inv) if (e.name.find(part) != std::string::npos) n += e.count; return n; };
+
+    say("/amxattacks off");
+    say("/near Joe");
+    pause(1.0);
+    const CritterId joe = findNpc("Scrapper Joe");
+    CHECK(joe != 0, "Scrapper Joe (data NPC, dialog junktown_scrapper) is in view");
+    if (!joe) return 1;
+
+    // greeting: the skill-gated answer is hidden at a low Barter, the others are shown
+    CHECK(talk(joe) && !a.dlgOpens.empty() && a.dlgOpens.back().name == "Scrapper Joe", "Talk opens the data dialog with the speaker name");
+    const gnet::DialogNode g1 = a.dlgNodes.back();
+    CHECK(textHas("Scrap is the only currency"), "node text comes from the data record");
+    CHECK(g1.replies.size() == 3 && !hasReply(g1, "[Barter 30]"), "skill condition hides the Barter answer (%zu replies)", g1.replies.size());
+    CHECK(questState() == -1, "quest not started before the dialog");
+    CHECK(choose(0) && textHas("Name is Joe"), "goto moves to the next node");
+    closeDlg();
+    CHECK(questState() == -1, "browsing does not start the quest");
+
+    // level condition: the gated answer appears after the level-up
+    say("/givexp 3000");
+    pause(1.0);
+    CHECK(talk(joe) && textHas("Scrap is the only currency"), "second Talk starts at the greeting again");
+    CHECK(choose(1) && textHas("tool kit"), "answer 'looking for work' leads to the job node");
+    CHECK(questState() == 0, "quest effect added scrapper_toolkit (active)");
+    CHECK(gvar("scrapper_met") == 1, "flag effect set scrapper_met");
+    CHECK(hasReply(a.dlgNodes.back(), "[Level 2]"), "stat:level condition passes at level >= 2");
+    const int fak0 = invCount("First Aid");
+    CHECK(choose(0) && textHas("first aid kit"), "advance answer leads to advance_given");
+    pause(0.8);
+    CHECK(invCount("First Aid") == fak0 + 1, "give effect added a First Aid Kit (%d -> %d)", fak0, invCount("First Aid"));
+    CHECK(gvar("scrapper_advance") == 1, "flag effect set scrapper_advance");
+    CHECK(a.dlgNodes.back().replies.size() == 1, "a node without answers offers one way out");
+    {
+        int c0 = a.dlgCloses;
+        CHECK(choose(0) && a.dlgCloses > c0, "the leave reply ends the dialog");
+    }
+
+    // quest routing: an active quest starts at the reminder; the item condition hides the hand-in answer
+    CHECK(talk(joe) && textHas("Do you have my tool kit"), "start route by quest state (active -> reminder)");
+    CHECK(a.dlgNodes.back().replies.size() == 1 && !hasReply(a.dlgNodes.back(), "Here it is"), "item condition hides the hand-in answer without the kit");
+    closeDlg();
+    say("/give KitsTool_Kit.ITM");
+    pause(1.0);
+    CHECK(invCount("Tool Kit") >= 1, "dev kit gave a Tool Kit");
+    CHECK(talk(joe) && hasReply(a.dlgNodes.back(), "Here it is"), "item condition shows the hand-in answer once the kit is carried");
+    const int tk0 = invCount("Tool Kit");
+    int ri = 0;
+    for (size_t i = 0; i < a.dlgNodes.back().replies.size(); ++i) if (a.dlgNodes.back().replies[i].text.find("Here it is") != std::string::npos) ri = (int)i;
+    CHECK(choose(ri) && textHas("That is my kit"), "hand-in answer leads to thanks");
+    pause(0.8);
+    CHECK(invCount("Tool Kit") == tk0 - 1, "take effect removed the kit (%d -> %d)", tk0, invCount("Tool Kit"));
+    CHECK(questState() == 1, "quest effect completed the quest");
+    CHECK(gvar("scrapper_done") == 1, "flag effect stored an integer value");
+    closeDlg();
+    CHECK(talk(joe) && textHas("Thanks again"), "start route by quest state (done -> after)");
+    closeDlg();
+
+    // second dialog: stf answers, 'any' condition, Lua hook + attack effect
+    say("/near Drifter");
+    pause(1.0);
+    const CritterId drifter = findNpc("Drifter");
+    CHECK(drifter != 0, "Drifter (dialog junktown_drifter) is in view");
+    if (drifter) {
+        CHECK(talk(drifter), "drifter dialog opens");
+        const gnet::DialogNode d1 = a.dlgNodes.back();
+        CHECK(d1.replies.size() == 3 && !d1.replies[0].text.empty() && !d1.replies[1].text.empty(), "stf answers resolve to original text ('%s' / '%s'), 'any' condition passes at level 3 (%zu replies)",
+              d1.replies.size() > 0 ? d1.replies[0].text.c_str() : "", d1.replies.size() > 1 ? d1.replies[1].text.c_str() : "", d1.replies.size());
+        if (d1.replies.size() == 3) {
+            CHECK(choose(0) && textHas("Psst"), "trade stub keeps the dialog open (goto the same node)");
+            a.chat.clear();
+            int c0 = a.dlgCloses;
+            choose(2);
+            pause(1.0);
+            CHECK(AnyChat(a, 0, "hand drops to his belt"), "lua effect ran dlg_demo_hook");
+            CHECK(a.dlgCloses > c0, "the attack effect closed the dialog");
+            CHECK(gvar("drifter_robbed") == 1, "flag effect ahead of the attack was applied");
+        }
+    }
+
+    // third dialog: 'any' start route and a 'not' condition
+    say("/near Mara");
+    pause(1.0);
+    const CritterId mara = findNpc("Old Mara");
+    CHECK(mara != 0, "Old Mara (dialog junktown_guide) is in view");
+    if (mara) {
+        CHECK(talk(mara) && textHas("Seen you around"), "start route with an 'any' condition (level >= 3)");
+        CHECK(hasReply(a.dlgNodes.back(), "Remind me"), "'not flag' condition shows the answer while the flag is unset");
+        closeDlg();
+    }
+    std::printf(g_failed ? "DIALOG TESTS FAILED (%d)\n" : "dialog tests passed\n", g_failed);
+    return g_failed ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
     uint16_t port = 4048;
     std::string expectMap = "00_03_Tutorial_Junktown";
@@ -1196,6 +1329,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--tutorial")) return RunTutorialTests(port);
     for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--locale")) return RunLocaleTests(port);
     for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--content")) return RunContentTests(port, argv[i + 1]);
+    for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--dialogs")) return RunDialogTests(port);
 
     Bot a, b;
     if (!a.Connect(port) || !b.Connect(port)) { std::printf("FAIL: cannot connect to 127.0.0.1:%u\n", port); return 1; }
