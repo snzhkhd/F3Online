@@ -51,6 +51,13 @@ static J attackModeJson(const Gwam& g) {
     j.set("ap", J::I(g.m[6]));            // action cost (guess)
     j.set("dmg_min", J::I(g.m[9]));       // melee/unarmed damage range (guess, matches animal data)
     j.set("dmg_max", J::I(g.m[10]));
+    // fields of the original GWAM record (docs/research/vbdecomp-findings.md section 3): word 6 is the RANGE (our "ap" above is that word),
+    // the action points are the later `actionPoints` field
+    j.set("action_points", J::I(s32(g.bb)));
+    j.set("damage_type", J::I(s32(g.m[1])));
+    j.set("shots", J::I(s32(g.m[2])));
+    j.set("called_shot", J::I(g.b1));
+    j.set("consumed", J::I(g.b2));
     J raw = J::A();
     for (int i = 0; i < 11; i++) raw.add(J::I(s32(g.m[i])));
     j.set("raw", raw);
@@ -70,6 +77,7 @@ static J protoJson(const std::string& key, const std::string& type, const Een& e
         j.set("name", J::S(stf.get(e.gent[0])));
         j.set("desc", J::S(stf.get(e.gent[1])));
         j.set("name2", J::S(stf.get(e.gent[2])));
+        if (type == "CRT") j.set("max_health", J::I(s32(e.gent[6])));   // GENT v1 maxHealth (15 for every critter template, 100 for Default_PC)
     }
     j.set("team", J::I(e.ov.team));
     if (!e.ov.aiScript.empty()) j.set("script", J::S(e.ov.aiScript));

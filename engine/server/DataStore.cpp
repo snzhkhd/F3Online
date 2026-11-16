@@ -2,6 +2,7 @@
 #include "Content.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -56,6 +57,9 @@ static AttackModeDef ParseMode(const json& m) {
     a.ap = m.value("ap", 10);
     a.dmgMin = m.value("dmg_min", 0);
     a.dmgMax = m.value("dmg_max", 0);
+    a.apRef = m.value("action_points", -1);
+    a.shots = m.value("shots", 0);
+    a.damageType = m.value("damage_type", 0);
     return a;
 }
 
@@ -112,6 +116,21 @@ bool DataStore::Load(const fs::path& dir, std::string& err) {
             if (c.contains("attack_modes"))
                 for (auto& m : c["attack_modes"]) p.modes.push_back(ParseMode(m));
             p.equipment = StrArray(c, "equipment");
+            if (c.contains("stat_words") && c["stat_words"].is_array() && !c["stat_words"].empty() && c["stat_words"][0].is_number_integer())
+                p.origLevel = std::max(1, c["stat_words"][0].get<int>());
+        }
+        if (j.contains("item") && j["item"].is_object() && j["item"].value("raw_hex", std::string()).size() > 8 && (p.cls == PClass::Weapon || p.cls == PClass::Armor)) {
+            // GITM: u16 length + name strings (held / worn models); the first one that looks like a resource name
+            const std::string hx = j["item"].value("raw_hex", std::string());
+            std::vector<uint8_t> by;
+            for (size_t i = 0; i + 1 < hx.size(); i += 2) by.push_back(static_cast<uint8_t>(std::strtoul(hx.substr(i, 2).c_str(), nullptr, 16)));
+            for (size_t i = 0; i + 2 < by.size() && p.heldModel.empty(); ++i) {
+                const size_t len = by[i] | (by[i + 1] << 8);
+                if (len < 4 || len > 63 || i + 2 + len > by.size()) continue;
+                bool ok = true;
+                for (size_t k = 0; k < len && ok; ++k) { const uint8_t ch = by[i + 2 + k]; ok = std::isalnum(ch) || ch == '_'; }
+                if (ok) p.heldModel.assign(by.begin() + i + 2, by.begin() + i + 2 + len);
+            }
         }
         if (j.contains("weapon")) {
             const json& w = j["weapon"];
@@ -132,6 +151,8 @@ bool DataStore::Load(const fs::path& dir, std::string& err) {
             p.ammoCaliber = a.value("caliber", -1);
             p.ammoDmgMin = a.value("dmg_min", 0);
             p.ammoDmgMax = a.value("dmg_max", 0);
+            p.ammoArmorAdj = a.value("mod", 0);
+            if (a.contains("raw") && a["raw"].is_array() && a["raw"].size() > 4 && a["raw"][4].is_number_integer()) p.ammoAccuracyAdj = a["raw"][4].get<int>();
         }
         switch (p.cls) {  // no weights in the decoded data yet: plausible defaults
             case PClass::Weapon: p.weight = 4; break;

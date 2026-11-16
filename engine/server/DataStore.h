@@ -18,6 +18,10 @@ struct AttackModeDef {
     int type = 0;  // 2 = aimed/single shot, 1 = burst, 6/8/9 = melee/unarmed styles (observed, semantics guessed)
     int ap = 10;   // raw "cost" word; the server converts it to a cooldown (see Game.cpp)
     int dmgMin = 0, dmgMax = 0;
+    // reference values of the original GWAM record (see docs/data-format.md, 3.4); the combat code does not use them yet
+    int apRef = -1;       // original action points of the mode (-1: not in the imported data)
+    int shots = 0;        // shots per use (burst)
+    int damageType = 0;   // 0 ballistic, 1 biological, 2 electrical, 3 EMP, 4 normal, 5 heat
 };
 
 struct Proto {
@@ -46,6 +50,9 @@ struct Proto {
     // ammo
     int ammoCaliber = -1, ammoDmgMin = 0, ammoDmgMax = 0;
     int weight = 1;
+    std::string heldModel;     // model held (weapons) / worn on the body (armor), first resource name of the item record; reference
+    int ammoArmorAdj = 0, ammoAccuracyAdj = 0;   // original ammo modifiers (armor / accuracy adjustment); reference, not used by combat yet
+    int origLevel = 1;         // critters: level of the original template (GetLevel); the HP formula uses `level`
     bool headArmor = false;  // armor worn on the head (helmets) instead of the body
     // ---- data layer (data/*.json, Content.cpp); defaults keep the behaviour of the plain original prototype
     int weightOverride = -1;   // >= 0: unit weight from data/items (wins over config.lua ItemWeights)
