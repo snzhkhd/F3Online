@@ -18,7 +18,7 @@ $saves = Join-Path $env:TEMP ("f3_smoke_saves_" + $PID)   # throw-away account d
 if (Test-Path $saves) { Remove-Item -Recurse -Force $saves }
 
 function Run-Server([string]$extra, [string]$log, [int]$port) {
-    Start-Process -FilePath $server -ArgumentList "--local --port $port --scripts `"$ScriptsDir`" --saves `"$saves`" $extra --run-seconds 90" `
+    Start-Process -FilePath $server -ArgumentList "--local --port $port --scripts `"$ScriptsDir`" --saves `"$saves`" $extra --run-seconds 150" `
         -RedirectStandardOutput $log -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
 }
 
@@ -76,7 +76,7 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
     if (Test-Path $dsaves) { Remove-Item -Recurse -Force $dsaves }
     foreach ($phase in 1, 2) {
         $log4 = Join-Path $env:TEMP "f3_server_smoke_doors$phase.log"
-        $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 3) --data `"$DataDir`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$dsaves`" --run-seconds 90" `
+        $p = Start-Process -FilePath $server -ArgumentList "--local --port $($Port + 3) --data `"$DataDir`" --dev-kit --scripts `"$ScriptsDir`" --saves `"$dsaves`" --run-seconds 150" `
             -RedirectStandardOutput $log4 -RedirectStandardInput $empty -PassThru -WindowStyle Hidden
         try {
             Start-Sleep -Milliseconds 2500

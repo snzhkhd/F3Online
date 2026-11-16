@@ -670,16 +670,82 @@ static int RunDoorTests(uint16_t port, int phase, const std::string& stateFile) 
         CHECK(is(A, 0, 0, 0), "state Closed: open 0, locked 0, flags 0");
         CHECK(!Walkable(a, doorAx, doorAy), "a closed door blocks its doorway cell %d,%d in the map grid", doorAx, doorAy);
 
-        // ---- walking through a closed unlocked door opens it on the way
+        // ---- the player does NOT open doors by walking into them (original GameActionMoveTo::OnMoved queues the operate action only for critters
+        // outside the party): the path leads through the closed unlocked door, the player stops in front of it and uses it (PlayerAutoOpenDoors = 0)
         net::MoveToReq mv; mv.x = 162; mv.y = 220;
         a.Send(net::Pack(mv));
-        CHECK(WaitFor({&a}, 12, [&] { return a.pos == TilePos{162, 220}; }), "pathfinding goes through a closed unlocked door (bot at %d,%d)", a.pos.x, a.pos.y);
-        CHECK(st(A).open == 1, "the door was opened by walking into it (state Open)");
+        WaitFor({&a}, 12, [&] { return a.pos.x >= 148; });
+        idle(2.5);
+        CHECK(a.pos.x >= 148 && a.pos.x < doorAx && st(A).open == 0, "the player stops in front of a closed unlocked door and does not open it by walking (bot at %d,%d, door open %d)", a.pos.x, a.pos.y, st(A).open);
+        use(A);
+        CHECK(WaitFor({&a}, 8, [&] { return st(A).open == 1; }), "Use opens the closed door");
         CHECK(Walkable(a, doorAx, doorAy), "the open door released its doorway cell (CellsSet)");
+        a.Send(net::Pack(mv));
+        CHECK(WaitFor({&a}, 12, [&] { return a.pos == TilePos{162, 220}; }), "the player walks through the opened door (bot at %d,%d)", a.pos.x, a.pos.y);
         idle(0.8);
         use(A);   // the bot stands east of it: Use closes it again
         CHECK(WaitFor({&a}, 8, [&] { return st(A).open == 0; }), "Use closes an open door");
         CHECK(!Walkable(a, doorAx, doorAy), "the closed door blocks again");
+
+        // ---- NPCs open doors on their path (original: GameActionMoveTo inserts the operate action for non-party critters), native move_to and
+        // AMX A_MoveToPosition alike; a locked door blocks them unless they carry the key
+        {
+            size_t n1 = a.chat.size();
+            say("/npcspawn 145 220");
+            CHECK(WaitFor({&a}, 4, [&] { return said(n1, "npc "); }), "test NPC spawned west of the door");
+            unsigned npc = 0;
+            for (size_t i = n1; i < a.chat.size(); ++i) if (a.chat[i].rfind("npc ", 0) == 0) npc = static_cast<unsigned>(std::atoi(a.chat[i].c_str() + 4));
+            CHECK(npc != 0, "NPC id %u", npc);
+            if (npc) {
+                auto npcX = [&]() { return a.critters.count(npc) ? (int)a.critters[npc].x : -1; };
+                auto npcGo = [&](int x, int y) { say("/npcgo " + std::to_string(npc) + " " + std::to_string(x) + " " + std::to_string(y)); };
+                CHECK(WaitFor({&a}, 4, [&] { return npcX() >= 0; }), "the bot sees the NPC (at %d)", npcX());
+                // a) AI / native movement through the closed unlocked door
+                CHECK(st(A).open == 0 && !Walkable(a, doorAx, doorAy), "door closed before the NPC walks");
+                npcGo(160, 220);
+                CHECK(WaitFor({&a}, 14, [&] { return npcX() >= 158; }), "an NPC walks through a closed unlocked door (native move_to; NPC at %d)", npcX());
+                CHECK(st(A).open == 1, "the NPC opened the door on its way (state Open)");
+                idle(0.8);
+                // b) locked, no key: the NPC cannot go back
+                use(A);
+                CHECK(WaitFor({&a}, 10, [&] { return st(A).open == 0; }), "door closed again behind the NPC");
+                say("/lock " + std::to_string(A) + " locked=1 key=ItemsKeystest");
+                CHECK(WaitFor({&a}, 4, [&] { return is(A, 0, 1, 0); }), "door locked (key ItemsKeystest)");
+                idle(0.8);
+                npcGo(145, 220);
+                idle(5.0);
+                CHECK(npcX() > doorAx && st(A).open == 0 && st(A).locked == 1, "a locked door blocks the NPC (NPC at %d, door closed and locked)", npcX());
+                // c) with the key in its inventory the NPC unlocks and opens it
+                say("/npckey " + std::to_string(npc) + " ItemsKeystest.ITM");
+                idle(1.0);
+                npcGo(145, 220);
+                CHECK(WaitFor({&a}, 14, [&] { return npcX() > 0 && npcX() <= 148; }), "an NPC carrying the key walks through the locked door (NPC at %d)", npcX());
+                CHECK(st(A).open == 1 && st(A).locked == 0, "the key unlocked and opened it (open %u, locked %u)", st(A).open, st(A).locked);
+                idle(0.8);
+                // d) AMX script movement (A_MoveToPosition queues the same StartMove) through a closed unlocked door
+                use(A);
+                CHECK(WaitFor({&a}, 10, [&] { return st(A).open == 0; }), "door closed again");
+                say("/lock " + std::to_string(A) + " locked=0 key=");
+                CHECK(WaitFor({&a}, 4, [&] { return is(A, 0, 0, 0); }), "door unlocked");
+                idle(0.8);
+                say("/amxnative owner=" + std::to_string(npc) + "; A_MoveToPosition " + std::to_string(npc) + " p" + std::to_string(a.myId) + " 0 0");
+                CHECK(WaitFor({&a}, 16, [&] { return npcX() > doorAx + 2; }), "an AMX-driven NPC (A_MoveToPosition) walks through a closed unlocked door (NPC at %d)", npcX());
+                CHECK(st(A).open == 1, "the AMX NPC opened the door");
+                idle(0.8);
+                // e) the NPC holds ItemsKeystest, the door now wants another key: closed to it
+                use(A);
+                WaitFor({&a}, 10, [&] { return st(A).open == 0; });
+                say("/lock " + std::to_string(A) + " locked=1 key=NoSuchKey");
+                CHECK(WaitFor({&a}, 4, [&] { return is(A, 0, 1, 0); }), "door locked with a key the NPC does not have");
+                idle(0.8);
+                npcGo(145, 220);
+                idle(5.0);
+                CHECK(npcX() > doorAx && st(A).open == 0, "a door locked with another key blocks the NPC (NPC at %d)", npcX());
+                say("/lock " + std::to_string(A) + " locked=0 key=");
+                CHECK(WaitFor({&a}, 4, [&] { return is(A, 0, 0, 0); }), "door unlocked again for the player tests");
+                idle(0.8);
+            }
+        }
 
         // ---- locked door: Use refuses, pathing is blocked
         say("/lock " + std::to_string(A) + " locked=1");
@@ -1697,7 +1763,29 @@ int main(int argc, char** argv) {
         net::MoveToReq mv; mv.x = 166; mv.y = 62;
         a.Send(net::Pack(mv));
         maps = a.mapInfoCount;
-        bool ok = WaitFor({&a, &b}, 30, [&] { return a.mapInfoCount > maps; });
+        bool ok = false;
+        for (int attempt = 0; attempt < 4 && !ok; ++attempt) {
+            TilePos lastP = a.pos; double lastT = Bot::LocalMs();   // done when the map changed or the bot stood still for 3 s
+            ok = WaitFor({&a, &b}, 30, [&] {
+                if (a.mapInfoCount > maps) return true;
+                if (a.pos != lastP) { lastP = a.pos; lastT = Bot::LocalMs(); }
+                return Bot::LocalMs() - lastT > 3000;
+            }) && a.mapInfoCount > maps;
+            if (ok) break;
+            // the player does not open doors by walking (original behaviour): when the walk stops at a closed door, use the nearest one and go on
+            ItemId nearDoor = 0; int nd = 99;
+            for (auto& [id, o] : a.objInfo)
+                if (o.kind == gnet::ObjectKind::Door && o.open == 0 && a.items.count(id)) {
+                    int d = TileDist({a.items[id].x, a.items[id].y}, a.pos);
+                    if (d < nd) { nd = d; nearDoor = id; }
+                }
+            std::printf("note: transition walk idle at %d,%d; nearest closed door %u at %d cells\n", a.pos.x, a.pos.y, nearDoor, nd);
+            if (!nearDoor || nd > 12) break;
+            std::printf("note: walk to the transition stopped at closed door %u (%d cells); using it\n", nearDoor, nd);
+            gnet::Use u; u.id = nearDoor; a.Send(gnet::PackG(u));
+            WaitFor({&a, &b}, 3, [&] { return a.objInfo[nearDoor].open == 1; });
+            a.Send(net::Pack(mv));
+        }
         CHECK(ok && a.map.name == "00_04_Tutorial_Vault", "walking into the transition region loaded map '%s'", a.map.name.c_str());
         CHECK(a.map.width == 384 && a.map.height == 334, "vault grid is %dx%d (expect 384x334)", a.map.width, a.map.height);
         WaitFor({&a}, 1, [] { return false; });

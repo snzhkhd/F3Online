@@ -50,6 +50,7 @@ struct GameConfig {
     int LockpickNeedsKit = 0;                 // 1: a Security Kit item is required to pick (original skill text: "requires lockpicks")
     int LockpickXp = 10;                      // xp for a picked lock
     int ForceLockRoll = -1;                   // dev/test: 1 = every pick succeeds, 0 = every pick fails, -1 = random
+    int PlayerAutoOpenDoors = 0;              // 1: players open operable doors by walking into them; 0 (original): only NPCs do, a player stops at the door and uses it
     int DoorOpenRange = 3;                    // cells from the door (nearest doorway cell) to operate it / open a container
     int KillXpBase = 30, KillXpPerHp = 8;              // xp for killing an NPC unless XpByProto has its prototype
     std::map<std::string, int> XpByProto;

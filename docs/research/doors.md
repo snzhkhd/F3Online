@@ -10,7 +10,12 @@ Sources: `_work/vbdecomp-main/repos/openvb/src/game` (GameDoor, GameContainer, p
   (GCON has one more trailing string). In the shipped data every `lockDC` is 0, only `Door02` is locked, key strings are empty.
 * **Collision / pathing / LOS**: a closed door occupies its footprint grid (the `0x1b` doorway cells); opening removes it, so
   walking, projectiles and line of sight follow the state. Path cost of a door the walker cannot operate is +32765 (effectively a
-  wall); a walker that can operate it (unlocked, or has the key) paths through, and ActionMoveTo inserts an operate action.
+  wall); a walker that can operate it (unlocked, or has the key) paths through.
+* **Who opens doors by walking** (`GameActionMoveTo::OnMoved`, decompiled): when the walker's footprint meets a closed door and the route crosses the door plane, the
+  operate-door action (`GameActionOperateDoor`, Wait 1000, MoveTo retry) is queued only `if (!g_World->party->Contains(owner))`. So **NPCs / AI / AMX-driven
+  movement open doors on their path (and wait about a second), but the player and party members do not**: they just stop (`StopMoving`, no retry) in front of the door
+  and open it with a click. Locked doors: `GameDoor::CanOperate` (locked -> inventory has `keyResource`) feeds the +32765 path cost, so a locked door is avoided
+  unless it is the only way; the original passes the *door* instead of the walker to `CanOperate` (decompiled quirk), F3Online checks the walker.
 * **Operate** order: the script veto (`OnOpen` / `OnClose`, result 0 refuses) runs before the lock check; a locked door opens only
   if the actor carries the key (the key is not consumed). Messages: STF 1299 (locked), 1358 (needs the %s key), 672 (unlocked).
 * **Containers** toggle open with no lock logic in the original; loot only when open. Natives: `LockDoor`, `UnlockDoor`, `IsLocked`
@@ -29,8 +34,10 @@ drawn (not fogged). Result: "closed" doors you can walk through, doors that vani
   Operate, Lockpick, use, passability and persistence.
 * **Flags** (`LockFlag`): `NoOpen 1` (cannot be opened), `NoPick 2` (cannot be picked), `Jammed 4`, `KeyOnly 8` (key required, no pick).
 * **Blocking**: a closed door blocks its footprint cells in `Map::blocked` (also LOS); locked doors block like walls.
-  Pathfinding passes through closed doors the walker can operate; doors auto-open along the path (`OpenDoorsAhead`).
-  No auto-close.
+  Pathfinding passes through closed doors the walker can operate. NPCs (native AI, Lua `move_to`, AMX `A_MoveTo*`, wander, combat chase: all go through
+  `Server::StartMove`) open them along the path (`OpenDoorsAhead`, `OpenDoorAt`) when they may (unlocked, or the key item is in their inventory); locked doors without the
+  key block them like walls. **Players do not open doors by walking** (config `PlayerAutoOpenDoors = 0`, like the original): the walk stops in front of the door, a click
+  (`C2S_Use`) opens it. `PlayerAutoOpenDoors = 1` restores the old auto-open. No auto-close.
 * **Operate order**: key unlock, then the AMX `OnOpen` veto (the lock is restored on veto), then the Lua `door_use` hook.
 * **Lockpick**: `UseSkill(Security)` on a locked door/container; chance `clamp(Security - lockDC, LockpickMinChance, LockpickMaxChance)`,
   optional kit (`LockpickNeedsKit`), XP (`LockpickXp`), `ForceLockRoll` for tests. Hook `lockpick_chance`.
@@ -44,7 +51,7 @@ drawn (not fogged). Result: "closed" doors you can walk through, doors that vani
 * **Lua**: `get_lock, set_lock, operate_object, set_lock_roll, save_world`, `LOCK_*` constants, hooks `door_use`, `lock_changed`,
   `lockpick_chance`; dev commands `/doors /lock /lockroll /saveworld /give`, `/tp [map] x y`. AMX: `GetLockDC`.
 * **Config** (`scripts/config.lua`): `LockDefaultDC, LockpickMinChance, LockpickMaxChance, LockpickNeedsKit, LockpickXp, ForceLockRoll, DoorOpenRange`.
-* **Tests**: `f3_gametest --doors 1|2` (state transitions, locked door blocks path, lockpick success and failure, key, container
+* **Tests**: `f3_gametest --doors 1|2` (player stops at a closed door, an NPC (dev `/npcspawn /npcgo /npckey`) walks through an unlocked one, is blocked by a locked one, passes with the key, AMX `A_MoveToPosition` too; state transitions, locked door blocks path, lockpick success and failure, key, container
   lock, persistence across a server restart); part 4 of `engine/tests/smoke_test.ps1`.
 
 ## Known gaps

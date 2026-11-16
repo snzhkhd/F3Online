@@ -292,6 +292,31 @@ function commands.lockroll(c, arg)
     set_lock_roll(arg == "1" and 1 or arg == "0" and 0 or -1)
     c:tell("lockpick rolls: " .. (arg == "1" and "always succeed" or arg == "0" and "always fail" or "random"))
 end
+-- dev (--dev-kit, door tests): /npcspawn x y spawns a stationary NPC called DoorNpc on your map, /npcgo <id> x y walks it (native move_to, the same
+-- StartMove the AI uses), /npckey <id> <proto key> gives it an item (a door key).
+local function dev_npc(c, id)
+    local n = get_critter(tonumber(id) or 0)
+    if not n or not n:is_npc() or n.name ~= "DoorNpc" then c:tell("no such DoorNpc"); return nil end
+    return n
+end
+function commands.npcspawn(c, arg)
+    if not dev_kit() then c:tell("npcspawn needs a --dev-kit server"); return end
+    local x, y = (arg or ""):match("^(%d+)%s+(%d+)")
+    local n = x and spawn_npc(c.map_id, "DoorNpc", tonumber(x), tonumber(y), "guard")
+    if n then c:tell(string.format("npc %d at %d,%d", n.id, n.x, n.y)) else c:tell("npcspawn failed") end
+end
+function commands.npcgo(c, arg)
+    if not dev_kit() then c:tell("npcgo needs a --dev-kit server"); return end
+    local id, x, y = (arg or ""):match("^(%d+)%s+(%d+)%s+(%d+)")
+    local n = id and dev_npc(c, id)
+    if n then c:tell("npcgo " .. tostring(n:move_to(tonumber(x), tonumber(y)))) end
+end
+function commands.npckey(c, arg)
+    if not dev_kit() then c:tell("npckey needs a --dev-kit server"); return end
+    local id, key = (arg or ""):match("^(%d+)%s+(%S+)")
+    local n = id and dev_npc(c, id)
+    if n then c:tell("npckey " .. tostring(n:give(key, 1))) end
+end
 function commands.saveworld(c)
     if not dev_kit() then c:tell("saveworld needs a --dev-kit server"); return end
     save_world(); c:tell("world state saved")

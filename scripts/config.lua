@@ -57,6 +57,7 @@ config = {
     LockpickMaxChance         = 95,
     LockpickNeedsKit          = 0,     -- 1: a Security Kit item is required (original skill text "requires lockpicks")
     LockpickXp                = 10,    -- xp for a picked lock
+    PlayerAutoOpenDoors       = 0,     -- 0 = like the original: only NPCs open doors on their path (GameActionMoveTo::OnMoved skips the party), the player stops and uses the door; 1 = players too
     DoorOpenRange             = 3,     -- cells (to the nearest doorway cell) from which a door / container can be operated
     SkillUseRange             = 5,     -- cells: skill use on a critter / object farther away is refused (no AP spent)
     TagBonus                  = 20,    -- added to a tag skill

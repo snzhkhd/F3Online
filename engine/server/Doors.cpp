@@ -257,6 +257,12 @@ void Server::OpenDoorAt(Critter& c, Map& m, int x, int y, bool report) {
     auto it = m.items.find(dc->second);
     if (it == m.items.end() || it->second.open) return;
     Item& d = it->second;
+    // original GameActionMoveTo::OnMoved: the operate-door action is only queued for critters outside the player's party; a party member
+    // just stops in front of the door (it opens it with a click)
+    if (c.IsPlayer() && !rt_.PlayerAutoOpenDoors) {
+        if (report && !CanOperate(c, d)) ReportOperate(&c, d, d.lockFlags & kLockNoOpen ? OperateResult::NoOpen : d.lockFlags & kLockJammed ? OperateResult::Jammed : OperateResult::Locked);
+        return;
+    }
     if (CanOperate(c, d)) { ReportOperate(&c, d, Operate(&c, m, d, 1)); return; }
     if (report) ReportOperate(&c, d, d.lockFlags & kLockNoOpen ? OperateResult::NoOpen : d.lockFlags & kLockJammed ? OperateResult::Jammed : OperateResult::Locked);
 }
@@ -264,6 +270,7 @@ void Server::OpenDoorAt(Critter& c, Map& m, int x, int y, bool report) {
 // Opens the closed doors that lie on the next ~3 cells of the critter's path so they are open (and animated) when it gets there.
 void Server::OpenDoorsAhead(Critter& c, Map& m) {
     if (!c.mv.active || m.doorCell.empty()) return;
+    if (c.IsPlayer() && !rt_.PlayerAutoOpenDoors) return;
     float px = c.fx, py = c.fy, left = 3.0f;
     for (size_t seg = c.mv.seg; seg + 1 < c.mv.pts.size() && left > 0; ++seg) {
         const float bx = c.mv.pts[seg + 1].x, by = c.mv.pts[seg + 1].y;

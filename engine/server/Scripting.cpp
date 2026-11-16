@@ -387,7 +387,7 @@ void Scripting::ApplyConfig(sol::state_view L) {
     F3_CFG_INT(RequireCharacterCreation); F3_CFG_INT(SpecialBase); F3_CFG_INT(CharPoints); F3_CFG_INT(SpecialMin); F3_CFG_INT(SpecialMax);
     F3_CFG_INT(TagCount); F3_CFG_INT(TraitMax); F3_CFG_INT(SkillUseRange); F3_CFG_INT(TagBonus); F3_CFG_INT(SkillMax); F3_CFG_INT(StartSkillPoints);
     F3_CFG_INT(ViewBase); F3_CFG_INT(ViewPerPerception); F3_CFG_INT(SkillRateBase); F3_CFG_INT(SkillRatePerInt); F3_CFG_INT(XpBase); F3_CFG_INT(MaxLevel); F3_CFG_INT(PerkRate);
-    F3_CFG_INT(LockDefaultDC); F3_CFG_INT(LockpickMinChance); F3_CFG_INT(LockpickMaxChance); F3_CFG_INT(LockpickNeedsKit); F3_CFG_INT(LockpickXp); F3_CFG_INT(DoorOpenRange);
+    F3_CFG_INT(LockDefaultDC); F3_CFG_INT(LockpickMinChance); F3_CFG_INT(LockpickMaxChance); F3_CFG_INT(LockpickNeedsKit); F3_CFG_INT(LockpickXp); F3_CFG_INT(DoorOpenRange); F3_CFG_INT(PlayerAutoOpenDoors);
     F3_CFG_INT(HpBase); F3_CFG_INT(HpPerLevelBase); F3_CFG_INT(KillXpBase); F3_CFG_INT(KillXpPerHp);
 #undef F3_CFG_INT
 #undef F3_CFG_NUM
