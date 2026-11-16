@@ -178,6 +178,8 @@ maximum HP), `xp` (experience for killing it; replaces the `XpByProto` table of 
 `inventory` (carried / loot), `spawns` (see below). Every item in `equipment` / `inventory` must exist (checked). Map instances that
 carry their own inventory in the original map data keep it; the NPC `inventory` is the template default the instances fall back to.
 
+`respawn` (0..604800 seconds, 0 = the NPC never respawns after death) is the per-NPC respawn delay. When it is not set, `config.RespawnDefaultSec` of `scripts/config.lua` (default 300)
+applies. It is validated like the other fields (integer, range) and is an editor field of every NPC record.
 `spawns` places extra copies at server start: `map` must be a loaded map (checked), `cell` is `[x, y]` in cells, `count` 1..50.
 Spawns are executed once at startup; `/reload` does not respawn.
 

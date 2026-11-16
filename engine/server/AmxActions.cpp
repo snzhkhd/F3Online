@@ -152,11 +152,11 @@ void AmxHost::BindActionNatives() {
     };
 
     // ---- speech: (entity, stfId, durationMs[, r, g, b]). Spoken as local chat (the client has no floating text yet).
-    auto speech = [this](AmxInstance&, const AmxCell* a, int n, bool queued) -> AmxCell {
+    auto speech = [this](AmxInstance& m, const AmxCell* a, int n, bool queued) -> AmxCell {
         if (n < 2) return 0;
         Critter* c = CritterOf(a[0]);
         if (!c) return 0;
-        std::string t = DlgText(a[1]);
+        std::string t = DlgText(a[1], Protagonist(m));   // the nearest player supplies <CHARNAME>
         if (t.empty()) return 0;
         if (queued) { Act q; q.type = ActType::Speech; q.text = t; q.ms = n > 2 ? std::clamp(a[2], 0, 20000) : 1500; QueueAction(c->id, std::move(q)); }
         else server_.Say(*c, t);

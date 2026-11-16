@@ -33,6 +33,7 @@ public:
     // Dev/test switch (Lua amx_attacks, chat /amxattacks on a --dev-kit server): while off, A_Attack / A_JustAttack actions end at once without attacking, so
     // regression tests are not disturbed by the scripted NPCs of the start map (the tutorial insurgents hunt players from the first second).
     void SetAttacksEnabled(bool on) { attacksEnabled_ = on; }
+    void ClearActionsOf(CritterId id) { actions_.erase(id); }   // drops the queued A_* actions of a critter (leash / return home)
     bool IsIdle(CritterId id) const;                        // action queue empty
     // Runs a public (OnOpen / OnClose) of a map object script, if it has one, with the actor handle. Returns false only when the script ran
     // and returned 0 (the original vetoes the open / close then, GameDoor::Operate); no script / error = true.

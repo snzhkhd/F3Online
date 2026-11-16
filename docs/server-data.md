@@ -288,6 +288,28 @@ No reload/skill/pick-critter actions (their `RtApCost*` keys are inert); no queu
 
 `Server::OnAttacked(target, attacker)` runs for every attack roll in `TickCombat`, **hit or miss**: an NPC target that is not static and has no target turns on the attacker (the normal combat AI then chases / shoots back), same-team NPCs within `AggroAlertRadius` cells (config.lua, default 8, 0 = off) that have no target join in (never against their own team), and the Lua hook `on_attacked(target, attacker)` is called if defined (the AMX OnDamage-like hook is only called on damage, there is no miss equivalent, so it is untouched). Neutral/friendly NPCs follow the same rule - attacking them makes them hostile (static ones never move). An NPC gives up a target farther away than `AggroLeashCells` (default 60 cells, 0 = never): without it a hunter chased a teleported player across the whole map and killed it minutes later (a source of flaky end to end tests). Dev/test: `config.ForceMiss` / chat command `/forcemiss [on|off]` make every attack miss; f3_gametest uses a third bot to shoot a neutral "GMC Soldier" with forced misses and asserts the NPC retaliates.
 
+### NPC life: respawn, home, leash (`NpcLife.cpp`)
+
+* **Respawn.** Every NPC death (`KillCritter`) queues a respawn. The delay is **per NPC**: the `respawn` field (seconds, 0 = never) of the NPC record in `data/npcs/*.json`
+  (the shipped `original.json` templates and `spawns` entries included; editable per NPC in the editor). `config.RespawnDefaultSec` (default 300) is only the fallback
+  when the field is not set. The NPC returns at its **home cell** (where the map or `spawns` placed it) with full HP and the default inventory / equipment / state
+  (a fresh `SpawnCritterProto`; the corpse is removed). If a living player is within `config.RespawnPlayerRadius` cells (default 12) of the home cell the respawn
+  is postponed and retried every 5 s. The queue is in memory (not saved): a server restart reloads every NPC anyway.
+* **Scripted removals.** An NPC that an original AMX script deletes (`DestroyEntity`) is forgotten and not respawned. This covers story removals such as Frank's
+  `CleanupJunktown`. See `docs/amx-scripts.md` (CleanupJunktown) for why that flag is neutralised by default.
+* **Leash and return.** An NPC remembers its home. While it fights it gives up when it is more than `config.AggroLeashCells` (default 60) cells from home: the target is
+  dropped, queued AMX actions are cleared, and it walks home (it does not accept targets on the way back), then heals to full on arrival (after `config.HomeGiveUpSec`
+  (default 60) without arriving it is placed home). The same return starts when a fight ends away from home. NPCs never vanish because of this.
+* Maps without players are not simulated; when the last player leaves a map its NPCs are reset to home / full HP (`ResetNpcsOfMap`).
+* Dev (needs `--dev-kit`): chat `/npcdev <find|info|kill|spawn|at|count|hurt|warp|removeat|pending|radius|leash|cleanup|target> ...` and the Lua `npc_dev`; used by `f3_gametest --npclife`.
+
+### Use / skill / pickup / talk on a far target (`BeginInteract`)
+
+`UseSkill`, `Use`, pickup and talk share one distance rule (`TileDist`, Chebyshev, cells; objects use their footprint distance). A request from farther than `SkillUseRange`
+(critters) or `SkillReach(object)` (objects, doors included) makes the server walk the character to the target (`BeginInteract`, `Critter::pending`, re-pathing for moving
+critters) and perform the action on arrival (`RunPending`). A new move command, `Attack(0)` or Esc cancels it. The same range value is used by the client cursor and the
+server check; the Lua Medic check uses the engine range as well (the old 4-vs-5 mismatch is gone).
+
 ## 10. Accounts and persistence
 
 Code: `engine/server/Account.*` (SHA-256, HMAC, PBKDF2, `AccountStore`), `engine/server/Persist.cpp` (`OnAuth`, character <-> JSON, `SavePlayer`), `engine/server/Store.*` / `Db.*` (SQLite). **Storage, schema, transactions, migration from the old JSON files, tools: `docs/persistence.md`.**

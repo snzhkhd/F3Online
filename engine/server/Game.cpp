@@ -133,7 +133,7 @@ bool Server::LoadWorldData() {
             const Proto* p = data_.FindProto(e.proto);
             if (!p) { ++skipped; continue; }  // stale template reference in the original data
             TilePos pos = cellOf(e.x, e.z);
-            if (p->cls == PClass::Critter) SpawnCritterProto(m->id, *p, pos, &e);
+            if (p->cls == PClass::Critter) { if (Critter* nc = SpawnCritterProto(m->id, *p, pos, &e)) TrackSpawn(*nc, &e); }
             else SpawnObjectProto(m->id, *p, pos, 1, &e);
         }
         entities += m->critters.size() + m->items.size() - before;
@@ -183,6 +183,7 @@ Critter* Server::SpawnCritterProto(MapId mapId, const Proto& p, TilePos pos, con
     }
     c->color = 0xC0C0C0FF;
     PlaceCritter(*c, *m, spot);
+    c->home = Critter::Home{true, mapId, spot};
     // loadout: template equipment is worn, instance (or template) inventory is carried
     for (const std::string& k : p.equipment)
         if (const Proto* ip = data_.FindProto(k)) {
@@ -597,7 +598,7 @@ Item* Server::FindObject(ItemId id, Map** mapOut) {
 // Reach of the walk-then-act interactions in cells. The walk stops on a cell within this distance and the action re-checks the
 // same limit on arrival: a pickup needs 2 (PickUp), use / take / put / loot 3. (Before, the walk went up to 3 cells away and
 // PickUp then failed with "invalid" when the player came from afar.)
-static int InteractRange(PendingType t, int use) { return t == PendingType::Pickup ? 2 : use; }
+static int InteractRange(PendingType t, int use) { return t == PendingType::Pickup ? 2 : use; }   // Skill: the caller passes the skill reach as `use`
 
 void Server::BeginInteract(Critter& c, PendingType type, ItemId id, ItemId sub, bool critter) {
     Map* m = world_.GetMap(c.mapId);
@@ -614,7 +615,12 @@ void Server::BeginInteract(Critter& c, PendingType type, ItemId id, ItemId sub, 
         refs.insert(refs.end(), it->second.footprint.begin(), it->second.footprint.end());
     }
     c.pending = Pending{type, id, sub, critter};
-    const int range = InteractRange(type, rt_.DoorOpenRange);
+    int range = InteractRange(type, rt_.DoorOpenRange);
+    if (type == PendingType::Skill) {
+        range = rt_.SkillUseRange;
+        if (!critter) { auto it = m->items.find(id); if (it != m->items.end()) range = SkillReach(it->second); }
+        range = std::max(1, range);
+    }
     for (TilePos r : refs)
         if (TileDist(r, c.pos) <= range) { StopMove(c); RunPending(c); return; }
     // stand on a free cell within reach of the object, nearest to us first (the object may sit inside a wall; a closed door blocks
@@ -673,6 +679,7 @@ void Server::RunPending(Critter& c) {
         case PendingType::Take: action = static_cast<uint8_t>(GMsg::C2S_Take); break;
         case PendingType::Put: action = static_cast<uint8_t>(GMsg::C2S_Put); break;
         case PendingType::Loot: action = static_cast<uint8_t>(GMsg::C2S_Loot); break;
+        case PendingType::Skill: action = static_cast<uint8_t>(GMsgChar::C2S_UseSkill); break;
         case PendingType::None: return;
     }
     // the target must still be there and within reach; while the walk is under way keep waiting, if it ended short (blocked,
@@ -685,11 +692,27 @@ void Server::RunPending(Critter& c) {
         else if (pm) { auto it = pm->items.find(p.id); if (it != pm->items.end()) { dist = ObjDist(it->second, c.pos); have = true; } }
         if (!have) { c.pending = Pending{}; return; }
         int need = InteractRange(p.type, rt_.DoorOpenRange);
+        if (p.type == PendingType::Skill) {
+            need = rt_.SkillUseRange;
+            if (!p.critter && pm) { auto oi = pm->items.find(p.id); if (oi != pm->items.end()) need = SkillReach(oi->second); }
+            need = std::max(1, need);
+        }
         if (p.type == PendingType::Use && !p.critter && pm) { auto oi = pm->items.find(p.id); if (oi != pm->items.end()) need = ObjectRange(oi->second, need); }
         if (dist > need) {
+            if (!c.mv.active && p.type == PendingType::Skill && p.critter && c.IsPlayer() && tick_ >= c.nextRepathTick) {   // a critter target walked on: follow it
+                c.nextRepathTick = tick_ + 10;
+                BeginInteract(c, PendingType::Skill, p.id, p.sub, true);
+                return;
+            }
             if (!c.mv.active) { c.pending = Pending{}; if (c.IsPlayer()) TellK(c, "msg.cant_reach"); }
             return;
         }
+    }
+    if (p.type == PendingType::Skill) {   // arrived: the skill runs through the normal UseSkill path (AP, breaktime, object scripts, hooks)
+        if (!IsFree(c)) return;
+        c.pending = Pending{};
+        UseSkill(c, static_cast<int>(p.sub), p.critter ? 1 : 2, static_cast<uint32_t>(p.id), true);
+        return;
     }
     int cost = ActionCost(action);
     gnet::ActionResult gate = CheckAction(c, action, cost, false);
@@ -703,7 +726,7 @@ void Server::RunPending(Critter& c) {
         case PendingType::Take: ok = TakeFrom(c, p.id, p.sub, p.critter); break;
         case PendingType::Put: ok = PutInto(c, p.id, p.sub, p.critter); break;
         case PendingType::Loot: ok = OpenLoot(c, p.id, true); break;
-        case PendingType::None: break;
+        case PendingType::Skill: case PendingType::None: break;
     }
     if (ok) CommitAction(c, action, cost, rt_.Breaktime);
     else if (c.IsPlayer()) SendWaitState(c, action, gnet::ActionResult::Invalid);
@@ -833,9 +856,18 @@ AttackPlan PlanAttack(const Critter& c, const DataStore& d, int meleeMod) {
 
 bool Server::StartAttack(Critter& c, CritterId targetId) {
     if (c.dead) return false;
-    if (targetId == 0) { c.target = 0; return true; }
+    if (targetId == 0) {   // stop / Esc: also cancels a walk-then-act request (and the walk that belongs to it)
+        const bool walking = c.pending.type != PendingType::None || c.talkTarget != 0;
+        c.target = 0; c.pending = Pending{}; c.talkTarget = 0;
+        if (walking) StopMove(c, 1);
+        return true;
+    }
     Critter* t = world_.GetCritter(targetId);
     if (!t || t == &c || t->dead || t->mapId != c.mapId) return false;
+    if (c.IsNpc() && c.home.has) {   // a hunter walking home takes no new target, and none that stands beyond its leash from home (no endless back and forth)
+        if (c.returning) return false;
+        if (rt_.AggroLeashCells > 0 && TileDist(t->pos, c.home.pos) > rt_.AggroLeashCells) return false;
+    }
     c.target = targetId;
     c.nextRepathTick = 0;
     return true;
@@ -857,7 +889,7 @@ void Server::TickCombat(Critter& c) {
     if (!t || !m || t->dead || t->mapId != c.mapId) { c.target = 0; return; }
     AttackPlan plan = PlanAttack(c, data_, Mod(c, StMeleeDamage));
     int dist = TileDist(c.pos, t->pos);
-    if (c.IsNpc() && rt_.AggroLeashCells > 0 && dist > rt_.AggroLeashCells) {   // leash: no chasing across the whole map
+    if (c.IsNpc() && !c.home.has && rt_.AggroLeashCells > 0 && dist > rt_.AggroLeashCells) {   // NPCs without a home: no chasing across the whole map (with a home TickNpcHome measures from home)
         c.target = 0;
         StopMove(c, 1);
         return;
@@ -1000,6 +1032,7 @@ void Server::KillCritter(Critter& c, Critter* killer) {
     c.dead = true;
     c.hp = 0;
     c.deadSince = tick_;
+    if (c.IsNpc()) QueueRespawn(c);
     StopMove(c, 1);
     c.target = 0;
     c.pending = Pending{};

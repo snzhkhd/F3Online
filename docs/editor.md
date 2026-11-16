@@ -128,6 +128,8 @@ The numeric limits are mirrored from Content.cpp by hand, so `f3_editortest` clo
 the minimum and maximum (must be accepted), min-1 / max+1, wrong types, unknown fields and over-long strings (must be rejected). Change a limit on one side only and the test fails.
 It also runs one sample of every condition and effect form the builder can emit, and checks that each shipped generated file survives load, edit-free save and compare byte for byte.
 
+Example of a per-record setting: the NPC field `respawn` ("Respawn after death, seconds (0 = never; empty = server default RespawnDefaultSec)") is an ordinary `int` field of the `npcs` schema, so
+the form, the validator and `f3_editortest` handle it like the others; the default lives in `scripts/config.lua`, not in the data.
 ## 6. Adding a new kind
 
 1. Teach the loader and validator the kind (Content.cpp / Content.h; see `docs/data-format.md`, section 3).

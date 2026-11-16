@@ -131,7 +131,7 @@ bool Server::SpendSkillPoints(Critter& c, int skill, int points) {
     return true;
 }
 
-bool Server::UseSkill(Critter& c, int skill, int kind, uint32_t target) {
+bool Server::UseSkill(Critter& c, int skill, int kind, uint32_t target, bool afterWalk) {
     if (!c.created || c.dead || skill < 0 || skill >= kSkillCount) return false;
     if (!IsUsableSkill(skill)) { TellK(c, "msg.skill.passive", {{"skill", SkillName(c, skill)}}); return false; }
     // the target is checked before anything is spent: kind 0 = self, 1 = another critter, 2 = map object (door, container, item);
@@ -140,19 +140,26 @@ bool Server::UseSkill(Critter& c, int skill, int kind, uint32_t target) {
     if (kind == 1 && (target == 0 || target == c.id)) kind = 0;
     if (kind == 0) target = 0;
     if (kind != 0) {
-        TilePos at{};
+        // one metric for the check and the walk: Chebyshev cells to the critter, or to the nearest of the object's cell / doorway cells (ObjDist);
+        // the reach is SkillUseRange (an object binding may set its own range)
+        int dist = 0, reach = rt_.SkillUseRange;
         if (kind == 1) {
             const Critter* t = world_.GetCritter(static_cast<CritterId>(target));
             if (!t || t->mapId != c.mapId || t->mapId == 0) { TellK(c, "msg.skill.no_target"); return false; }
-            at = t->pos;
+            dist = TileDist(t->pos, c.pos);
         } else {
             Map* m = world_.GetMap(c.mapId);
             if (!m) return false;
             auto it = m->items.find(static_cast<ItemId>(target));
             if (it == m->items.end()) { TellK(c, "msg.skill.no_object"); return false; }
-            at = it->second.pos;
+            dist = ObjDist(it->second, c.pos);
+            reach = SkillReach(it->second);
         }
-        if (TileDist(at, c.pos) > rt_.SkillUseRange) { TellK(c, "msg.too_far"); return false; }
+        if (dist > reach) {
+            if (afterWalk || !c.IsPlayer()) { TellK(c, "msg.too_far"); return false; }
+            BeginInteract(c, PendingType::Skill, static_cast<ItemId>(target), static_cast<ItemId>(skill), kind == 1);   // walk to the reach edge, then RunPending uses the skill
+            return true;
+        }
     }
     const int cost = rt_.RtApCostUseSkill * 100;   // whole AP like FOnline (the other RtApCost* keys are 1/100 AP)
     const uint8_t action = static_cast<uint8_t>(GMsgChar::C2S_UseSkill);

@@ -124,3 +124,5 @@ into a fresh `--saves` folder) or move the file away to start empty. A database 
 * `synchronous=NORMAL` (see section 3); the audit log is never pruned; no account deletion / ban commands yet (`accounts.flags` is reserved);
   characters of one account other than slot 0 exist in the schema only.
 * The importer cannot recover mail ids: they are reassigned in file order (the client only uses them within one snapshot).
+* Old-save symptom: an `f3.db` from an earlier build could make every Junktown NPC absent. The cause was the persisted per-player `CleanupJunktown` global (`docs/amx-scripts.md`),
+  not the database layout; it is ignored by default now and needs no migration.

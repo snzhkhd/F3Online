@@ -38,6 +38,35 @@ void ReplaceAll(std::string& s, const std::string& from, const std::string& to) 
 }
 }  // namespace
 
+// Original string tokens: <CHARNAME> and the censor / name placeholders found in English.stf (docs/dialogs.md, "Tokens").
+std::string ExpandDlgTokens(const std::string& in, const std::string& playerName) {
+    if (in.find('<') == std::string::npos) return in;
+    static const std::pair<const char*, const char*> kFixed[] = {
+        {"DEVILDOG", "Devil Dog"}, {"GV_Jake", ""},
+        {"DAMN", "damn"}, {"CDAMN", "Damn"}, {"DDAMMIT", "Dammit"}, {"ASS", "ass"}, {"FUCK", "fuck"}, {"BITCH", "bitch"}, {"SHIT", "shit"},
+    };
+    std::string out;
+    for (size_t i = 0; i < in.size(); ++i) {
+        if (in[i] == '<') {
+            const size_t e = in.find('>', i);
+            if (e != std::string::npos && e > i + 1 && e - i <= 24) {
+                const std::string name = in.substr(i + 1, e - i - 1);
+                bool word = true, lower = true;
+                for (unsigned char ch : name) { if (!(std::isalnum(ch) || ch == '_')) word = false; if (std::isupper(ch)) lower = false; }
+                if (word) {
+                    if (name == "CHARNAME" || name == "HANGDOGNAME") { out += playerName; i = e; continue; }
+                    bool done = false;
+                    for (const auto& f : kFixed) if (name == f.first) { out += f.second; done = true; break; }
+                    if (!done && lower && name.compare(0, 4, "test") != 0) { out += name; done = true; }   // <shit>, <fucking>, <crap>: the plain word
+                    if (done) { i = e; continue; }
+                }
+            }
+        }
+        out.push_back(in[i]);
+    }
+    return out;
+}
+
 // Talkable = the server can start a conversation: a data dialog, or an AMX dialogue script. Sent to clients in CritterProto (Talk cursor).
 bool Server::CanTalk(const Critter& c) const { return c.IsNpc() && !c.dead && !c.dialog.empty() && (HasDataDialog(c) || amx_); }
 bool Server::HasDataDialog(const Critter& npc) const { return !npc.dialog.empty() && content_.FindDialog(npc.dialog) != nullptr; }
@@ -110,7 +139,7 @@ std::string Server::DataDlgText(const Critter& pc, const Critter* npc, const Dia
     }
     ReplaceAll(s, "{player}", pc.name);
     ReplaceAll(s, "{npc}", npc ? npc->name : std::string());
-    return s;
+    return ExpandDlgTokens(s, pc.name);
 }
 
 void Server::DataDialogClose(Critter& pc, bool notify) {

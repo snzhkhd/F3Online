@@ -114,8 +114,8 @@ static void TestLoadAndMerge() {
         {"id":"Ammo9.AMO","ammo":{"dmg_min":6,"dmg_max":14}},
         {"id":"F3_Pistol_Mk2.WEA","base":"Pistol.WEA","name":"Pistol Mk2","weapon":{"dmg_max":20}}])"));
     Put(f.data / "npcs/n.json", Env("npcs", R"([
-        {"id":"Thug.CRT","name":"Street Thug","team":3,"level":4,"max_hp":77,"xp":250,"special":{"strength":8},"inventory":["Pistol.WEA","F3_Pistol_Mk2.WEA"],"equipment":["Armor1.ARM"],"spawns":[{"map":"town","cell":[3,4],"count":2}]},
-        {"id":"F3_Boss.CRT","base":"Thug.CRT","name":"Boss","xp":999}])"));
+        {"id":"Thug.CRT","name":"Street Thug","team":3,"level":4,"max_hp":77,"xp":250,"respawn":45,"special":{"strength":8},"inventory":["Pistol.WEA","F3_Pistol_Mk2.WEA"],"equipment":["Armor1.ARM"],"spawns":[{"map":"town","cell":[3,4],"count":2}]},
+        {"id":"F3_Boss.CRT","base":"Thug.CRT","name":"Boss","xp":999,"respawn":0}])"));
     Put(f.data / "quests/q.json", Env("quests", R"([{"id":"q1","title":"Quest","text":"Do it","xp":100,"items":[{"item":"Junk.ITM","count":3}]}])"));
     ContentDb db; ContentReport rep;
     const bool ok = f.Build(false, db, rep);
@@ -146,6 +146,8 @@ static void TestLoadAndMerge() {
     const Proto* th = f.ds.FindProto("Thug.CRT");
     CHECK(th->name == "Street Thug" && th->team == 3 && th->level == 4 && th->maxHpFixed == 77 && th->xp == 250 && th->special[0] == 8 && th->special[1] == 5, "npc override (partial SPECIAL keeps the rest)");
     CHECK(th->inventory.size() == 2 && th->equipment.size() == 1, "lists replace the original lists");
+    CHECK(th->respawn == 45, "npc record `respawn` (seconds, per NPC) lands on the prototype");
+    CHECK(f.ds.FindProto("F3_Boss.CRT") && f.ds.FindProto("F3_Boss.CRT")->respawn == 0, "respawn 0 = never respawn is kept per NPC");
     const Proto* boss = f.ds.FindProto("F3_Boss.CRT");
     CHECK(boss && boss->fromData && boss->cls == PClass::Critter && boss->xp == 999 && boss->team == 2 && boss->inventory.size() == 1, "new npc cloned from Thug.CRT before the data override? (clones the effective base)");
     CHECK(db.FindNpc("thug.crt") && db.FindNpc("Thug.CRT")->spawns.size() == 1 && db.FindNpc("Thug.CRT")->spawns[0].count == 2, "spawn defaults kept");
@@ -227,6 +229,8 @@ static void TestValidation() {
     ExpectError("npc equipment is a critter", "npcs/n.json", Env("npcs", R"([{"id":"Thug.CRT","equipment":["Thug.CRT"]}])"), "records[0].equipment[0]", "is a critter");
     ExpectError("npc unknown id", "npcs/n.json", Env("npcs", R"([{"id":"Ghost.CRT","name":"x"}])"), "unknown npc id 'Ghost.CRT'");
     ExpectError("npc on an item", "npcs/n.json", Env("npcs", R"([{"id":"Pistol.WEA","name":"x"}])"), "is not a critter");
+    ExpectError("npc respawn range", "npcs/n.json", Env("npcs", R"([{"id":"Thug.CRT","respawn":-5}])"), "respawn", "out of range");
+    ExpectError("npc respawn type", "npcs/n.json", Env("npcs", R"([{"id":"Thug.CRT","respawn":"soon"}])"), "respawn", "expected integer");
     ExpectError("npc special range", "npcs/n.json", Env("npcs", R"([{"id":"Thug.CRT","special":{"strength":11}}])"), "special.strength", "out of range");
     ExpectError("npc spawn map", "npcs/n.json", Env("npcs", R"([{"id":"Thug.CRT","spawns":[{"map":"atlantis","cell":[1,1]}]}])"), "spawns[0].map", "unknown map 'atlantis'");
     ExpectError("npc spawn cell", "npcs/n.json", Env("npcs", R"([{"id":"Thug.CRT","spawns":[{"map":"town","cell":[1]}]}])"), "spawns[0].cell", "expected [x, y]");

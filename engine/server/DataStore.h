@@ -58,6 +58,7 @@ struct Proto {
     int weightOverride = -1;   // >= 0: unit weight from data/items (wins over config.lua ItemWeights)
     int level = 1;             // critters: starting level (HP formula)
     int maxHpFixed = 0;        // critters: > 0 fixes the maximum HP
+    int respawn = -1;          // critters: seconds until a dead NPC respawns (data/npcs "respawn"); 0 = never, -1 = config RespawnDefaultSec
     int xp = -1;               // critters: >= 0 experience for killing it (replaces XpByProto / the formula)
     bool fromData = false;     // record added by data/ (no original prototype)
     bool retired = false;      // record removed by a later reload; the pid stays valid for existing instances

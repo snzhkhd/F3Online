@@ -59,7 +59,15 @@ void AmxHost::BindNatives() {
     // Globals are per player while a conversation runs (the protagonist's quest state, persisted with the character);
     // outside a conversation (behaviour scripts) they are the shared world table.
     // Behaviour scripts (no conversation) use the nearest player within 20 cells as the protagonist (see Protagonist()).
-    N["GetGlobal"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell { return n > 0 ? static_cast<AmxCell>(server_.GetGlobalFor(Protagonist(m), m.GetString(a[0]))) : 0; };
+    // "CleanupJunktown" (set by Frank in the Vault, read by every NPC script: living Junktown NPCs delete themselves) is ignored unless config
+    // AmxJunktownCleanup is on: here it is a per player, persisted flag, so one visit to the Vault used to make every Junktown NPC vanish for that player
+    // (and a saved character with the flag found Junktown empty). See docs/amx-scripts.md.
+    N["GetGlobal"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell {
+        if (n < 1) return 0;
+        const std::string key = m.GetString(a[0]);
+        if (!server_.Rt().AmxJunktownCleanup && key == "CleanupJunktown") return 0;
+        return static_cast<AmxCell>(server_.GetGlobalFor(Protagonist(m), key));
+    };
     N["SetGlobal"] = [this](AmxInstance& m, const AmxCell* a, int n) -> AmxCell { if (n > 1) server_.SetGlobalFor(Protagonist(m), m.GetString(a[0]), a[1]); return 0; };
     N["GetCurrentHP"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell { Critter* c = CritterOf(a[0]); return c ? c->hp : 0; };
     N["GetMaxHP"] = [this](AmxInstance&, const AmxCell* a, int) -> AmxCell { Critter* c = CritterOf(a[0]); return c ? c->maxHp : 0; };
@@ -81,6 +89,7 @@ void AmxHost::BindNatives() {
             if (!c->dead && mp && Visible(*mp, c->fx * 0.5f + mp->originX, c->fy * 0.5f + mp->originZ)) {
                 return 0;
             }
+            if (!c->dead) server_.ForgetSpawn(c->id);   // a script that deletes a LIVING NPC means it (story / cleanup): no respawn. Dead ones respawn (queued at death)
             server_.RemoveCritter(c->id);
             return 1;
         }
@@ -195,7 +204,7 @@ std::string AmxHost::DlgText(int id, const Critter* viewer) const {
         if (s[i] == '{') { size_t e = s.find('}', i); if (e != std::string::npos) { i = e; continue; } }
         out.push_back(s[i]);
     }
-    return out;
+    return viewer ? ExpandDlgTokens(out, viewer->name) : out;   // <CHARNAME> etc.
 }
 
 bool AmxHost::InDialog(CritterId id) const {

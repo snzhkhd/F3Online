@@ -994,6 +994,7 @@ struct Loader {
             r.level = o.Int("level", 1, 99);
             r.maxHp = o.Int("max_hp", 1, 9999);
             r.xp = o.Int("xp", 0, 1000000);
+            r.respawn = o.Int("respawn", 0, 604800);   // seconds until a dead NPC comes back (0 = never); unset = config RespawnDefaultSec
             if (const json* s = o.ObjField("special")) {
                 Obj so(c, *s, path + ".special");
                 for (int i = 0; i < kSpecialCount; ++i) if (auto v = so.Int(kSpecialKeys[i], 1, 10)) r.special[i] = *v;
@@ -1137,6 +1138,7 @@ void BuildProtoSet(const DataStore& ds, ContentDb& db, ContentReport& rep) {
         if (r.level) p->level = *r.level;
         if (r.maxHp) p->maxHpFixed = *r.maxHp;
         if (r.xp) p->xp = *r.xp;
+        if (r.respawn) p->respawn = *r.respawn;
         for (int i = 0; i < kSpecialCount; ++i) if (r.special[i] > 0) p->special[i] = r.special[i];
         if (r.equipment) p->equipment = *r.equipment;
         if (r.inventory) p->inventory = *r.inventory;

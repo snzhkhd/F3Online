@@ -523,6 +523,7 @@ void Server::RemoveCritter(CritterId id) {
     Critter* c = world_.GetCritter(id);
     if (!c) return;
     if (amx_) amx_->DetachCritter(id);
+    spawnRecs_.erase(id);
     CloseDataDialogsOf(id);
     UnplaceCritter(*c);
     if (c->peer) {
@@ -741,8 +742,12 @@ void Server::DoTick() {
             continue;
         }
         StepCritter(*c);
-        if (Critter* cc = world_.GetCritter(id)) TickCombat(*cc);
+        if (Critter* cc = world_.GetCritter(id)) { TickCombat(*cc); if (Critter* c3 = world_.GetCritter(id)) TickNpcHome(*c3); }
     }
+    for (MapId old : prevActive_)   // the last player left: hunters go home and heal while nobody watches
+        if (!active.count(old)) if (Map* om = world_.GetMap(old)) ResetNpcsOfMap(*om);
+    prevActive_ = active;
+    if (tick_ % static_cast<uint64_t>(cfg_.tickRate) == 0) TickRespawns();
     for (CritterId id : ids) {
         Critter* c = world_.GetCritter(id);
         if (c && c->IsNpc() && c->mapId != 0 && !c->dead && active.count(c->mapId)) scripting_->OnNpcTick(*c, tick_);

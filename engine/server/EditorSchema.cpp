@@ -106,6 +106,7 @@ const char* const kNpcs = R"J({
   {"key":"level","type":"int","min":1,"max":99},
   {"key":"max_hp","type":"int","min":1,"max":9999},
   {"key":"xp","type":"int","min":0,"max":1000000,"label":"XP for killing it"},
+  {"key":"respawn","type":"int","min":0,"max":604800,"label":"Respawn after death, seconds (0 = never; empty = server default RespawnDefaultSec)"},
   {"key":"special","type":"object","label":"SPECIAL (omitted values keep the original)","fields":[{"$special":{"type":"int","min":1,"max":10}}]},
   {"key":"script","type":"string","maxLen":128,"label":"AI script"},
   {"key":"dialog","type":"string","maxLen":128,"ref":"dialog","label":"Dialog (a data dialog id, or an original dialog name)"},

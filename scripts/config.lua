@@ -35,6 +35,10 @@ config = {
     RtApCostAttackMin         = 50,
     AggroAlertRadius          = 8,     -- cells: same-team NPCs near a shot-at NPC join the fight (0 = off)
     AggroLeashCells           = 60,    -- cells: an NPC gives up a target farther away than this (a hunter must not chase a teleported / far away player across the map); 0 = never
+    HomeGiveUpSec             = 30,    -- seconds an NPC walking home after a chase may take before it is set on its home cell (blocked path)
+    RespawnDefaultSec         = 300,   -- seconds until a dead NPC respawns at its home cell, unless its data/npcs record has "respawn" (seconds, 0 = never)
+    RespawnPlayerRadius       = 50,    -- cells: a respawn waits while a living player is this close to the spawn cell (default view radius 48)
+    AmxJunktownCleanup        = false, -- true: honour the original CleanupJunktown flag (Frank): invisible Junktown NPCs delete themselves, no respawn (docs/amx-scripts.md)
     ForceMiss                 = false, -- dev/test: every attack misses (the /forcemiss command toggles it at run time)
     CarryBase                 = 25,    -- carry limit = CarryBase + CarryPerStrength * Strength
     CarryPerStrength          = 25,

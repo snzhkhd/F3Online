@@ -166,7 +166,7 @@ struct NpcSpawn { std::string map; int x = 0, y = 0; int count = 1; };
 struct NpcRec {
     std::string file, path, id, base;
     std::optional<std::string> name, script, dialog, model;
-    std::optional<int> team, level, maxHp, xp;
+    std::optional<int> team, level, maxHp, xp, respawn;
     int special[kSpecialCount] = {0, 0, 0, 0, 0, 0, 0};   // 0 = not set
     std::optional<std::vector<std::string>> equipment, inventory;
     std::vector<NpcSpawn> spawns;

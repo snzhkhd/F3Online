@@ -48,7 +48,7 @@ struct Item {
     std::string bindId;                // id of the data/objects binding that owns this object (empty = unscripted), see ObjectScripts.cpp
 };
 
-enum class PendingType : uint8_t { None, Pickup, Use, Take, Loot, Put };
+enum class PendingType : uint8_t { None, Pickup, Use, Take, Loot, Put, Skill };   // Skill: `sub` = skill index, `critter` = target kind (critter / map object)
 struct Pending {
     PendingType type = PendingType::None;
     ItemId id = 0;       // map object
@@ -94,6 +94,11 @@ struct Critter {
     int inRegion = -1;          // index of the trigger region the player stands in
     std::string script, dialog; // original AMX script names (informational)
     std::string instName;       // instance name from the map data (the original entity displayName): key of the _DEAD_<name> death counter
+    // Home (NPCs): the cell the NPC spawned on. A hunter gives up AggroLeashCells from here, walks back and heals (Server::TickNpcHome).
+    struct Home { bool has = false; MapId map = 0; TilePos pos; } home;
+    bool aggro = false;           // had a combat target since the last time it was home
+    bool returning = false;       // walking back home
+    uint64_t returnSinceTick = 0, nextHomeTick = 0;
     uint32_t attacksDone = 0;   // attacks performed by TickCombat (the AMX A_Attack action completes after one)
 
     // ---- continuous position + real-time state (Move.cpp, Timing.cpp). `pos` is always floor(fx), floor(fy).

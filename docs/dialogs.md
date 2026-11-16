@@ -118,6 +118,9 @@ the list and the `goto` are skipped.
 * `f3_server --check-locale` counts these keys as data keys (the coverage figures include them), so a missing Russian line shows up there.
   See `docs/localization.md`.
 
+**Tokens.** The original string tokens are substituted on the server, for original AMX dialogs (`DlgText`, `AmxActions` speech) and data dialogs (`DataDlgText`),
+before the text is sent (`ExpandDlgTokens`, `Dialogs.cpp`): `<CHARNAME>` / `<PLAYERNAME>` become the speaking player's name (so Frank's "No, I'm <CHARNAME>" shows the
+name), and unknown `<...>` markers are left as they are. `{player}` / `{npc}` keep working. Tests: `f3_gametest --tutorial` (AMX path) and `--dialogs` (data path, "Name is Joe, <CHARNAME>").
 ## 6. Validation
 
 At startup, with `--validate-data` and on `/reload`, the dialogs are checked together with the rest of `data/`; any error stops the

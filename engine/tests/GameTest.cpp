@@ -789,6 +789,16 @@ static int RunTutorialTests(uint16_t port) {
         WaitFor({&a}, 1, [] { return false; });
         std::printf("note: after the dialogue 00_Talked_Frank = %.0f\n", gvar("00_Talked_Frank"));
     }
+    {   // original string tokens: <CHARNAME> (Frank's first answer "No, I'm <CHARNAME>...") must be replaced by the player's name
+        bool raw = false, named = false;
+        for (auto& n : a.dlgNodes) {
+            if (n.text.find("<CHARNAME>") != std::string::npos) raw = true;
+            if (n.text.find("TutBot") != std::string::npos) named = true;
+            for (auto& rp : n.replies) { if (rp.text.find("<CHARNAME>") != std::string::npos) raw = true; if (rp.text.find("TutBot") != std::string::npos) named = true; }
+        }
+        CHECK(!raw, "no dialogue text shows a literal <CHARNAME>");
+        std::printf("note: a dialogue line carried the player's name: %d\n", named ? 1 : 0);
+    }
     for (size_t i = 0; i < a.chat.size(); ++i) if (!a.chatFrom[i].empty()) std::printf("chat: <%s> %.80s\n", a.chatFrom[i].c_str(), a.chat[i].c_str());
     std::printf(g_failed ? "TUTORIALTEST FAILED\n" : "TUTORIALTEST PASSED\n");
     return g_failed ? 1 : 0;
@@ -1270,6 +1280,7 @@ static int RunDialogTests(uint16_t port) {
     CHECK(g1.replies.size() == 3 && !hasReply(g1, "[Barter 30]"), "skill condition hides the Barter answer (%zu replies)", g1.replies.size());
     CHECK(questState() == -1, "quest not started before the dialog");
     CHECK(choose(0) && textHas("Name is Joe"), "goto moves to the next node");
+    CHECK(textHas("Name is Joe, DlgBot.") && !textHas("<CHARNAME>"), "data dialog: the token <CHARNAME> is replaced by the player's name");
     closeDlg();
     CHECK(questState() == -1, "browsing does not start the quest");
 
@@ -1544,6 +1555,300 @@ static int RunObjectTests(uint16_t port, int phase) {
     return g_failed ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// NPC life + skill approach suite: f3_gametest --npclife against `f3_server --data ... --dev-kit` (uses /npcdev, dev only).
+//   respawn (timer, never = 0, waits while a player is near), leash / walk home / heal, a map without players resets its hunters (and
+//   the CleanupJunktown flag no longer makes NPCs vanish), UseSkill on a far target walks there first, Esc / Attack(0) cancels the walk.
+// ---------------------------------------------------------------------------------------------------------------------
+static int RunNpcLifeTests(uint16_t port) {
+    Bot a;
+    if (!a.Connect(port)) { std::printf("FAIL: cannot connect\n"); return 1; }
+    a.Login("LifeBot");
+    CHECK(WaitFor({&a}, 8, [&] { return a.loggedIn && a.mapInfoCount > 0 && a.haveStats && a.havePos; }), "login");
+    if (!a.loggedIn) return 1;
+    auto say = [&](const std::string& t) { net::ChatReq c; c.text = t; a.Send(net::Pack(c)); };
+    auto pause = [&](double sec) { WaitFor({&a}, sec, [] { return false; }); };
+    auto dev = [&](const std::string& cmd) -> std::string {
+        size_t n = a.chat.size();
+        say("/npcdev " + cmd);
+        std::string out;
+        WaitFor({&a}, 3, [&] {
+            for (size_t i = n; i < a.chat.size(); ++i)
+                if (a.chat[i].rfind("npcdev: ", 0) == 0) { out = a.chat[i].substr(8); return true; }
+            return false;
+        });
+        return out;
+    };
+    auto field = [](const std::string& s, const char* key) -> int {   // "id=7 name=X x=5 y=6 hp=3/9 ..."
+        const std::string k = std::string(key) + "=";
+        size_t p = s.rfind(" " + k);
+        if (p != std::string::npos) p += 1; else if (s.compare(0, k.size(), k) == 0) p = 0; else return -1;
+        return std::atoi(s.c_str() + p + k.size());
+    };
+    auto hpOf = [&](const std::string& s) { size_t p = s.find(" hp="); return p == std::string::npos ? -1 : std::atoi(s.c_str() + p + 4); };
+    auto maxHpOf = [&](const std::string& s) { size_t p = s.find(" hp="); if (p == std::string::npos) return -1; p = s.find('/', p); return std::atoi(s.c_str() + p + 1); };
+    auto homeOf = [&](const std::string& s) -> TilePos { size_t p = s.find(" home="); if (p == std::string::npos) return {-1, -1}; int x = std::atoi(s.c_str() + p + 6); size_t c = s.find(',', p); return {(int16_t)x, (int16_t)std::atoi(s.c_str() + c + 1)}; };
+    auto cheb = [](int ax, int ay, int bx, int by) { return std::max(std::abs(ax - bx), std::abs(ay - by)); };
+    // cells the bot can walk to from where it logged in (flood fill on its copy of the grid): spawn / walk targets must be reachable, Junktown has walled-off areas
+    std::vector<char> reach;
+    auto fillReach = [&] {
+        reach.assign(static_cast<size_t>(a.map.width) * a.map.height, 0);
+        std::vector<TilePos> q{a.pos};
+        reach[static_cast<size_t>(a.pos.y) * a.map.width + a.pos.x] = 1;
+        for (size_t qi = 0; qi < q.size(); ++qi) {
+            const TilePos c = q[qi];
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int x = c.x + dx, y = c.y + dy;
+                    if ((!dx && !dy) || !Walkable(a, x, y) || reach[static_cast<size_t>(y) * a.map.width + x]) continue;
+                    if (dx && dy && (!Walkable(a, c.x + dx, c.y) || !Walkable(a, c.x, c.y + dy))) continue;
+                    reach[static_cast<size_t>(y) * a.map.width + x] = 1;
+                    q.push_back({(int16_t)x, (int16_t)y});
+                }
+            if (q.size() > 400000) break;
+        }
+    };
+    fillReach();
+    auto reachable = [&](int x, int y) { return Walkable(a, x, y) && reach[static_cast<size_t>(y) * a.map.width + x]; };
+    // free reachable cell at Chebyshev distance d from (cx, cy), scanning around the ring starting at offset `start`
+    auto ringCell = [&](int cx, int cy, int d, int start, TilePos& out) {
+        for (int k = 0; k < 8 * d; ++k) {
+            int t = (k + start) % (8 * d), x, y;
+            if (t < 2 * d) { x = cx - d + t; y = cy - d; } else if (t < 4 * d) { x = cx + d; y = cy - d + (t - 2 * d); }
+            else if (t < 6 * d) { x = cx + d - (t - 4 * d); y = cy + d; } else { x = cx - d; y = cy + d - (t - 6 * d); }
+            if (reachable(x, y) && reachable(x + 1, y) && reachable(x, y + 1) && reachable(x - 1, y) && reachable(x, y - 1)) { out = {(int16_t)x, (int16_t)y}; return true; }
+        }
+        return false;
+    };
+    const char* kProto = "F3_Junktown_Scrapper";   // data NPC without an AMX script (a script may clear its target)
+    auto spawn = [&](TilePos c, int respawn) { return dev("spawn " + std::string(kProto) + " " + std::to_string(c.x) + " " + std::to_string(c.y) + " " + std::to_string(respawn)); };
+    auto at = [&](TilePos c) { return dev("at " + std::to_string(c.x) + " " + std::to_string(c.y)); };
+    auto info = [&](int id) { return dev("info " + std::to_string(id)); };
+    auto removeAt = [&](TilePos c) { dev("removeat " + std::to_string(c.x) + " " + std::to_string(c.y)); };
+    // the server rate-limits requests per player (about 4 per second): loops that poll with /npcdev must sleep between polls
+    auto poll = [&](double seconds, const std::function<bool()>& pred) {
+        const auto end = Clock::now() + std::chrono::milliseconds(static_cast<int>(seconds * 1000));
+        while (Clock::now() < end) { pause(0.3); if (pred()) return true; }
+        return false;
+    };
+    say("/amxattacks off"); say("/forcemiss on");
+    pause(0.4);
+    dev("radius 2");
+    const TilePos me = a.pos;
+
+    // ---- respawn: timer
+    TilePos s1{};
+    CHECK(ringCell(me.x, me.y, 5, 0, s1), "found a free spawn cell near the start");
+    std::string r = spawn(s1, 3);
+    const int id1 = field(r, "id");
+    CHECK(id1 > 0, "dev spawn: %s", r.c_str());
+    if (id1 <= 0) return 1;
+    const int maxHp1 = maxHpOf(r);
+    CHECK(dev("kill " + std::to_string(id1)) == "killed" && dev("pending") == "pending 1", "killed NPC queues a respawn job");
+    bool back = false; std::string cur;
+    poll(14, [&] { cur = at(s1); back = field(cur, "id") > 0 && field(cur, "id") != id1 && field(cur, "dead") == 0; return back; });
+    CHECK(back, "respawn after its 3 s delay: a new living NPC stands on the home cell (%s)", cur.c_str());
+    CHECK(back && hpOf(cur) == maxHp1 && homeOf(cur).x == s1.x && homeOf(cur).y == s1.y, "respawned NPC has full HP and its home cell (hp %d/%d)", hpOf(cur), maxHp1);
+    CHECK(dev("pending") == "pending 0", "respawn queue is empty again");
+    if (back) {   // the respawned NPC is tracked again: a second death respawns it once more
+        const int id2 = field(cur, "id");
+        dev("kill " + std::to_string(id2));
+        bool again = false;
+        poll(14, [&] { cur = at(s1); again = field(cur, "id") > id2 && field(cur, "dead") == 0; return again; });
+        CHECK(again, "a respawned NPC respawns again after the next death");
+    }
+    // ---- respawn 0 = never
+    TilePos s2{};
+    ringCell(me.x, me.y, 7, 3, s2);
+    r = spawn(s2, 0);
+    const int id3 = field(r, "id");
+    dev("kill " + std::to_string(id3));
+    pause(4.5);
+    cur = at(s2);
+    CHECK(id3 > 0 && dev("pending") == "pending 0" && field(cur, "id") == id3 && field(cur, "dead") == 1, "respawn 0: no job, only the corpse stays (%s)", cur.c_str());
+    // ---- respawn waits while a player is near
+    dev("radius 50");
+    TilePos s3{};
+    ringCell(me.x, me.y, 4, 5, s3);
+    r = spawn(s3, 2);
+    const int id4 = field(r, "id");
+    dev("kill " + std::to_string(id4));
+    pause(6.5);
+    cur = at(s3);
+    CHECK(id4 > 0 && field(cur, "id") == id4 && field(cur, "dead") == 1 && dev("pending") == "pending 1", "respawn waits while a player is within RespawnPlayerRadius (%s)", cur.c_str());
+    dev("radius 2");
+    back = false;
+    poll(12, [&] { cur = at(s3); back = field(cur, "id") > id4 && field(cur, "dead") == 0; return back; });
+    CHECK(back, "...and happens once nobody is near (%s)", cur.c_str());
+
+    removeAt(s1); removeAt(s2); removeAt(s3);
+    // ---- leash and walk home
+    dev("leash 10");
+    TilePos h{}, nearC{};
+    ringCell(me.x, me.y, 12, 0, h);
+    ringCell(h.x, h.y, 4, 2, nearC);
+    r = spawn(h, 0);
+    const int hid = field(r, "id");
+    CHECK(hid > 0, "leash test NPC spawned at home %d,%d", h.x, h.y);
+    if (hid > 0) {
+        dev("hurt " + std::to_string(hid) + " 4");
+        say("/tp " + std::to_string(nearC.x) + " " + std::to_string(nearC.y));
+        WaitFor({&a}, 3, [&] { return a.pos == nearC; });
+        dev("target " + std::to_string(hid) + " " + std::to_string(a.myId));
+        int maxD = 0; bool gaveUp = false;
+        TilePos farC{};
+        bool walking = false;
+        for (int start = 0; start < 64 && !walking; start += 8) {   // the bot walks away along a ring far from home; the NPC follows until it is 10 cells from home
+            if (!ringCell(h.x, h.y, 16, start, farC)) continue;
+            gnet::MoveToF m; m.x = farC.x + 0.5f; m.y = farC.y + 0.5f; m.run = 1;
+            a.Send(gnet::PackG(m));
+            walking = WaitFor({&a}, 1.0, [&] { return a.pos != nearC; });
+        }
+        CHECK(walking, "bot walks away from the NPC's home");
+        int dbgN = 0;
+        poll(25, [&] {
+            cur = info(hid);
+            if (dbgN++ < 8 && std::getenv("F3_DEBUG")) std::printf("dbg: bot %d,%d npc %s\n", a.pos.x, a.pos.y, cur.c_str());
+            if (field(cur, "x") < 0) return false;   // no answer this time
+            maxD = std::max(maxD, cheb(field(cur, "x"), field(cur, "y"), h.x, h.y));
+            if (field(cur, "target") == 0 && (field(cur, "returning") == 1 || maxD >= 9)) gaveUp = true;   // (the walk home can be over before the next poll)
+            return gaveUp;
+        });
+        std::printf("note: leash run: bot %d,%d (walk target %d,%d), npc %s\n", a.pos.x, a.pos.y, farC.x, farC.y, cur.c_str());
+        CHECK(maxD > 6, "the NPC chased the player away from home (max %d cells)", maxD);
+        CHECK(gaveUp && maxD <= 14, "it gave up at the AggroLeashCells limit and walks back (max %d cells from home)", maxD);
+        bool home = false;
+        poll(40, [&] { cur = info(hid); home = field(cur, "x") == h.x && field(cur, "y") == h.y && field(cur, "returning") == 0; return home; });
+        CHECK(home, "the NPC is back on its home cell (%s)", cur.c_str());
+        CHECK(home && hpOf(cur) == maxHpOf(cur) && field(cur, "dead") == 0, "...healed to full HP and alive (%d/%d)", hpOf(cur), maxHpOf(cur));
+        pause(2.0);   // the bot stands beyond the leash: the NPC must not turn around and hunt again
+        CHECK(field(info(hid), "target") == 0, "it does not hunt again right away");
+    }
+
+    removeAt(h);
+    // ---- no player left on the map: hunters go home and heal; the CleanupJunktown flag does not delete NPCs any more
+    dev("leash 60");
+    say("/tp " + std::to_string(me.x) + " " + std::to_string(me.y));
+    WaitFor({&a}, 3, [&] { return a.pos == me; });
+    TilePos h2{}, away{};
+    ringCell(me.x, me.y, 6, 4, h2);
+    ringCell(h2.x, h2.y, 3, 0, away);
+    r = spawn(h2, 0);
+    const int wid = field(r, "id");
+    const int insBefore = std::atoi(dev("count Communist Insurgent").c_str() + 6);
+    CHECK(wid > 0, "NPC for the empty-map test spawned");
+    if (wid > 0) {
+        dev("hurt " + std::to_string(wid) + " 4");
+        dev("warp " + std::to_string(wid) + " " + std::to_string(away.x) + " " + std::to_string(away.y));
+        dev("target " + std::to_string(wid) + " " + std::to_string(a.myId));
+        pause(1.5);   // request budget
+        say("/gvar CleanupJunktown 1");
+        pause(0.5);
+        auto amxGlobal = [&]() -> std::string {   // what an original script's GetGlobal("CleanupJunktown") returns for this player
+            size_t n = a.chat.size();
+            say("/amxnative GetGlobal sCleanupJunktown");
+            std::string res;
+            WaitFor({&a}, 3, [&] { for (size_t i = n; i < a.chat.size(); ++i) if (a.chat[i].rfind("amx: ", 0) == 0) { res = a.chat[i]; return true; } return false; });
+            return res;
+        };
+        CHECK(amxGlobal().find("GetGlobal=0") != std::string::npos, "the persisted per-player flag CleanupJunktown=1 reads 0 for the original scripts (cleanup disabled)");
+        pause(0.5);
+        dev("cleanup 1");
+        pause(0.5);
+        CHECK(amxGlobal().find("GetGlobal=1") != std::string::npos, "...and 1 when config AmxJunktownCleanup is switched on");
+        dev("cleanup 0");
+        pause(0.5);
+        say("/goto 00_04_Tutorial_Vault");
+        CHECK(WaitFor({&a}, 8, [&] { return a.map.name == "00_04_Tutorial_Vault"; }), "bot left Junktown for the Vault");
+        pause(3.0);
+        say("/goto 00_03_Tutorial_Junktown");
+        CHECK(WaitFor({&a}, 8, [&] { return a.map.name == "00_03_Tutorial_Junktown"; }), "bot is back in Junktown");
+        say("/tp " + std::to_string(me.x) + " " + std::to_string(me.y));
+        WaitFor({&a}, 3, [&] { return a.pos == me; });
+        pause(8.0);   // the original scripts would delete the invisible Junktown NPCs now (CleanupJunktown is set for this player)
+        cur = info(wid);
+        CHECK(field(cur, "dead") == 0 && field(cur, "x") == h2.x && field(cur, "y") == h2.y && hpOf(cur) == maxHpOf(cur) && field(cur, "target") == 0,
+              "after the map was empty the NPC is home, healed and calm (%s)", cur.c_str());
+        const int insAfter = std::atoi(dev("count Communist Insurgent").c_str() + 6);
+        CHECK(insAfter == insBefore && insBefore > 0, "no Junktown NPC vanished with CleanupJunktown set (insurgents %d -> %d)", insBefore, insAfter);
+        say("/gvar CleanupJunktown 0");
+    }
+    removeAt(h2); removeAt(away);
+
+    // ---- UseSkill on a farC target walks there first
+    {
+        const TilePos me2 = a.pos;
+        TilePos sp{};
+        bool placed = false;
+        for (int d = 14; d >= 9 && !placed; --d) placed = ringCell(me2.x, me2.y, d, 0, sp);
+        r = placed ? spawn(sp, 0) : std::string();
+        const int tid = field(r, "id");
+        CHECK(tid > 0, "Medic target spawned 9+ cells away");
+        auto medicMsg = [&](size_t from) { for (size_t i = from; i < a.chat.size(); ++i) if (a.chat[i].find("first aid") != std::string::npos || a.chat[i].find("You treat") != std::string::npos || a.chat[i].find("not hurt") != std::string::npos) return true; return false; };
+        auto tooFarMsg = [&](size_t from) { for (size_t i = from; i < a.chat.size(); ++i) if (a.chat[i].find("too farC") != std::string::npos) return true; return false; };
+        if (tid > 0) {
+            dev("hurt " + std::to_string(tid) + " 3");
+            const size_t chat0 = a.chat.size();
+            const int d0 = cheb(a.pos.x, a.pos.y, sp.x, sp.y);
+            gnet::UseSkill u; u.skill = 7; u.kind = 1; u.target = (uint32_t)tid;   // Medic
+            a.Send(gnet::PackG(u));
+            const bool done = WaitFor({&a}, 20, [&] { return medicMsg(chat0); });
+            const int d1 = cheb(a.pos.x, a.pos.y, sp.x, sp.y);
+            CHECK(d0 >= 9 && d1 <= 5 && !tooFarMsg(chat0), "UseSkill from %d cells: walked up to the target (now %d cells) without 'too far'", d0, d1);
+            CHECK(done, "...and the skill was performed on arrival");
+            if (!done) for (size_t i = chat0; i < a.chat.size(); ++i) std::printf("note: chat: %s (bot at %d,%d, target %d,%d)\n", a.chat[i].c_str(), a.pos.x, a.pos.y, sp.x, sp.y);
+            removeAt(sp);
+            // cancel: a second far use, then Attack(0) (Esc / Stop) ends the walk and nothing happens
+            const TilePos me3 = a.pos;
+            TilePos sp2{};
+            bool pl2 = false;
+            for (int d = 22; d >= 14 && !pl2; --d) pl2 = ringCell(me3.x, me3.y, d, 4, sp2);
+            r = pl2 ? spawn(sp2, 0) : std::string();
+            const int tid2 = field(r, "id");
+            if (tid2 > 0) {
+                dev("hurt " + std::to_string(tid2) + " 3");
+                const size_t chat1 = a.chat.size();
+                gnet::UseSkill u2; u2.skill = 7; u2.kind = 1; u2.target = (uint32_t)tid2;
+                a.Send(gnet::PackG(u2));
+                pause(0.15);
+                gnet::Attack stop; stop.id = 0;
+                a.Send(gnet::PackG(stop));
+                pause(2.5);
+                const TilePos p1 = a.pos;
+                pause(1.5);
+                const int dEnd = cheb(a.pos.x, a.pos.y, sp2.x, sp2.y);
+                CHECK(!medicMsg(chat1) && a.pos == p1 && dEnd > 5, "Esc / stop cancels the walk-then-skill request (distance left %d)", dEnd);
+            }
+        }
+        // a door: Security from afar walks to its doorway
+        ItemId door = 0;
+        pause(1.0);
+        say("/goto 00_04_Tutorial_Vault");   // doors with a script / lock are in the Vault
+        WaitFor({&a}, 8, [&] { return a.map.name == "00_04_Tutorial_Vault"; });
+        pause(1.5);
+        fillReach();
+        for (auto& [oid, oi] : a.objInfo) if (oi.kind == gnet::ObjectKind::Door && a.items.count(oid)) { door = oid; break; }
+        if (!door) std::printf("note: no door in view of the bot here; the object variant is not exercised\n");
+        else {
+            const net::ItemAdd it = a.items[door];
+            TilePos st{};
+            bool ok = false;
+            for (int d = 11; d >= 8 && !ok; --d) ok = ringCell(it.x, it.y, d, 0, st);
+            if (ok) {
+                say("/tp " + std::to_string(st.x) + " " + std::to_string(st.y));
+                WaitFor({&a}, 3, [&] { return a.pos == st; });
+                const size_t chat2 = a.chat.size();
+                gnet::UseSkill u3; u3.skill = 10; u3.kind = 2; u3.target = door;   // Security
+                a.Send(gnet::PackG(u3));
+                const bool answered = WaitFor({&a}, 20, [&] { return a.chat.size() > chat2; });
+                CHECK(answered && !tooFarMsg(chat2), "Security on a door from 8+ cells walks there and answers without 'too far'");
+            }
+        }
+    }
+    std::printf(g_failed ? "NPCLIFETEST FAILED\n" : "NPCLIFETEST PASSED\n");
+    return g_failed ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
     uint16_t port = 4048;
     std::string expectMap = "00_03_Tutorial_Junktown";
@@ -1567,6 +1872,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--locale")) return RunLocaleTests(port);
     for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--content")) return RunContentTests(port, argv[i + 1]);
     for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--dialogs")) return RunDialogTests(port);
+    for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--npclife")) return RunNpcLifeTests(port);
 
     Bot a, b;
     if (!a.Connect(port) || !b.Connect(port)) { std::printf("FAIL: cannot connect to 127.0.0.1:%u\n", port); return 1; }
@@ -2319,6 +2625,8 @@ int main(int argc, char** argv) {
         };
         auto tp = [&](TilePos t) { say("/tp " + std::to_string(t.x) + " " + std::to_string(t.y)); };
         idle(1.0);
+        say("/forcemiss on");   // bot A stands in the insurgents' post here (they are back home after the earlier fight and shoot): no hits until the loot flow is done
+        idle(0.6);
         // ---- bug 3 + loot flow: kill an NPC, leave, return
         say("/near Insurgent");
         idle(1.5);
@@ -2349,6 +2657,7 @@ int main(int argc, char** argv) {
                 CHECK(false, "no farc / return cell for the corpse test");
             }
             (void)groundBefore;
+            say("/forcemiss off");
             // ---- loot window protocol
             idle(1.0);
             size_t nc = a.cons.size();

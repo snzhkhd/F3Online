@@ -103,6 +103,7 @@ void Server::SpawnDataNpcs() {
             for (int k = 0; k < s.count; ++k)
                 if (Critter* c = SpawnCritterProto(m->id, *p, TilePos{static_cast<int16_t>(s.x), static_cast<int16_t>(s.y)}, nullptr)) {
                     if (c->instName.empty()) c->instName = r.id;   // scripts see data NPCs by name too (death counter _DEAD_<name>, HasDied)
+                    TrackSpawn(*c, nullptr, r.id);
                     ++n;
                 }
         }

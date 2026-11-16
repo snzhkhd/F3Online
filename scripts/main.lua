@@ -88,7 +88,7 @@ function use_skill(c, skill, value, kind, target)
         if obj then c:tell_key("lua.medic.object", {name = obj.name}); return true end
         if t.dead then c:tell_key("lua.medic.too_late"); return true end
         if t.hp >= t.max_hp then if t == c then c:tell_key("lua.medic.not_hurt_self") else c:tell_key("lua.medic.not_hurt", {name = t.name}) end; return true end
-        if t ~= c and c:distance_to(t) > 4 then c:tell_key("lua.medic.too_far"); return true end
+        -- range: the engine already walked the medic to within SkillUseRange cells of the patient (Server::UseSkill); no second, tighter check here
         local roll = math.random(1, 100)
         if roll > math.max(value, 15) then c:tell_key("lua.medic.fail"); return true end
         local heal = math.random(1, 4) + math.floor(value / 10)
@@ -183,6 +183,11 @@ function commands.amxattacks(c, arg)
     if not dev_kit() then c:tell("amxattacks needs a --dev-kit server"); return end
     amx_attacks((arg or "") ~= "off")
     c:tell("amx attacks " .. ((arg or "") ~= "off" and "on" or "off"))
+end
+-- dev (--dev-kit only): /npcdev <cmd>: NPC life helpers for tests (find / info / kill / spawn / pending / radius / leash / target / cleanup), see Server::NpcDev
+function commands.npcdev(c, arg)
+    if not dev_kit() then c:tell("npcdev needs a --dev-kit server"); return end
+    c:tell("npcdev: " .. npc_dev(c.id, arg or ""))
 end
 function commands.amxnative(c, arg)
     if not dev_kit() then c:tell("amxnative needs a --dev-kit server"); return end

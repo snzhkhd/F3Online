@@ -296,6 +296,7 @@ void Scripting::BindApi(sol::state& L) {
     };
     // dev / test only (main.lua gates the /amxnative command on --dev-kit): run natives by name, see AmxHost::NativeTest
     L["amx_native"] = [&S](int owner, const std::string& program) -> std::string { return S.Amx() ? S.Amx()->NativeTest(static_cast<CritterId>(owner), program) : std::string("amx not available"); };
+    L["npc_dev"] = [&S](int caller, const std::string& args) -> std::string { Critter* c = S.GetWorld().GetCritter((CritterId)caller); return c ? S.NpcDev(*c, args) : std::string("no caller"); };   // dev / test only (main.lua gates /npcdev on --dev-kit)
     L["amx_attacks"] = [&S](bool on) { if (S.Amx()) S.Amx()->SetAttacksEnabled(on); };   // dev / test only
     L["stf"] = [&S](int id) { return S.Data().String(id); };   // English.stf text by id
     L["stf_for"] = [&S](Critter& c, int id) { return S.Stf(c, id); };   // same, with the "stf.<id>" override of the critter's language
@@ -534,6 +535,7 @@ void Scripting::ApplyConfig(sol::state_view L) {
     F3_CFG_INT(ApBase); F3_CFG_INT(ApAgilityDiv); F3_CFG_NUM(WalkSpeed); F3_CFG_NUM(RunSpeed); F3_CFG_NUM(MoveClearance);
     F3_CFG_INT(AttackMinMs); F3_CFG_INT(AttackMaxMs); F3_CFG_INT(AttackMsPerCost);
     F3_CFG_INT(RtApCostAttackPerCost); F3_CFG_INT(RtApCostAttackMin); F3_CFG_INT(TransferLock); F3_CFG_INT(AggroAlertRadius); F3_CFG_INT(AggroLeashCells); F3_CFG_INT(ForceMiss);
+    F3_CFG_INT(HomeGiveUpSec); F3_CFG_INT(RespawnDefaultSec); F3_CFG_INT(RespawnPlayerRadius); F3_CFG_INT(AmxJunktownCleanup);
     F3_CFG_INT(CarryBase); F3_CFG_INT(CarryPerStrength);
     F3_CFG_INT(WeightWeapon); F3_CFG_INT(WeightArmor); F3_CFG_INT(WeightAmmo); F3_CFG_INT(WeightItem);
     F3_CFG_INT(RequireCharacterCreation); F3_CFG_INT(SpecialBase); F3_CFG_INT(CharPoints); F3_CFG_INT(SpecialMin); F3_CFG_INT(SpecialMax);
@@ -561,6 +563,9 @@ void Scripting::ApplyConfig(sol::state_view L) {
     g.TraitMax = std::clamp(g.TraitMax, 0, 16);
     g.SkillUseRange = std::clamp(g.SkillUseRange, 1, 40);
     g.DoorOpenRange = std::clamp(g.DoorOpenRange, 1, 12);
+    g.RespawnDefaultSec = std::max(0, g.RespawnDefaultSec);
+    g.RespawnPlayerRadius = std::clamp(g.RespawnPlayerRadius, 0, 400);
+    g.HomeGiveUpSec = std::max(1, g.HomeGiveUpSec);
     g.LockpickMinChance = std::clamp(g.LockpickMinChance, 0, 100);
     g.LockpickMaxChance = std::clamp(g.LockpickMaxChance, g.LockpickMinChance, 100);
     g.MaxLevel = std::clamp(g.MaxLevel, 1, 99);

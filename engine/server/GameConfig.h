@@ -26,6 +26,10 @@ struct GameConfig {
     int TransferLock = 3000;
     int AggroAlertRadius = 8;   // cells: same-team NPCs this close to a shot-at NPC join the fight (0 = off)
     int AggroLeashCells = 60;   // cells: an NPC drops a target that is farther away than this (teleport, long chase); 0 = chase forever
+    int HomeGiveUpSec = 30;     // seconds an NPC walking back home may take before it is put on its home cell (blocked path)
+    int RespawnDefaultSec = 300;    // seconds until a dead NPC comes back, unless its data/npcs record has `respawn` (0 = never)
+    int RespawnPlayerRadius = 50;   // cells: a respawn waits while a living player is this close to the spawn cell (default view radius 48)
+    bool AmxJunktownCleanup = false;   // original "CleanupJunktown" script flag (Frank): living Junktown NPCs delete themselves. Off: the flag is ignored (docs/amx-scripts.md)
     bool ForceMiss = false;     // dev/test: every attack misses (hit roll skipped)
     // carry weight (server authoritative): limit = CarryBase + CarryPerStrength * ST; unit weights by item class
     // (the demo data has no weights), ItemWeights overrides single prototypes by key ("Weapons9mm_Autoloader.WEA")

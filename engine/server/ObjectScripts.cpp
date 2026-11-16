@@ -173,10 +173,10 @@ void Server::DoorAction(Map& m, Item& o, const std::string& action) {
     else Operate(nullptr, m, o, 0);
 }
 
-bool Server::ObjectGate(Critter& c, Map& m, Item& o, const ObjectDef& d) {
+bool Server::ObjectGate(Critter& c, Map& m, Item& o, const ObjectDef& d, int range) {
     if (ObjectHiddenFor(c, o)) return false;
     if (!d.usable) { TellK(c, "msg.obj.unusable"); return false; }
-    if (ObjDist(o, c.pos) > ObjectRange(o, rt_.DoorOpenRange)) { TellK(c, "msg.too_far"); return false; }
+    if (ObjDist(o, c.pos) > (range >= 0 ? range : ObjectRange(o, rt_.DoorOpenRange))) { TellK(c, "msg.too_far"); return false; }
     const bool used = d.oneShot == 1 ? ObjStateOf(m, o).used : d.oneShot == 2 ? GetGlobalFor(&c, "obj." + d.id + ".used") > 0 : false;
     if (used) { TellK(c, "msg.obj.used"); return false; }
     auto cd = objCooldown_.find(o.id);
@@ -286,7 +286,7 @@ bool Server::ObjectSkill(Critter& c, Map& m, Item& o, int skill) {
     const bool luaSkill = script && scripting_->HasObjectHook(d.script, "on_skill");
     if (!steps && !luaSkill) return false;
     if (ObjectHiddenFor(c, o)) return true;
-    if (!ObjectGate(c, m, o, d)) return true;
+    if (!ObjectGate(c, m, o, d, SkillReach(o))) return true;   // same reach as UseSkill (a skill is not held to the tighter use range)
     const LuaObj lo{this, o.id};
     bool handled = false;
     if (luaSkill) handled = scripting_->CallObjectHandled(d.script, "on_skill", &c, lo, sk);

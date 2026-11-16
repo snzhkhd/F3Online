@@ -217,6 +217,14 @@ logic public (`LA..` sets globals / tasks, then `N<next>`); the node is presente
   toggles AMX attacks. `f3_gametest` (main suite) drives them: int/float returns, argument counts, float module, `AddToSquad`, `HasItem`, LOS grid, FOW,
   `FindObjects`, waypoints, VEG ids, `HasDied`, `A_MoveToPosition`, `A_Wander`, `A_Attack`, `A_JustAttack`.
 
+## CleanupJunktown and story removals (decision)
+
+Frank (Vault, map 00_04) sets the global `CleanupJunktown`; afterwards every behaviour script deletes its NPC in area `00_03_Tutorial_Junktown`. In the original that was a
+single-player story step. Here the global is per player (persisted `gvars` of the "Protagonist") while the NPCs are shared by everybody, so after one player (or an old save)
+set it, Junktown NPCs deleted themselves whenever nobody saw them: this is why a database from an earlier session showed every NPC absent. Decision: `GetGlobal("CleanupJunktown")`
+returns 0 unless `config.AmxJunktownCleanup = true` (default false), so the shared world is not wiped by one player's progress. Everything else a script deletes through
+`DestroyEntity` is a real removal: that NPC is not respawned. Test: `f3_gametest --npclife` (the flag reads 0 by default and 1 when the dev command sets it).
+
 ## Port status
 
 | script | status |

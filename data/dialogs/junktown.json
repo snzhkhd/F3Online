@@ -24,7 +24,7 @@
         },
         {
           "id": "who",
-          "text": "Name is Joe. I buy junk, sell junk and fix what can be fixed. Business has been slow since the soldiers showed up.",
+          "text": "Name is Joe, <CHARNAME>. I buy junk, sell junk and fix what can be fixed. Business has been slow since the soldiers showed up.",
           "answers": [
             { "id": "help", "text": "Maybe I can help.", "do": [ { "quest": "scrapper_toolkit", "state": "add" }, { "flag": "scrapper_met", "set": true } ], "goto": "job" },
             { "id": "bye", "text": "See you around." }

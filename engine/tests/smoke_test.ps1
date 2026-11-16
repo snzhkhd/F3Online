@@ -5,6 +5,7 @@
 #  0. Data layer: f3_datatest (loader / merge / validation unit tests), f3_server --validate-data on data/ (must pass) and on the
 #     deliberately broken engine/tests/data_bad (must fail with a status code, must pass with --lenient).
 #  0d. Content editor (--editor): f3_editortest, then a live server on a copy of data/: token / Host / path-confinement rejections, get / put / validate / reload.
+#  2b. NPC life (respawn, leash / home, UseSkill approach): f3_gametest --npclife against a --dev-kit server.
 #  5c. Object scripts (data/objects + scripts/objects): f3_gametest --objects 1|2 with a server restart in between.
 #  2. If gamedata/server exists (run f3_dataimport first): f3_server on the real data + f3_gametest
 #     (real map grid, stats, inventory, walk, pickup, combat, map transition, door). Skipped otherwise.
@@ -288,6 +289,18 @@ if ((Test-Path (Join-Path $DataDir "manifest.json")) -and (Test-Path $gametest))
     Write-Host "---- server log (game data) ----"
     Get-Content $log2
     if ($code -ne 0) { $exit = $code }
+
+    # ---- 2b. NPC life + skill approach: respawn (timer / 0 = never / waits for players), leash and walk home, empty map reset,
+    #          CleanupJunktown no longer deletes NPCs, UseSkill on a far target walks there, Esc cancels (uses the dev-only /npcdev command)
+    $logL = Join-Path $env:TEMP "f3_server_smoke_npclife.log"
+    $p = Run-Server "--data `"$DataDir`" --dev-kit" $logL ($Port + 14)
+    try {
+        Start-Sleep -Milliseconds 2500
+        $code = Run-GameTest @("--port", ($Port + 14), "--npclife")
+    } finally {
+        if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+    }
+    if ($code -ne 0) { Write-Host "---- server log (npclife) ----"; Get-Content $logL; $exit = $code }
 
     # ---- 3. accounts + persistence: register, play, quit; RESTART the server; login and check everything came back
     $state = Join-Path $env:TEMP "f3_acct_state.txt"

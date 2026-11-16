@@ -9,6 +9,7 @@
 #include <mutex>
 #include <sstream>
 #include <set>
+#include <unordered_set>
 #include <string>
 #include <vector>
 #include "Account.h"
@@ -31,6 +32,9 @@ void SetServerSeed(uint32_t seed);
 uint32_t ServerSeed();
 
 class Scripting;
+
+// Replaces the original string tokens (<CHARNAME>, <HANGDOGNAME> = the player's name, <DEVILDOG>, censor words such as <DAMN>) in dialog text; see Dialogs.cpp.
+std::string ExpandDlgTokens(const std::string& text, const std::string& playerName);
 
 class Server {
 public:
@@ -158,7 +162,8 @@ public:
     void SendCharSheet(Critter& c);
     bool CreateCharacter(Critter& c, const gnet::CharCreate& m);
     bool SpendSkillPoints(Critter& c, int skill, int points);
-    bool UseSkill(Critter& c, int skill, int kind, uint32_t target);
+    bool UseSkill(Critter& c, int skill, int kind, uint32_t target, bool afterWalk = false);   // too far: the player walks to the target first (BeginInteract / RunPending), afterWalk = that second call
+    int SkillReach(const Item& o) const { return ObjectRange(o, rt_.SkillUseRange); }      // cells from the object (its cell or doorway cells, ObjDist) a skill may be used from
     // ---- Pip-Boy: quests, friends, mail (Pip.cpp). Quests and friends live in the character (tables quests / friends of the store), mail per account (table mail).
     bool QuestAdd(Critter& c, const std::string& id, const std::string& title, const std::string& text);   // false: id already in the log
     bool QuestSet(Critter& c, const std::string& id, uint8_t state);   // 1 completed, 2 failed, 0 active again; false: unknown quest
@@ -193,6 +198,17 @@ public:
     bool LangChat(Critter& c, const std::string& text);      // /lang [code]; true = handled
     bool ContentChat(Critter& c, const std::string& text);   // /perks /perk /traits /reload; true = handled
     void SpawnDataNpcs();                                    // data/npcs "spawns"
+    // ---- NPC life (NpcLife.cpp, docs/server-data.md "NPC respawn and home"): respawn after death, leash / return home
+    struct SpawnRec { uint16_t pid = 0; MapId map = 0; TilePos pos; bool hasInst = false; EntityDef inst; std::string nameFallback; int respawnOverride = -1; };
+    void TrackSpawn(Critter& c, const EntityDef* inst, const std::string& nameFallback = std::string(), int respawnOverride = -1);   // remember how a map / data NPC was spawned (respawn)
+    void ForgetSpawn(CritterId id);                          // the NPC is removed on purpose (story): it never respawns
+    int RespawnSecFor(const SpawnRec& r) const;              // data/npcs `respawn` of its prototype, else config RespawnDefaultSec; 0 = never
+    void QueueRespawn(Critter& dead);                        // called by KillCritter
+    void TickRespawns();                                     // once a second
+    void TickNpcHome(Critter& c);                            // leash, walk back home, heal
+    void ResetNpcsOfMap(Map& m);                             // nobody left on the map: hunters go home and heal
+    size_t PendingRespawns() const { return respawnQ_.size(); }
+    std::string NpcDev(Critter& caller, const std::string& args);   // dev / test chat helper (/npcdev), see NpcLife.cpp
     // ---- data dialogs (Dialogs.cpp, docs/dialogs.md): data/dialogs graphs through the AMX dialogue protocol; used when the NPC's `dialog` is a data dialog id
     bool HasDataDialog(const Critter& npc) const;
     bool CanTalk(const Critter& c) const;   // NPC with a dialog the server can start (data dialog or AMX script)
@@ -342,12 +358,16 @@ private:
     ContentDb content_;
     uint32_t contentRev_ = 0;
     struct DataDlg { CritterId pc = 0, npc = 0; ItemId obj = 0; std::string dialog, node; std::vector<int> shown; };   // shown: answer index per reply sent (-1 = leave)
+    std::unordered_map<CritterId, SpawnRec> spawnRecs_;      // living NPCs that respawn after death, by critter id
+    struct RespawnJob { SpawnRec rec; uint64_t due = 0; CritterId corpse = 0; };
+    std::vector<RespawnJob> respawnQ_;
+    std::unordered_set<MapId> prevActive_;                   // maps that had a player on the previous tick
     std::unordered_map<CritterId, DataDlg> ddlgs_;   // running data dialogs by player id
     std::map<std::string, ObjState> objState_;              // "map\nobject key" -> state
     std::set<std::string> objStateLoaded_, objStateDirty_;  // map names
     std::vector<std::string> objUnresolved_;                // bindings that found no object at the last BindObjects
     std::map<ItemId, uint64_t> objCooldown_;                // object id -> server ms until it can be used again
-    bool ObjectGate(Critter& c, Map& m, Item& o, const ObjectDef& d);   // usable / hidden / range / one-shot / cooldown; false = refused (already told)
+    bool ObjectGate(Critter& c, Map& m, Item& o, const ObjectDef& d, int range = -1);   // usable / hidden / range / one-shot / cooldown; false = refused (already told)
     void ObjectMarkUsed(Critter& c, Item& o, const ObjectDef& d);
     bool RunObjSteps(Critter& pc, Map& m, Item& o, const ObjectDef& d, const std::vector<ObjStep>& steps);   // true = stop (end / dialog started)
     bool RunDlgEffects(Critter& pc, Critter* npc, const std::vector<DlgEffect>& fx);   // true = an effect closed the conversation
