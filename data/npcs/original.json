@@ -1,7 +1,6 @@
 {
   "schema": 1,
   "kind": "npcs",
-  "generator": "f3_server --export-data",
   "note": "Critter templates placed by the shipped maps, from the original data (f3_server --export-data). Map instances keep their own team / script / dialog / inventory; these records are the template defaults (and what data spawns use). Remove the \"generator\" key to keep your edits.",
   "records": [
     {
@@ -29,6 +28,7 @@
     },
     {
       "id": "Critters00_TMCommunist_Insurgent_2.CRT",
+      "name": "Communist Insurgent",
       "model": "HumMStr",
       "team": 2,
       "level": 3,
@@ -39,6 +39,7 @@
     },
     {
       "id": "Critters00_TMCommunist_Insurgent_F1.CRT",
+      "name": "Communist Insurgent",
       "model": "HumFWir",
       "team": 2,
       "level": 3,
@@ -49,6 +50,7 @@
     },
     {
       "id": "Critters00_TMCommunist_Insurgent_Shiv.CRT",
+      "name": "Communist Insurgent",
       "model": "HumMStr",
       "team": 2,
       "level": 3,
@@ -59,7 +61,7 @@
     },
     {
       "id": "Critters00_TMCpl_Armstrong.CRT",
-      "name": "GMC Soldier",
+      "name": "Armstrong",
       "model": "HumMStr",
       "team": 1,
       "level": 1,
@@ -112,6 +114,7 @@
     },
     {
       "id": "CrittersCoyote.CRT",
+      "name": "Coyote",
       "model": "CR_Dog",
       "team": 0,
       "level": 1,
