@@ -33,6 +33,7 @@ struct ClientCritter {
     TilePos pos;        // last authoritative tile
     int pid = -1;       // prototype index (protos.json) or -1
     bool dead = false;
+    bool talk = false;  // server says a dialogue can be started (CritterProto.talk): Talk cursor even when the prototype names none
     int16_t hp = -1, maxHp = -1;  // -1 unknown
     bool run = false;   // current path is a run
     // timed polyline; empty = stand at `pos`

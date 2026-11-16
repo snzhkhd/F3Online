@@ -38,6 +38,8 @@ void ReplaceAll(std::string& s, const std::string& from, const std::string& to) 
 }
 }  // namespace
 
+// Talkable = the server can start a conversation: a data dialog, or an AMX dialogue script. Sent to clients in CritterProto (Talk cursor).
+bool Server::CanTalk(const Critter& c) const { return c.IsNpc() && !c.dead && !c.dialog.empty() && (HasDataDialog(c) || amx_); }
 bool Server::HasDataDialog(const Critter& npc) const { return !npc.dialog.empty() && content_.FindDialog(npc.dialog) != nullptr; }
 bool Server::InDataDialog(CritterId id) const {
     if (ddlgs_.count(id)) return true;

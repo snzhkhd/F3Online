@@ -191,6 +191,7 @@ inline CursorMode ResolveCursor(const ClientCore& core, CursorMode manual, const
         const ClientCritter* c = core.Find(pr.critter);
         if (!c) return CursorMode::Examine;
         if (c->dead) return c->kind == CritterKind::Npc ? CursorMode::Use : CursorMode::Examine;   // an NPC corpse is a container: click = loot
+        if (c->kind == CritterKind::Npc && c->talk) return CursorMode::Talk;   // data dialog (NPC record `dialog`) or any dialogue the server can start
         if (c->kind == CritterKind::Npc && c->pid >= 0) {
             const ProtoInfo* p = core.protos().ByPid(static_cast<uint32_t>(c->pid));
             if (p && p->hasDialog) return CursorMode::Talk;

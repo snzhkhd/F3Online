@@ -195,6 +195,7 @@ public:
     void SpawnDataNpcs();                                    // data/npcs "spawns"
     // ---- data dialogs (Dialogs.cpp, docs/dialogs.md): data/dialogs graphs through the AMX dialogue protocol; used when the NPC's `dialog` is a data dialog id
     bool HasDataDialog(const Critter& npc) const;
+    bool CanTalk(const Critter& c) const;   // NPC with a dialog the server can start (data dialog or AMX script)
     bool StartDataDialog(Critter& pc, Critter& npc);          // false: the NPC has no data dialog (the caller tries the original .scra)
     void DataDialogChoose(Critter& pc, int index);            // index into the replies of the last DialogNode
     void DataDialogClose(Critter& pc, bool notify = true);

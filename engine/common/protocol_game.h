@@ -399,8 +399,9 @@ struct CritterProto {
     static constexpr GMsg kId = static_cast<GMsg>(GMsgView::S2C_CritterProto);
     uint32_t id = 0;   // critter id
     uint16_t pid = 0;  // prototype index (key-sorted protos.json)
-    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU16(pid); }
-    bool Read(ByteBuffer& b) { id = b.ReadU32(); pid = b.ReadU16(); return b.Ok(); }
+    uint8_t talk = 0;  // optional trailing field: 1 = the server can start a dialogue with this critter (prototype or data `dialog`); the client shows the Talk cursor
+    void Write(ByteBuffer& b) const { b.WriteU32(id); b.WriteU16(pid); b.WriteU8(talk); }
+    bool Read(ByteBuffer& b) { id = b.ReadU32(); pid = b.ReadU16(); talk = b.Remaining() >= 1 ? b.ReadU8() : 0; return b.Ok(); }
 };
 }  // namespace gnet
 }  // namespace f3

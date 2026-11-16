@@ -491,7 +491,7 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
             gnet::CritterProto m;
             if (!m.Read(b)) return;
             auto it = critters_.find(m.id);
-            if (it != critters_.end()) it->second.pid = m.pid;
+            if (it != critters_.end()) { it->second.pid = m.pid; it->second.talk = m.talk != 0; }
             break;
         }
         default: break;
