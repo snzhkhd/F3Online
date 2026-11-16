@@ -34,6 +34,7 @@ config = {
     -- attack AP (1/100) = weapon cost word * RtApCostAttackPerCost, at least RtApCostAttackMin (9mm: 1 AP)
     RtApCostAttackMin         = 50,
     AggroAlertRadius          = 8,     -- cells: same-team NPCs near a shot-at NPC join the fight (0 = off)
+    AggroLeashCells           = 60,    -- cells: an NPC gives up a target farther away than this (a hunter must not chase a teleported / far away player across the map); 0 = never
     ForceMiss                 = false, -- dev/test: every attack misses (the /forcemiss command toggles it at run time)
     CarryBase                 = 25,    -- carry limit = CarryBase + CarryPerStrength * Strength
     CarryPerStrength          = 25,

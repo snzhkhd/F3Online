@@ -423,7 +423,7 @@ void Scripting::ApplyConfig(sol::state_view L) {
     F3_CFG_INT(RtAlwaysRun); F3_CFG_INT(RunOnCombat);
     F3_CFG_INT(ApBase); F3_CFG_INT(ApAgilityDiv); F3_CFG_NUM(WalkSpeed); F3_CFG_NUM(RunSpeed); F3_CFG_NUM(MoveClearance);
     F3_CFG_INT(AttackMinMs); F3_CFG_INT(AttackMaxMs); F3_CFG_INT(AttackMsPerCost);
-    F3_CFG_INT(RtApCostAttackPerCost); F3_CFG_INT(RtApCostAttackMin); F3_CFG_INT(TransferLock); F3_CFG_INT(AggroAlertRadius); F3_CFG_INT(ForceMiss);
+    F3_CFG_INT(RtApCostAttackPerCost); F3_CFG_INT(RtApCostAttackMin); F3_CFG_INT(TransferLock); F3_CFG_INT(AggroAlertRadius); F3_CFG_INT(AggroLeashCells); F3_CFG_INT(ForceMiss);
     F3_CFG_INT(CarryBase); F3_CFG_INT(CarryPerStrength);
     F3_CFG_INT(WeightWeapon); F3_CFG_INT(WeightArmor); F3_CFG_INT(WeightAmmo); F3_CFG_INT(WeightItem);
     F3_CFG_INT(RequireCharacterCreation); F3_CFG_INT(SpecialBase); F3_CFG_INT(CharPoints); F3_CFG_INT(SpecialMin); F3_CFG_INT(SpecialMax);

@@ -25,6 +25,7 @@ struct GameConfig {
     int RtApCostAttackPerCost = 5, RtApCostAttackMin = 50;
     int TransferLock = 3000;
     int AggroAlertRadius = 8;   // cells: same-team NPCs this close to a shot-at NPC join the fight (0 = off)
+    int AggroLeashCells = 60;   // cells: an NPC drops a target that is farther away than this (teleport, long chase); 0 = chase forever
     bool ForceMiss = false;     // dev/test: every attack misses (hit roll skipped)
     // carry weight (server authoritative): limit = CarryBase + CarryPerStrength * ST; unit weights by item class
     // (the demo data has no weights), ItemWeights overrides single prototypes by key ("Weapons9mm_Autoloader.WEA")

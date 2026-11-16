@@ -850,6 +850,11 @@ void Server::TickCombat(Critter& c) {
     if (!t || !m || t->dead || t->mapId != c.mapId) { c.target = 0; return; }
     AttackPlan plan = PlanAttack(c, data_, Mod(c, StMeleeDamage));
     int dist = TileDist(c.pos, t->pos);
+    if (c.IsNpc() && rt_.AggroLeashCells > 0 && dist > rt_.AggroLeashCells) {   // leash: no chasing across the whole map
+        c.target = 0;
+        StopMove(c, 1);
+        return;
+    }
     bool los = dist <= 1 || HasLos(*m, c.pos, t->pos);
     if (dist > plan.rangeCells || !los) {
         if (c.isStatic || !IsFree(c)) return;
