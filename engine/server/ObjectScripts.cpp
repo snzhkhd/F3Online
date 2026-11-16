@@ -243,6 +243,11 @@ bool Server::RunObjSteps(Critter& pc, Map& m, Item& o, const ObjectDef& d, const
                 if (scripting_) scripting_->Call(st.s.c_str(), &pc, LuaObj{this, oid});
                 break;
             case ObjStep::DefaultUse: DefaultUseObject(pc, m, o); break;
+            case ObjStep::Original: {   // the original script of the object (scripts/original/*.lua on_use, e.g. the Vault 13 computer), composed with the binding
+                const Proto* op = data_.GetProto(o.pid);
+                if (scripting_) scripting_->Call("on_use", &pc, static_cast<int>(o.id), op ? op->key : std::string(), o.script);
+                break;
+            }
             case ObjStep::End: return true;
         }
     }

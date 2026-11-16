@@ -216,6 +216,7 @@ const char* const kMisc = R"J({
    {"id":"play","fields":[{"key":"play","type":"string","maxLen":64,"required":true}],"help":"calls the Lua hook object_effect(player, obj, name); the protocol has no effect message yet"},
    {"id":"call","fields":[{"key":"call","type":"string","luaName":true,"required":true}],"help":"global Lua function fn(player, obj)"},
    {"id":"default_use","fields":[{"key":"default_use","type":"const","value":true}],"help":"the engine's own door / container use"},
+   {"id":"original","fields":[{"key":"original","type":"const","value":true}],"help":"runs the object's original script (scripts/original, e.g. the Vault 13 computer) at this point: compose it with your own steps"},
    {"id":"end","fields":[{"key":"end","type":"const","value":true}],"help":"stops the list"}]},
  "extensionPoints":{}
 })J";

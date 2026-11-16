@@ -64,6 +64,7 @@ A step is an object with exactly one "kind" key, optionally with `if` (a conditi
 | `play` | effect name | calls the Lua hook `object_effect(player, obj, name)`; there is no client effect message yet |
 | `call` | Lua function name | global `fn(player, obj)` |
 | `default_use` | `true` | the engine's own door / container use |
+| `original` | `true` | runs the object's original script (`scripts/original/*.lua` handler of its `.amx`, e.g. the Vault 13 computer) at this point |
 | `end` | `true` | stops the list |
 
 Flag, quest and item conditions are the ones of `docs/dialogs.md` (`skill:Science>=50`, `flag:name==1`, `quest:id==completed`, `{ "any": [...] }`, ...).
@@ -126,5 +127,10 @@ bad cells, oversized step lists, a `script` path that is not a relative `.lua` p
 * `play` has no client effect: only the Lua hook `object_effect` runs.
 * The cursor label is sent per object; a change of `label` or `name` at `/reload` reaches clients that re-enter the map.
 * The object list in the editor reflects the maps loaded by the running server; bindings of unloaded maps cannot be picked.
-* Object scripts replace nothing in the original AMX scripts: where an original script already drives an object (the Vault 13 computer), bind only when you want to override it.
+* Precedence with the original script: an object WITHOUT a binding (or with a binding that only sets name / desc / label / skills) is driven by its original script
+  (`scripts/original/tutorial.lua`, keyed by the object's `.amx` name: the Vault 13 computer `Computer07cDS_Tech_000` answers with the life-support message). A binding
+  with `on_use` steps or a Lua `on_use` REPLACES the original use; to keep both, put an `{ "original": true }` step in the list (runs the original handler at that point).
+  The cursor label comes from the binding's `label` (an unbound object shows the plain localized `Use` / [Применить]; a label of `Use` is shown localized too).
+  To enable the Vault computer sample: copy `data/objects/_samples.json` to `data/objects/samples.json` (or move the `vault_computer` record into your own file), then
+  `/reload` (dev kit) or restart the server; the sample dialog `vault_terminal` then opens instead of the original message.
 * The cooldown is in memory only; per-player one-shot state needs a player variable (it is saved with the character).

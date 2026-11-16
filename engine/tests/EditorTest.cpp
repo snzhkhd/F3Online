@@ -212,7 +212,7 @@ static void TestReadEndpoints() {
     CHECK(stf["available"] == true && stf["text"] == "Original line", "stf preview");
     CHECK(J(f.api->Handle(Req("GET", "/api/stf", {{"id", "x"}}))).value("ok", true) == false, "stf bad id");
     json sch = J(f.api->Handle(Req("GET", "/api/schema")));
-    CHECK(sch["kinds"].contains("dialogs") && sch["enums"]["skills"].size() == 14 && sch["kinds"].contains("objects") && sch["steps"]["kinds"].size() == 14, "schema served");
+    CHECK(sch["kinds"].contains("dialogs") && sch["enums"]["skills"].size() == 14 && sch["kinds"].contains("objects") && sch["steps"]["kinds"].size() == 15, "schema served");
 }
 
 static void TestSaveFlow() {

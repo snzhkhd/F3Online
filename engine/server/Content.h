@@ -107,7 +107,7 @@ struct DialogDef {
 
 // ---- object scripts (data/objects, docs/object-scripts.md): behaviour bound to a map object
 struct ObjStep {
-    enum Kind { Dialog, Door, SkillCheck, Effect, Message, Teleport, Play, Call, DefaultUse, End };
+    enum Kind { Dialog, Door, SkillCheck, Effect, Message, Teleport, Play, Call, DefaultUse, Original, End };
     Kind kind = End;
     bool hasCond = false;
     DlgCond cond;                    // "if": the step is skipped unless it holds

@@ -421,14 +421,14 @@ void ParseObjSteps(Ctx& c, const std::string& path, const json* arr, std::vector
     if (!arr) return;
     if (depth > 3) { c.Err(path, "skill checks nested deeper than 3 levels"); return; }
     if (arr->size() > 24) { c.Err(path, "more than 24 steps"); return; }
-    static const char* const kActs[] = {"dialog", "door", "skill", "give", "take", "quest", "flag", "xp", "message", "teleport", "play", "call", "default_use", "end"};
+    static const char* const kActs[] = {"dialog", "door", "skill", "give", "take", "quest", "flag", "xp", "message", "teleport", "play", "call", "default_use", "original", "end"};
     for (size_t i = 0; i < arr->size(); ++i) {
         const std::string ep = path + "[" + std::to_string(i) + "]";
         const json& j = (*arr)[i];
         if (!j.is_object()) { c.Err(ep, std::string("expected object, got ") + TypeName(j)); continue; }
         std::vector<std::string> present;
         for (const char* a : kActs) if (j.contains(a)) present.push_back(a);
-        if (present.size() != 1) { c.Err(ep, "a step needs exactly one of: dialog, door, skill, give, take, quest, flag, xp, message, teleport, play, call, default_use, end"); continue; }
+        if (present.size() != 1) { c.Err(ep, "a step needs exactly one of: dialog, door, skill, give, take, quest, flag, xp, message, teleport, play, call, default_use, original, end"); continue; }
         const std::string& a = present[0];
         ObjStep st;
         json body = j;
@@ -487,7 +487,7 @@ void ParseObjSteps(Ctx& c, const std::string& path, const json* arr, std::vector
             st.kind = ObjStep::Call;
             if (auto v = e.Str("call", true, 64)) { st.s = *v; if (!ValidHook(st.s)) c.Err(ep + ".call", "'" + st.s + "' is not a valid Lua function name"); }
         } else {
-            st.kind = a == "end" ? ObjStep::End : ObjStep::DefaultUse;
+            st.kind = a == "end" ? ObjStep::End : a == "original" ? ObjStep::Original : ObjStep::DefaultUse;
             auto b = e.Bool(a.c_str());
             if (b && !*b) c.Err(ep + "." + a, "expected true");
         }
