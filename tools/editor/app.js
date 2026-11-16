@@ -144,7 +144,7 @@ function renderDirty() {
   $('btnUndo').disabled = !S.undo.length; $('btnRedo').disabled = !S.redo.length;
   $('btnSaveAll').disabled = !n;
   const f = curFile(); $('btnSave').disabled = !(f && isDirty(f));
-  document.title = (n ? '● ' : '') + 'F3 Content Editor';
+  document.title = (n ? '● ' : '') + (Ed.T ? Ed.T('F3 Content Editor') : 'F3 Content Editor');
 }
 window.addEventListener('beforeunload', (e) => { if (dirtyFiles().length) { e.preventDefault(); e.returnValue = ''; } });
 

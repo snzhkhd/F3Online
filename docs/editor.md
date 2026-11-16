@@ -3,7 +3,7 @@
 A browser based editor for the `data/` folder, served by `f3_server` itself. It edits the same JSON files the server loads
 (`docs/data-format.md`), validates them with the server's own validator and can make the running server re-read them.
 
-Source: `engine/server/EditorCore.*` (HTTP free API), `EditorSchema.cpp` (schema), `EditorServer.*` (HTTP front), `tools/editor/` (UI).
+Source: `engine/server/EditorCore.*` (HTTP free API), `EditorSchema.cpp` (schema), `EditorServer.*` (HTTP front), `tools/editor/` (UI; `i18n.js` holds the UI strings).
 
 ## 1. Starting it
 
@@ -68,8 +68,28 @@ Still, it is a development tool: run it on a machine you trust, and do not forwa
   placeholder; a new key can be added in all languages at once.
 * **Object scripts**: a marked, inactive section, see section 7.
 
+* **UI language** (`RU` / `EN` button in the header): the editor's own texts (buttons, labels, hints, messages, form labels and help of the schema, the common validator
+  message prefixes such as `unknown item '...'`) switch between English and Russian. The choice is kept in `localStorage` (`f3ed.lang`); without one the browser language
+  decides (Russian browsers start in Russian, everything else in English). Only the editor itself is translated: record ids, names, texts of the data files, JSON, the
+  Locale tab contents and technical vocabulary (condition / effect kinds, skill names, field keys) are never touched, and the saved files do not depend on the UI language.
+  See section 3b for how to add texts or a language.
+
 Known limits: a hand file with `//` comments loses them on save (the UI warns, the API reports `hasComments` / `hadCommentsLost`); a file is edited as a whole document, there is no merge of
 concurrent changes (the etag check turns them into a conflict dialog); deleting a file moves it to `_deleted_<name>` (ignored by the server) instead of destroying it.
+
+### 3b. UI strings (`tools/editor/i18n.js`)
+
+The code of the UI is written in English; `i18n.js` translates what it puts into the page. The table maps the **English text to its translation** (`Ed.i18n.add(lang, table, patterns)`),
+so a new button needs no key: write the English text, then add `'Text': 'Перевод'` to the `ru` table. A text without an entry stays English (nothing breaks, the missing
+entries are easy to find by switching the language and looking for English left over). A DOM translator walks text nodes and the `title` / `placeholder` / `aria-label`
+attributes, remembers each original (so switching back restores it) and watches for new nodes (a `MutationObserver`), which is why render code does not call a lookup function.
+Not translated by design: `<input>` / `<textarea>` values, `<pre>` / `<code>`, elements with class `mono`, `id`, `nm`, `json` or the attribute `data-notr`, SVG text.
+
+* Texts with numbers or names inside (`3 records`, `Cannot load X: ...`) use the **patterns** list: `[regex, (match, tr) => translation]`; `tr()` translates a captured part.
+  Keys are compared trimmed (fragments around inline elements often carry blanks).
+* `Ed.T('Cannot load {file}', { file })` is for the few strings that are not shown through the DOM (a `confirm()`, a value).
+* A new language: `Ed.i18n.add('de', { ... }, [ ... ], 'Deutsch')` in its own file loaded after `i18n.js`; the header button then cycles through all languages, and `navigator.language`
+  picks it by default when it matches.
 
 ## 4. API
 
