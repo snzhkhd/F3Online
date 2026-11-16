@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -552,10 +553,15 @@ private:
     };
 
     // Puts a renderer-space position on the walkable ground surface (continuous height field of the level geometry).
-    Vector3 OnGround(Vector3 w, float lift = 0.0f) const {
-        w.y = map_.GroundHeight(w.x, w.z) + lift;
+    // ref: height the thing stands at (NaN = the player's current floor, or the map's most common floor height).
+    Vector3 OnGround(Vector3 w, float lift = 0.0f, float ref = std::numeric_limits<float>::quiet_NaN()) const {
+        if (std::isnan(ref)) ref = std::isnan(selfY_) ? map_.modalFloor() : selfY_;
+        w.y = map_.GroundHeight(w.x, w.z, ref) + lift;
         return w;
     }
+    mutable float selfY_ = std::numeric_limits<float>::quiet_NaN();   // floor height under the local player (layer continuity)
+    struct FloorMemo { float y = 0, x = 0, z = 0; bool init = false; };
+    std::unordered_map<CritterId, FloorMemo> floorMemo_;
 
     bool PickAt(int sx, int sy, Vector3& hit) const {
         Ray r = GetScreenToWorldRay(Vector2{static_cast<float>(sx), static_cast<float>(sy)}, lastCam_);
@@ -836,7 +842,16 @@ private:
         if (c.pid < 0) proto = nullptr;
         if (proto && proto->isStatic) return;  // barrels, windows: baked into the map
         std::string model = proto && !proto->model.empty() ? proto->model : "HumMNor";
-        Vector3 w = OnGround(map_.TileToWorld(sc.x, sc.y, tw, th));
+        Vector3 w = map_.TileToWorld(sc.x, sc.y, tw, th);
+        {   // floor layer: continuity with the height this critter stood at a moment ago; a jump (teleport) restarts it
+            FloorMemo& fm = floorMemo_[c.id];
+            float ref = fm.y;
+            if (!fm.init || Hypot2(w.x - fm.x, w.z - fm.z) > 3.0f) ref = (sc.isSelf || std::isnan(selfY_)) ? map_.modalFloor() : selfY_;
+            fm.init = true;
+            w = OnGround(w, 0.0f, ref);
+            fm.x = w.x; fm.z = w.z; fm.y = w.y;
+            if (sc.isSelf) selfY_ = w.y;
+        }
         seen.insert(c.id);
         if (fogR_ > 0 && !sc.isSelf && Hypot2(w.x - fogC_.x, w.z - fogC_.z) > fogR_ * 1.02f) return;   // outside the visible radius: not drawn
 

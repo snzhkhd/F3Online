@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include "MapView.h"
 
 #include <algorithm>
@@ -54,6 +55,9 @@ void MapView::Unload() {
     pickTris_.clear();
     pickCells_.clear();
     hf_.clear();
+    layerOff_.clear();
+    layerY_.clear();
+    modalFloor_ = 0.0f;
     hfW_ = hfH_ = 0;
     loaded_ = false;
 }
@@ -374,6 +378,7 @@ void MapView::BuildHeightField() {
     const float kNone = 1e30f;
     std::vector<float> lo(n, kNone);
     std::vector<float> hi(n, -kNone);
+    std::vector<std::vector<float>> all(n);   // every floor layer per sample (see GroundHeight)
     for (const PickTri& t : pickTris_) {
         const float* v = t.v;
         const float x0 = std::min({v[0], v[3], v[6]}), x1 = std::max({v[0], v[3], v[6]});
@@ -395,7 +400,25 @@ void MapView::BuildHeightField() {
                 const size_t k = static_cast<size_t>(j) * hfW_ + i;
                 lo[k] = std::min(lo[k], y);
                 hi[k] = std::max(hi[k], y);
+                all[k].push_back(y);
             }
+    }
+    // layer table (CSR): distinct heights per sample, ascending, 0.15 apart at least
+    layerOff_.assign(n + 1, 0);
+    layerY_.clear();
+    for (size_t k = 0; k < n; ++k) {
+        auto& v = all[k];
+        std::sort(v.begin(), v.end());
+        float last = -kNone;
+        for (float y : v) if (y - last > 0.15f) { layerY_.push_back(y); last = y; }
+        layerOff_[k + 1] = static_cast<uint32_t>(layerY_.size());
+        std::vector<float>().swap(v);
+    }
+    {   // the most common floor height (half-unit bins): where a critter without history is assumed to stand
+        std::unordered_map<int, size_t> hist;
+        for (float y : layerY_) ++hist[static_cast<int>(std::floor(y * 2.0f))];
+        size_t best = 0;
+        for (auto& kv : hist) if (kv.second > best) { best = kv.second; modalFloor_ = (kv.first + 0.5f) * 0.5f; }
     }
     hf_.assign(n, 0.0f);
     std::vector<uint8_t> have(n, 0);
@@ -473,7 +496,7 @@ void MapView::BuildHeightField() {
     log::Info("ground height field: %dx%d samples, %.1f%% covered, %.1f%% multi-layer", hfW_, hfH_, 100.0 * covered / n, 100.0 * multi / n);
 }
 
-float MapView::GroundHeight(float x, float z) const {
+float MapView::GroundHeight(float x, float z, float ref) const {
     if (hfW_ <= 0) return 0.0f;
     const float fx = std::clamp((x - hfOx_) / kHfStep, 0.0f, static_cast<float>(hfW_ - 1) - 0.001f);
     const float fz = std::clamp((z - hfOz_) / kHfStep, 0.0f, static_cast<float>(hfH_ - 1) - 0.001f);
@@ -481,8 +504,32 @@ float MapView::GroundHeight(float x, float z) const {
     const float tx = fx - i, tz = fz - j;
     const float* r0 = &hf_[static_cast<size_t>(j) * hfW_ + i];
     const float* r1 = r0 + hfW_;
-    const float a = r0[0] + (r0[1] - r0[0]) * tx, b = r1[0] + (r1[1] - r1[0]) * tx;
-    return a + (b - a) * tz;
+    if (std::isnan(ref) || layerOff_.empty()) {   // no reference height: the (smoothed) lowest layer
+        const float a = r0[0] + (r0[1] - r0[0]) * tx, b = r1[0] + (r1[1] - r1[0]) * tx;
+        return a + (b - a) * tz;
+    }
+    // Layer-aware lookup: the floor is the layer closest to the height the critter already stands at (within a step
+    // tolerance). A grate or lift cab with deeper geometry below it (shaft bottom, base plane) therefore keeps its
+    // critter on top; samples with no layer near `ref` (door gaps, voids) are filled from the other corners.
+    const float kTol = 1.2f;
+    float sum = 0.0f, wsum = 0.0f;
+    for (int c = 0; c < 4; ++c) {
+        const int ii = i + (c & 1), jj = j + (c >> 1);
+        const size_t k = static_cast<size_t>(jj) * hfW_ + ii;
+        const float w = ((c & 1) ? tx : 1.0f - tx) * ((c >> 1) ? tz : 1.0f - tz);
+        if (w <= 1e-6f) continue;
+        float val = hf_[k];
+        bool ok = std::fabs(val - ref) <= kTol;
+        if (!ok) {
+            float bestD = kTol + 1e-3f;
+            for (uint32_t q = layerOff_[k]; q < layerOff_[k + 1]; ++q) {
+                const float d = std::fabs(layerY_[q] - ref);
+                if (d < bestD) { bestD = d; val = layerY_[q]; ok = true; }
+            }
+        }
+        if (ok) { sum += val * w; wsum += val == val ? w : 0.0f; }
+    }
+    return wsum > 1e-4f ? sum / wsum : ref;
 }
 
 bool MapView::PickGround(const Ray& ray, Vector3& hit) const {

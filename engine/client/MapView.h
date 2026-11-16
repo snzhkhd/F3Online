@@ -1,4 +1,5 @@
 #pragma once
+#include <limits>
 // A map of the original game loaded for rendering: baked tre geometry (batched per material / texture /
 // lightmap), emap entity instances drawn as static-pose B3D models, and the mapdata walk grid.
 //
@@ -82,7 +83,9 @@ public:
 
     // Walkable ground surface height under a renderer-space (x, z): a smoothed, continuous height field precomputed
     // from the up-facing tre triangles (the server map data has no height). 0 when the map has no geometry.
-    float GroundHeight(float x, float z) const;
+    // ref = height the critter stands at (NaN: smoothed lowest layer); keeps it on grates/lift floors above deeper geometry
+    float modalFloor() const { return modalFloor_; }
+    float GroundHeight(float x, float z, float ref = std::numeric_limits<float>::quiet_NaN()) const;
     bool hasHeightField() const { return hfW_ > 0; }
 
     // Grid (2 cells per unit). Cell centre in renderer space, y = 0.
@@ -151,6 +154,9 @@ private:
     // ground height field (see GroundHeight)
     void BuildHeightField();
     std::vector<float> hf_;
+    std::vector<uint32_t> layerOff_;   // CSR over samples: per-sample floor layers (ascending)
+    std::vector<float> layerY_;
+    float modalFloor_ = 0.0f;
     int hfW_ = 0, hfH_ = 0;
     float hfOx_ = 0, hfOz_ = 0;
     static constexpr float kHfStep = 0.25f;

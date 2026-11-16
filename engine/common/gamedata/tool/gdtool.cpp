@@ -208,6 +208,41 @@ int main(int argc, char** argv) {
             std::printf("%-6s %-50s pos %.2f %.2f %.2f yaw %.2f skin=%s\n", e.type.c_str(), e.tmpl.c_str(), e.pos[0], e.pos[1], e.pos[2], e.yaw, e.skin.c_str());
         return 0;
     }
+    if (cmd == "layers") {  // up-facing floor layers around a point: layers <Name> <x> <rawZ> [radius]
+        if (argc < 6) { std::fprintf(stderr, "usage: layers <Name> x rawZ [r]\n"); return 2; }
+        if (!gd.Read(name, kResTre, buf)) { std::fprintf(stderr, "no tre %s\n", name.c_str()); return 1; }
+        Tre t;
+        if (!ParseTre(buf.data(), buf.size(), t, &err)) { std::fprintf(stderr, "tre: %s\n", err.c_str()); return 1; }
+        const float cx = static_cast<float>(std::atof(argv[4])), cz = static_cast<float>(std::atof(argv[5]));
+        const float R = argc > 6 ? static_cast<float>(std::atof(argv[6])) : 3.0f;
+        for (float pz = cz - R; pz <= cz + R; pz += 1.0f) {
+            for (float px = cx - R; px <= cx + R; px += 1.0f) {
+                std::vector<float> ys;
+                for (auto& b : t.batches) {
+                    const auto& vb = t.vbs[b.vb];
+                    for (size_t i = 0; i + 2 < b.idx.size(); i += 3) {
+                        const float* v[3] = {&vb.xyz[b.idx[i] * 3], &vb.xyz[b.idx[i + 1] * 3], &vb.xyz[b.idx[i + 2] * 3]};
+                        float ny = 0;
+                        for (int k = 0; k < 3; ++k) ny += vb.nrm.empty() ? 1.0f : vb.nrm[b.idx[i + k] * 3 + 1];
+                        if (ny / 3 < 0.5f) continue;
+                        const float det = (v[1][2] - v[2][2]) * (v[0][0] - v[2][0]) + (v[2][0] - v[1][0]) * (v[0][2] - v[2][2]);
+                        if (std::fabs(det) < 1e-9f) continue;
+                        const float l1 = ((v[1][2] - v[2][2]) * (px - v[2][0]) + (v[2][0] - v[1][0]) * (pz - v[2][2])) / det;
+                        const float l2 = ((v[2][2] - v[0][2]) * (px - v[2][0]) + (v[0][0] - v[2][0]) * (pz - v[2][2])) / det;
+                        const float l3 = 1 - l1 - l2;
+                        if (l1 < -1e-4f || l2 < -1e-4f || l3 < -1e-4f) continue;
+                        ys.push_back(l1 * v[0][1] + l2 * v[1][1] + l3 * v[2][1]);
+                    }
+                }
+                std::sort(ys.begin(), ys.end());
+                std::printf("(%.0f,%.0f):", px, pz);
+                float last = -1e9f;
+                for (float y : ys) if (y - last > 0.1f) { std::printf(" %.2f", y); last = y; }
+                std::printf("\n");
+            }
+        }
+        return 0;
+    }
     if (cmd == "map") {
         if (!gd.Read(name, kResTre, buf)) { std::fprintf(stderr, "no tre %s\n", name.c_str()); return 1; }
         Tre t;
