@@ -216,7 +216,7 @@ void OrigUi::DrawSkillPanel(const UiView& ui, std::vector<Rectangle>& rects) {
         if (hot || cur) DrawRectangleRec(row, Color{70, 58, 22, hot ? 200u : 120u});
         const Color c = hot ? Color{255, 235, 140, 255} : kAmber;
         Text(gothic_, std::to_string(i + 1) + "  " + kSkillNames[sk], row.x + 6 * s, row.y + 3 * s, 17 * s, c);
-        if (have) Text(fallouty_, std::to_string(ui.core->sheet().skill[sk]), row.x, row.y + 4 * s, 15 * s, Color{120, 235, 90, 255}, 2, row.width - 6 * s);
+        if (have) DrawNumber("uSkill" + std::to_string(sk), fallouty_, row.x, row.y + 4 * s, 15 * s, Color{120, 235, 90, 255}, 2, row.width - 6 * s, "", ui.core->sheet().skill[sk]);
         if (hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) ui.commands->push_back(UiCommand{UiCommand::SelectSkill, static_cast<uint32_t>(sk), 0, 0});
     }
     Text(gothic_, "U / Esc: close", r.x, r.y + r.height - 20 * s, 12 * s, kAmberDim, 1, r.width);
@@ -354,6 +354,62 @@ void OrigUi::DrawDialog(const UiView& ui, std::vector<Rectangle>& rects) {
     if (lhot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) ui.commands->push_back(UiCommand{UiCommand::DialogClose, 0, 0, 0});
 }
 
+void OrigUi::DrawDigitCell(const Roll& ro, int div, bool pad, Rectangle r) {
+    auto dig = [&](int val) { return pad || val >= div || div == 1 ? (std::max(val, 0) / div) % 10 : -1; };
+    auto pic = [&](int d, Rectangle q) { if (d >= 0) Blit(Texture("f3_digit_" + std::to_string(d) + ".tga"), q); };
+    r = Rectangle{std::floor(r.x + 0.5f), std::floor(r.y + 0.5f), std::floor(r.width + 0.5f), std::floor(r.height + 0.5f)};
+    const int fd = dig(ro.from), td = dig(ro.to);
+    if (!ro.rolling() || fd == td) { pic(td, r); return; }
+    // the clip is exactly the cell: neighbours never see the sliding picture, and the cell background (the digit pictures are opaque) is
+    // redrawn by whichever picture covers it
+    BeginScissorMode(static_cast<int>(r.x), static_cast<int>(r.y), static_cast<int>(r.width), static_cast<int>(r.height));
+    const float off = std::floor(ro.dir * ro.p * r.height + 0.5f);
+    pic(fd, Rectangle{r.x, r.y - off, r.width, r.height});
+    pic(td, Rectangle{r.x, r.y + (ro.dir > 0 ? r.height : -r.height) - off, r.width, r.height});
+    EndScissorMode();
+}
+
+void OrigUi::DrawDigits(const std::string& key, Rectangle r, int v, int n, bool pad) {
+    int maxV = 1;
+    for (int i = 0; i < n; ++i) maxV *= 10;
+    const Roll ro = RollOf(key, std::clamp(v, 0, maxV - 1));
+    const float cw = r.width / n;
+    float w = cw, h = r.height;
+    if (w * 3 > h * 2) w = h * 2 / 3; else h = w * 3 / 2;      // keep the 16:24 aspect of the picture
+    int div = maxV / 10;
+    for (int i = 0; i < n; ++i, div /= 10) {
+        const float x0 = std::floor(r.x + cw * i + 0.5f), x1 = std::floor(r.x + cw * (i + 1) + 0.5f);   // cells tile without gaps
+        DrawDigitCell(ro, div, pad, Rectangle{x0 + std::floor((x1 - x0 - w) / 2 + 0.5f), r.y + std::floor((r.height - h) / 2 + 0.5f), std::floor(w + 0.5f), std::floor(h + 0.5f)});
+    }
+}
+
+void OrigUi::DrawNumber(const std::string& key, const Font& f, float x, float y, float size, Color c, int align, float w, const std::string& pre, int v, const std::string& post) {
+    const Roll ro = RollOf(key, v);
+    const std::string to = std::to_string(ro.to);
+    if (!ro.rolling()) { Text(f, pre + to + post, x, y, size, c, align, w); return; }
+    const std::string from = std::to_string(ro.from);
+    const float wp = TextW(f, pre, size), wn = std::max(TextW(f, from, size), TextW(f, to, size)), wq = TextW(f, post, size);
+    float x0 = x;
+    if (align == 1) x0 += (w - (wp + wn + wq)) / 2; else if (align == 2) x0 += w - (wp + wn + wq);
+    x0 = std::floor(x0);
+    Text(f, pre, x0, y, size, c);
+    Text(f, post, x0 + wp + wn, y, size, c);
+    const float h = size * 1.25f;
+    BeginScissorMode(static_cast<int>(std::floor(x0 + wp)), static_cast<int>(std::floor(y)), static_cast<int>(std::ceil(wn)) + 1, static_cast<int>(std::ceil(h)));
+    Text(f, from, x0 + wp, y - ro.dir * ro.p * h, size, c, 2, wn);
+    Text(f, to, x0 + wp, y + ro.dir * (1 - ro.p) * h, size, c, 2, wn);
+    EndScissorMode();
+}
+
+void OrigUi::DrawNumberText(const std::string& key, const Font& f, float x, float y, float size, Color c, int align, float w, const std::string& text) {
+    size_t a = 0;
+    while (a < text.size() && !(text[a] >= '0' && text[a] <= '9')) ++a;
+    size_t b = a;
+    while (b < text.size() && text[b] >= '0' && text[b] <= '9') ++b;
+    if (a == b || b - a > 9) { Text(f, text, x, y, size, c, align, w); return; }
+    DrawNumber(key, f, x, y, size, c, align, w, text.substr(0, a), std::atoi(text.substr(a, b - a).c_str()), text.substr(b));
+}
+
 float OrigUi::DrawSpeech(const std::string& text, float cx, float bottomY, Color c, float alpha, float maxW) {
     const Font& f = haveFonts_ ? gothic_ : GetFontDefault();
     const float fs = 16;
@@ -460,14 +516,14 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
         }
         std::string mode, ap;
         if (p && p->cls == "weapon") {
-            if (!p->modes.empty()) { mode = ModeName(p->modes[0].type); ap = std::to_string(ModeAp(p->modes[0].ap)) + "AP"; }
+            if (!p->modes.empty()) { mode = ModeName(p->modes[0].type); ap = "AP"; }
             else { mode = "MELEE"; }
         } else if (!item && i == 0) {
             mode = "UNARMED";
         }
         const float fs = 22 * s;
         Text(gothic_, mode, b.x * s + ox + 8 * s, b.y * s + oy + 4 * s, fs, kAmber, 2, 164 * s - 16 * s);
-        Text(gothic_, ap, b.x * s + ox + 8 * s, b.y * s + oy + 56 * s, fs, kAmber);
+        if (!ap.empty()) DrawNumber("wAp" + std::to_string(i), gothic_, b.x * s + ox + 8 * s, b.y * s + oy + 56 * s, fs, kAmber, 0, 0, "", ModeAp(p->modes[0].ap), "AP");
         if (p && p->cls == "weapon" && p->range > 1) {
             bool ammo = false;
             for (auto& e : core.inventory()) if (const ProtoInfo* q = ProtoOf(core, e)) if (q->cls == "ammo") ammo = true;
@@ -489,17 +545,10 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
     const float maxAp = core.waitKnown() ? core.MaxAp() : (core.hasStats() ? core.stats().sequence : 0.0f);
     const float ap = core.CurrentAp();
     const int ac = core.hasStats() ? core.stats().armorClass : 0;
-    auto digits = [&](float ly, int v) {
-        char b[8];
-        std::snprintf(b, sizeof b, "%03d", std::clamp(v, 0, 999));
-        for (int d = 0; d < 3; ++d) {
-            Rectangle r = P(314 + 14 * d, ly, 14, 18);
-            Text(fallouty_, std::string(1, b[d]), r.x, r.y + 1 * s, 20 * s, Color{120, 235, 90, 255}, 1, r.width);
-        }
-    };
-    digits(30, hp);
-    digits(79, static_cast<int>(std::lround(ap)));
-    digits(131, ac);
+    // the original digit pictures (f3_digit_N.tga) with the odometer roller, like the creation screen
+    DrawDigits("barHp", P(314, 30, 42, 18), hp, 3);
+    DrawDigits("barAp", P(314, 79, 42, 18), static_cast<int>(std::lround(ap)), 3);
+    DrawDigits("barAc", P(314, 131, 42, 18), ac, 3);
 
     // ---- player frame (name, health, AP)
     {
@@ -521,9 +570,7 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
             Blit(Texture(t), P(412 + 10 * i, 44, 9, 9));
         }
         Blit(Texture("f3_actionbar_AP_box.tga"), P(624, 42, 24, 14));
-        char b[16];
-        std::snprintf(b, sizeof b, "%d", static_cast<int>(std::lround(ap)));
-        Text(fallouty_, b, P(625, 42, 24, 14).x, P(625, 42, 24, 14).y, 14 * s, Color{120, 235, 90, 255}, 1, 24 * s);
+        DrawDigits("barApBox", P(625, 42, 22, 13), static_cast<int>(std::lround(ap)), 2);
     }
 
     // ---- buttons
@@ -726,8 +773,7 @@ void OrigUi::DrawInventory(const UiView& ui, std::vector<Rectangle>& rects) {
             if (ic) Blit(ic, ir);
             else Text(gothic_, rg.item->name.substr(0, 8), ir.x, ir.y + ir.height / 2 - 8 * s, 14 * s, kAmber, 1, ir.width);
             if (rg.item->count > 1) {
-                const std::string c = std::to_string(rg.item->count);
-                Text(fallouty_, c, ir.x, ir.y + ir.height - 14 * s, 14 * s, white, 2, ir.width);
+                DrawNumber("cnt" + std::to_string(rg.item->id), fallouty_, ir.x, ir.y + ir.height - 14 * s, 14 * s, white, 2, ir.width, "", rg.item->count);
             }
         }
     }
@@ -747,21 +793,17 @@ void OrigUi::DrawInventory(const UiView& ui, std::vector<Rectangle>& rects) {
     // ---- readouts
     Text(gothic_, "WEIGHT", P(68, 60, 0, 0).x, P(68, 60, 0, 0).y - 2 * s, 15 * s, kAmber);
     if (core.hasStats()) {
-        char b[48];
-        std::snprintf(b, sizeof b, "%u / %u lb", core.stats().carried, core.stats().carryWeight);
         const bool over = core.stats().carried > core.stats().carryWeight;
-        Text(fallouty_, b, P(152, 60, 0, 0).x, P(152, 60, 0, 0).y, 14 * s, over ? Color{255, 90, 70, 255} : Color{120, 235, 90, 255});
+        DrawNumber("invWeight", fallouty_, P(152, 60, 0, 0).x, P(152, 60, 0, 0).y, 14 * s, over ? Color{255, 90, 70, 255} : Color{120, 235, 90, 255}, 0, 0, "",
+                   static_cast<int>(core.stats().carried), " / " + std::to_string(core.stats().carryWeight) + " lb");
         const char* sp[] = {"ST", "PE", "EN", "CH", "IN", "AG", "LK"};
         for (int i = 0; i < 7; ++i) {
             Text(gothic_, sp[i], P(468, 68 + 12 * i, 0, 0).x, P(468, 68 + 12 * i, 0, 0).y - 3 * s, 14 * s, kAmber);
-            Text(fallouty_, std::to_string(core.stats().special[i]), P(496, 68 + 12 * i, 0, 0).x, P(496, 68 + 12 * i, 0, 0).y, 13 * s, Color{120, 235, 90, 255});
+            DrawNumber("invSp" + std::to_string(i), fallouty_, P(496, 68 + 12 * i, 0, 0).x, P(496, 68 + 12 * i, 0, 0).y, 13 * s, Color{120, 235, 90, 255}, 0, 0, "", core.stats().special[i]);
         }
-        std::snprintf(b, sizeof b, "HP %d / %d", core.stats().hp, core.stats().maxHp);
-        Text(fallouty_, b, P(560, 68, 0, 0).x, P(560, 68, 0, 0).y, 13 * s, Color{120, 235, 90, 255});
-        std::snprintf(b, sizeof b, "Armor class %d", core.stats().armorClass);
-        Text(fallouty_, b, P(560, 82, 0, 0).x, P(560, 82, 0, 0).y, 13 * s, Color{120, 235, 90, 255});
-        std::snprintf(b, sizeof b, "Level %d", core.stats().level);
-        Text(fallouty_, b, P(560, 96, 0, 0).x, P(560, 96, 0, 0).y, 13 * s, Color{120, 235, 90, 255});
+        DrawNumber("invHp", fallouty_, P(560, 68, 0, 0).x, P(560, 68, 0, 0).y, 13 * s, Color{120, 235, 90, 255}, 0, 0, "HP ", core.stats().hp, " / " + std::to_string(core.stats().maxHp));
+        DrawNumber("invAc", fallouty_, P(560, 82, 0, 0).x, P(560, 82, 0, 0).y, 13 * s, Color{120, 235, 90, 255}, 0, 0, "Armor class ", core.stats().armorClass);
+        DrawNumber("invLvl", fallouty_, P(560, 96, 0, 0).x, P(560, 96, 0, 0).y, 13 * s, Color{120, 235, 90, 255}, 0, 0, "Level ", core.stats().level);
     }
     if (core.self()) Text(fallouty_, core.self()->name, P(464, 32, 0, 0).x, P(464, 32, 0, 0).y, 18 * s, kAmber);
     for (auto& d : sdefs) {
@@ -966,16 +1008,15 @@ void OrigUi::DrawLoot(const UiView& ui, std::vector<Rectangle>& rects) {
         const Rectangle ir{c.r.x + 4 * s, c.r.y + 4 * s, 52 * s, 52 * s};
         if (ic) Blit(ic, ir);
         else Text(gothic_, c.item->name.substr(0, 8), ir.x, ir.y + ir.height / 2 - 8 * s, 14 * s, kAmber, 1, ir.width);
-        if (c.item->count > 1) Text(fallouty_, std::to_string(c.item->count), ir.x, ir.y + ir.height - 14 * s, 14 * s, white, 2, ir.width);
+        if (c.item->count > 1) DrawNumber("cnt" + std::to_string(c.item->id), fallouty_, ir.x, ir.y + ir.height - 14 * s, 14 * s, white, 2, ir.width, "", c.item->count);
     }
 
     // ---- headers: left = "WEIGHT x / limit lb" (as in the inventory), right = the target's name and weight
     Text(gothic_, "WEIGHT", PP(0, 68, 60, 0, 0).x, PP(0, 68, 60, 0, 0).y - 2 * s, 15 * s, kAmber);
     if (core.hasStats()) {
-        char b[48];
-        std::snprintf(b, sizeof b, "%u / %u lb", core.stats().carried, core.stats().carryWeight);
         const bool over = core.stats().carried > core.stats().carryWeight;
-        Text(fallouty_, b, PP(0, 152, 60, 0, 0).x, PP(0, 152, 60, 0, 0).y, 14 * s, over ? Color{255, 90, 70, 255} : green);
+        DrawNumber("lootMyWeight", fallouty_, PP(0, 152, 60, 0, 0).x, PP(0, 152, 60, 0, 0).y, 14 * s, over ? Color{255, 90, 70, 255} : green, 0, 0, "",
+                   static_cast<int>(core.stats().carried), " / " + std::to_string(core.stats().carryWeight) + " lb");
     }
     {
         std::string nm = core.containerName();
@@ -986,10 +1027,8 @@ void OrigUi::DrawLoot(const UiView& ui, std::vector<Rectangle>& rects) {
         Text(gothic_, nm, nr.x, nr.y, fs, kAmber, 1, nr.width);
         int contW = 0;
         for (auto& e : core.container()) contW += e.weight * e.count;
-        char b[48];
-        std::snprintf(b, sizeof b, "%d lb", contW);
         Text(gothic_, "WEIGHT", PP(1, 68, 60, 0, 0).x, PP(1, 68, 60, 0, 0).y - 2 * s, 15 * s, kAmber);
-        Text(fallouty_, b, PP(1, 152, 60, 0, 0).x, PP(1, 152, 60, 0, 0).y, 14 * s, green);
+        DrawNumber("lootWeight", fallouty_, PP(1, 152, 60, 0, 0).x, PP(1, 152, 60, 0, 0).y, 14 * s, green, 0, 0, "", contW, " lb");
         if (core.container().empty()) Text(gothic_, "(empty)", PP(1, 68, 270, 192, 20).x, PP(1, 68, 270, 192, 20).y, 18 * s, kAmberDim, 1, 192 * s);
     }
 

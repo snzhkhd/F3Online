@@ -314,7 +314,8 @@ int main(int argc, char** argv) {
             }
         } else if (wasCreating && inGame) {
             wasCreating = false;
-            uiState.charSheet = openChar;   // created: into the world with the window closed
+            uiState.charSheet = openChar;   // created: into the world with the window closed (--open-char / --open-inv open it for screenshots)
+            uiState.inventory = openInv;
         }
 
         // ---- chat input ----

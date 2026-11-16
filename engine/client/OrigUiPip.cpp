@@ -87,7 +87,7 @@ void OrigUi::DrawPipBoy(const UiView& ui, std::vector<Rectangle>& rects) {
         DrawRectangleLinesEx(r, cur ? 2.0f : 1.0f, cur ? kGreen : Color{20, 28, 16, 200});
         std::string label = kTabNames[i];
         if (i == 3 && unread) label += " (" + std::to_string(unread) + ")";
-        Text(fallouty_, label, r.x, r.y + (r.height - 15 * k) / 2 - 1, 15 * k, cur || hot ? kGreenBright : kGreen, 1, r.width);
+        DrawNumberText("pipTab" + std::to_string(i), fallouty_, r.x, r.y + (r.height - 15 * k) / 2 - 1, 15 * k, cur || hot ? kGreenBright : kGreen, 1, r.width, label);   // the unread count rolls
         if (hot && click && ui.state->pipTab != i) { ui.state->pipTab = i; ui.state->pipSel.clear(); pipScroll_ = 0; }
     }
 

@@ -65,15 +65,7 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         v = std::clamp(v, 0, 99);
         const Roll ro = RollOf(tens, v);
         auto one = [&](const std::string& name, int div) {
-            const gd::GuiNode* n = Nd(name);
-            if (!n) return;
-            const Rectangle r = Rc(*n);
-            const int fd = (ro.from / div) % 10, td = (ro.to / div) % 10;
-            if (!ro.rolling() || fd == td) { Blit(Texture("f3_digit_" + std::to_string(td) + ".tga"), r); return; }
-            BeginScissorMode(static_cast<int>(r.x), static_cast<int>(r.y), static_cast<int>(std::ceil(r.width)), static_cast<int>(std::ceil(r.height)));
-            Blit(Texture("f3_digit_" + std::to_string(fd) + ".tga"), Rectangle{r.x, r.y - ro.dir * ro.p * r.height, r.width, r.height});
-            Blit(Texture("f3_digit_" + std::to_string(td) + ".tga"), Rectangle{r.x, r.y + ro.dir * (1 - ro.p) * r.height, r.width, r.height});
-            EndScissorMode();
+            if (const gd::GuiNode* n = Nd(name)) DrawDigitCell(ro, div, true, Rc(*n));   // the layout's own digit windows (shared roller cell)
         };
         one(tens, 10);
         one(ones, 1);
@@ -96,6 +88,15 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         const float px = (fo ? std::max<uint32_t>(10, n->fontSize) * 1.6f : static_cast<float>(n->fontSize)) * s;
         const Rectangle r = Rc(*n);
         Text(f, txt, r.x, r.y + (r.height - px) / 2, px, col, alignOverride >= 0 ? alignOverride : static_cast<int>(n->alignment), r.width);
+    };
+    // label whose first integer rolls (derived statistics, HP, thresholds)
+    auto NumLbl = [&](const gd::GuiNode* n, const std::string& key, const std::string& txt, Color col) {
+        if (!n || txt.empty()) return;
+        const bool fo = n->fontName.find("allouty") != std::string::npos;
+        const Font& f = fo ? fallouty_ : gothic_;
+        const float px = (fo ? std::max<uint32_t>(10, n->fontSize) * 1.6f : static_cast<float>(n->fontSize)) * s;
+        const Rectangle r = Rc(*n);
+        DrawNumberText(key, f, r.x, r.y + (r.height - px) / 2, px, col, static_cast<int>(n->alignment), r.width, txt);
     };
     auto StfLbl = [&](const gd::GuiNode* n, Color col) { if (n) Lbl(n, stf_.Get(n->strRef), col); };
 
@@ -230,20 +231,21 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
             const gd::GuiNode* b = Nd("lblDerivedStat" + std::to_string(n) + "b");
             if (!a || !b) continue;
             StfLbl(a, Argb(a->textColor));
-            Lbl(b, v[n].empty() ? "-" : v[n], Argb(b->textColor));   // "-": the server does not model this value
+            NumLbl(b, "dst" + std::to_string(n), v[n].empty() ? "-" : v[n], Argb(b->textColor));   // "-": the server does not model this value
         }
     } else if (const gd::GuiNode* w = Nd("winThresholds")) {
         for (const gd::GuiNode& c : w->children) {
             if (c.type != gd::GuiNode::Label) continue;
             const bool value = c.name.size() > 5 && c.name.compare(c.name.size() - 5, 5, "Value") == 0;
-            Lbl(&c, value ? (creating ? "0" : "-") : stf_.Get(c.strRef), Argb(c.textColor));
+            if (value) NumLbl(&c, "thr" + c.name, creating ? "0" : "-", Argb(c.textColor));
+            else Lbl(&c, stf_.Get(c.strRef), Argb(c.textColor));
         }
     }
     {   // hit points under the character window
         const gd::GuiNode* h1 = Nd("lblHP1");
         const gd::GuiNode* h2 = Nd("lblHP2");
         StfLbl(h1, h1 ? Argb(h1->textColor) : WHITE);
-        if (h2) Lbl(h2, creating ? std::to_string(PreviewMaxHp(sp)) : (stats ? Fmt("%d/%d", stats->hp, stats->maxHp) : "-"), Argb(h2->textColor));
+        if (h2) NumLbl(h2, "charHp", creating ? std::to_string(PreviewMaxHp(sp)) : (stats ? Fmt("%d/%d", stats->hp, stats->maxHp) : "-"), Argb(h2->textColor));
     }
 
     // ---- information block where the original shows the character model (no model preview in this client)
@@ -252,7 +254,8 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         const Rectangle r = Rc(*m);
         const float px = 17 * s, lh = 22 * s;
         float y = r.y + 14 * s;
-        auto line = [&](const std::string& t, Color c) { Text(fallouty_, t, r.x + 12 * s, y, px, c); y += lh; };
+        int lineNo = 0;
+        auto line = [&](const std::string& t, Color c) { DrawNumberText("info" + std::to_string(lineNo++), fallouty_, r.x + 12 * s, y, px, c, 0, 0, t); y += lh; };
         const Color txt{200, 190, 120, 255};
         line(core.playerName(), kBright);
         y += 6 * s;

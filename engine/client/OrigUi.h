@@ -99,6 +99,16 @@ private:
     struct Roll { int from = 0, to = 0, dir = 1; float p = 1; bool rolling() const { return p < 1 && from != to; } };
     std::unordered_map<std::string, RollSt> rollers_;
     Roll RollOf(const std::string& key, int v);
+    // Shared odometer helpers (every counter of the client goes through these; see docs/client-rendering.md "Digit roller").
+    // One digit cell with the original digit picture f3_digit_N.tga (16x24, green on dark): digit (value / div) % 10 of the rolling value; with `pad`
+    // false the leading zeros stay blank (digit cell shows nothing above the value's length).
+    void DrawDigitCell(const Roll& ro, int div, bool pad, Rectangle r);
+    // `n` digit cells filling r (cell = r.width / n, picture aspect 2:3 kept and centred, pixel aligned), keyed roller, zero padded or not
+    void DrawDigits(const std::string& key, Rectangle r, int v, int n, bool pad = true);
+    // text number with a fixed prefix / suffix whose number part rolls vertically (same easing and 250 ms as the digits); align 0 / 1 / 2 in width w
+    // same for a ready text: its first integer rolls ("13/20" rolls the 13, "Level 4", "35 lb"); no integer = plain text
+    void DrawNumberText(const std::string& key, const Font& f, float x, float y, float size, Color c, int align, float w, const std::string& text);
+    void DrawNumber(const std::string& key, const Font& f, float x, float y, float size, Color c, int align, float w, const std::string& pre, int v, const std::string& post = std::string());
     Font fallouty_{}, gothic_{};
     bool haveFonts_ = false;
     bool ok_ = false;
