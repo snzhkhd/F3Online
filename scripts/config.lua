@@ -41,7 +41,7 @@ config = {
     WeightArmor               = 8,
     WeightAmmo                = 1,
     WeightItem                = 1,
-    ItemWeights               = {      -- per prototype overrides: ["Weapons9mm_Autoloader.WEA"] = 3,
+    ItemWeights               = {      -- per prototype overrides: ["Weapons9mm_Autoloader.WEA"] = 3. data/items "weight" wins over this table (docs/data-format.md)
     },
     -- ---- character system (docs/server-data.md section 11). Placeholders: the demo data carries no formulas.
     RequireCharacterCreation  = true,  -- new account characters allocate SPECIAL + tag skills first (guests / dev kit characters are Default_PC)
@@ -50,7 +50,7 @@ config = {
     SpecialMin                = 1,
     SpecialMax                = 10,
     TagCount                  = 3,     -- tag skills (the original UI says "maximum of three tag skills")
-    TraitMax                  = 2,     -- optional traits chosen at creation (original: two of sixteen; stored only, no effects yet)
+    TraitMax                  = 2,     -- optional traits chosen at creation (original: two of sixteen); data/traits "max_picks" wins when present. The trait list itself lives in data/traits
     -- doors / containers: Security (lockpick) chance = clamp(skill - lock DC, min, max) percent; the original lock DC data is 0 everywhere
     LockDefaultDC             = 0,     -- DC of locks that have none
     LockpickMinChance         = 5,
@@ -67,12 +67,12 @@ config = {
     SkillRatePerInt           = 2,
     XpBase                    = 1000,  -- xp needed for level L = XpBase * L * (L - 1) / 2
     MaxLevel                  = 12,
-    PerkRate                  = 3,     -- a perk point every PerkRate levels (placeholder, perks are not implemented)
+    PerkRate                  = 3,     -- a perk point every PerkRate levels; perks live in data/perks (/perks, /perk take <id>)
     HpBase                    = 15,    -- maxHp = HpBase + S + 2E + (level - 1) * (HpPerLevelBase + E / 2)
     HpPerLevelBase            = 2,
     KillXpBase                = 30,    -- xp for killing an NPC = KillXpBase + KillXpPerHp * its max HP, unless XpByProto lists it
     KillXpPerHp               = 8,
-    XpByProto                 = {      -- ["Some_Critter.CRT"] = 250,
+    XpByProto                 = {      -- ["Some_Critter.CRT"] = 250. Legacy table: data/npcs "xp" wins over it (docs/data-format.md)
     },
     TransferLock              = 3000,  -- ms during which a transition region cannot fire again after a map change
 }

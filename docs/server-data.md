@@ -4,6 +4,9 @@ How `f3_server` runs on the original Van Buren demo data: the importer, the serv
 the protocol extension, the Lua API and the state of the original AMX scripts. Companion to `docs/formats/maps.md`
 (file formats of the original data) and `docs/architecture.md`.
 
+> **Data layer:** traits, perks, skills, quests and overrides / additions of items and NPCs are authored as JSON in `data/` and layered over
+> the prototypes described here (merge by id, strict validation, `/reload`). Schema and rules: `docs/data-format.md`.
+
 ## 1. Pipeline
 
 ```
@@ -138,6 +141,7 @@ server messages. `ItemAdd` now also carries doors, containers and usables; an `O
 | S 124 | CombatEvent | `u32 attacker, u32 target, u8 result (0 miss,1 hit,2 crit,3 kill), i16 damage, i16 targetHp` |
 | S 125 | Container | same list layout as Inventory, `owner` = container id / corpse critter id, then `u8 isCritter, string name` |
 | S 126 | CellsSet | `u16 n, n x {i16 x, i16 y, u8 blocked}` |
+| S 130 | ContentDefs | designer data for display: trait list, perk list, prototype overrides (`docs/data-format.md` section 7); old clients ignore it |
 
 Existing messages: `MapInfo` now carries the real grid (up to 644x644 = 414k bytes, one ENet reliable fragmented packet) and the real map name;
 map transitions resend `MapInfo` (the client must reset its critter/item state on it, as it already does for `teleport`).

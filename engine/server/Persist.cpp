@@ -34,6 +34,8 @@ json Server::CharacterToJson(const Critter& c) const {
     j["tags"] = c.tagMask;
     j["traits"] = c.traitMask;
     j["perk_points"] = c.perkPoints;
+    j["perks"] = json::object();
+    for (auto& [id, rank] : c.perks) j["perks"][id] = rank;
     j["created"] = c.created;
     if (const Proto* p = c.protoPid >= 0 ? data_.GetProto(static_cast<uint16_t>(c.protoPid)) : nullptr) j["proto"] = p->key;
     j["inventory"] = json::array();
@@ -63,6 +65,8 @@ void Server::ApplyCharacter(Critter& c, const json& j) {
     c.tagMask = static_cast<uint16_t>(j.value("tags", 0));
     c.traitMask = static_cast<uint16_t>(j.value("traits", 0));
     c.perkPoints = std::max(0, j.value("perk_points", 0));
+    if (j.contains("perks") && j["perks"].is_object())
+        for (auto& [k, v] : j["perks"].items()) if (v.is_number_integer() && v.get<int>() > 0) c.perks[k] = std::min(v.get<int>(), 10);
     if (j.contains("skill_ranks") && j["skill_ranks"].is_object())
         for (auto& [k, v] : j["skill_ranks"].items()) if (v.is_number()) c.skillRanks[k] = v.get<int>();
     RecalcDerived(c);

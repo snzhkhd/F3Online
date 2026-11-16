@@ -133,6 +133,10 @@ void Scripting::BindApi(sol::state& L) {
         "quest_done", [&S](Critter& c, const std::string& id) { return S.QuestSet(c, id, 1); },
         "quest_fail", [&S](Critter& c, const std::string& id) { return S.QuestSet(c, id, 2); },
         "quest_state", [&S](Critter& c, const std::string& id) { return S.QuestState(c, id); },
+        "quest_start", [&S](Critter& c, const std::string& id) { return S.QuestStart(c, id); },   // task from data/quests
+        "perk_rank", [&S](Critter& c, const std::string& id) { return S.PerkRank(c, id); },
+        "has_trait", [&S](Critter& c, const std::string& id) { const TraitDef* t = S.Content().FindTrait(id); return t && ((c.traitMask >> t->index) & 1u); },
+        "take_perk", [&S](Critter& c, const std::string& id) { return S.TakePerk(c, id); },
         "get_gvar", [&S](Critter& c, const std::string& k) { return S.GetGlobalFor(&c, k); },
         "set_gvar", [&S](Critter& c, const std::string& k, double v) { S.SetGlobalFor(&c, k, v); });
 
@@ -228,6 +232,15 @@ void Scripting::BindApi(sol::state& L) {
     // data-driven content (requires gamedata/server): prototype key like "Weapons44_Revolver.WEA"
     L["data_loaded"] = [&S]() { return S.Data().Loaded(); };
     L["dev_kit"] = [&S]() { return S.GetConfig().devKit; };
+    L["reload_data"] = [&S]() { return S.ReloadAll("data"); };   // re-reads data/*.json; returns the report text
+    L["perk_info"] = [&S](const std::string& id, sol::this_state ts) -> sol::object {
+        sol::state_view sv(ts);
+        const PerkDef* p = S.Content().FindPerk(id);
+        if (!p) return sol::make_object(sv, sol::nil);
+        sol::table t = sv.create_table();
+        t["id"] = p->id; t["name"] = p->name; t["desc"] = p->desc; t["ranks"] = p->ranks; t["level"] = p->req.level;
+        return sol::make_object(sv, t);
+    };
     L["map_count"] = [&W]() { return (int)W.Maps().size(); };
     L["map_names"] = [&W](sol::this_state ts) {
         sol::state_view sv(ts);

@@ -10,34 +10,22 @@ namespace f3 {
 
 // ------------------------------------------------------------------ formulas
 
-int Server::SkillRate(const Critter& c) const { return std::max(1, rt_.SkillRateBase + rt_.SkillRatePerInt * c.special[4]); }
+int Server::SkillRate(const Critter& c) const { return std::max(1, rt_.SkillRateBase + rt_.SkillRatePerInt * c.special[4] + Mod(c, StSkillRate)); }
 
-// base value of a skill from SPECIAL (S P E C I A L = indices 0..6)
+// base value of a skill from SPECIAL: constant + sum(coef * SPECIAL) of the skill definition (built-in defaults, data/skills overrides)
 int Server::SkillBase(const Critter& c, int skill) const {
-    const int S = c.special[0], P = c.special[1], E = c.special[2], C = c.special[3], I = c.special[4], A = c.special[5];
-    switch (skill) {
-        case 0: return 5 + 4 * A;               // Firearms
-        case 1: return 20 + 2 * (S + A);        // Melee
-        case 2: return 30 + 2 * (S + A);        // Unarmed
-        case 3: return 4 * C;                   // Barter
-        case 4: return 5 + 4 * C;               // Persuasion
-        case 5: return 5 + 3 * C + I;           // Deception
-        case 6: return 3 * I;                   // Mechanics
-        case 7: return 2 * (P + I);             // Medic
-        case 8: return 5 + 2 * (E + I);         // Outdoorsman
-        case 9: return 4 * I;                   // Science
-        case 10: return 10 + P + A;             // Security
-        case 11: return 5 + 3 * A;              // Sneak
-        case 12: return 3 + 3 * A;              // Steal
-        case 13: return 10 + P + A;             // Traps
-        default: return 0;
-    }
+    if (skill < 0 || skill >= kSkillCount) return 0;
+    const SkillDef& d = content_.skills[skill];
+    int v = d.constant;
+    for (int i = 0; i < 7; ++i) v += d.coef[i] * c.special[i];
+    return v;
 }
 
 int Server::SkillValue(const Critter& c, int skill) const {
     if (skill < 0 || skill >= kSkillCount) return 0;
     int v = SkillBase(c, skill);
     if (c.tagMask & (1u << skill)) v += rt_.TagBonus;
+    v += Mod(c, kStatSkillBase + skill);
     auto it = c.skillRanks.find(kSkillNames[skill]);
     if (it != c.skillRanks.end()) v += it->second;
     return std::clamp(v, 0, rt_.SkillMax);
@@ -48,7 +36,8 @@ int Server::XpForLevel(int level) const { return level <= 1 ? 0 : rt_.XpBase * l
 
 void Server::RecalcDerived(Critter& c) {
     const int E = c.special[2], S = c.special[0];
-    c.maxHp = std::max(1, rt_.HpBase + S + 2 * E + (c.level - 1) * (rt_.HpPerLevelBase + E / 2));
+    const int formula = rt_.HpBase + S + 2 * E + (c.level - 1) * (rt_.HpPerLevelBase + E / 2);
+    c.maxHp = std::max(1, (c.maxHpFixed > 0 ? c.maxHpFixed : formula) + Mod(c, StMaxHp));
     if (c.hp > c.maxHp) c.hp = c.maxHp;
 }
 
@@ -73,12 +62,12 @@ void Server::SendCharSheet(Critter& c) {
         m.rank[i] = static_cast<uint8_t>(it == c.skillRanks.end() ? 0 : std::min(255, it->second));
     }
     m.maxAp = static_cast<uint8_t>(std::min(255, MaxAp(c) / 100));
-    m.healRate = static_cast<uint8_t>(std::max(1, c.special[2] / 3));
-    m.critChance = static_cast<uint8_t>(std::min(100, c.special[6]));
+    m.healRate = static_cast<uint8_t>(std::clamp(c.special[2] / 3 + Mod(c, StHealRate), 1, 255));
+    m.critChance = static_cast<uint8_t>(std::clamp(c.special[6] + Mod(c, StCritChance), 0, 100));
     m.skillRate = static_cast<uint8_t>(std::min(255, SkillRate(c)));
     m.tagCount = static_cast<uint8_t>(rt_.TagCount);
     m.traitMask = c.traitMask;
-    m.traitMax = static_cast<uint8_t>(rt_.TraitMax);
+    m.traitMax = static_cast<uint8_t>(std::clamp(TraitMaxEff(), 0, 16));
     Send(c, gnet::PackG(m));
 }
 
@@ -95,7 +84,10 @@ bool Server::CreateCharacter(Critter& c, const gnet::CharCreate& m) {
     if (sum != total) { Tell(c, "Character creation: distribute exactly " + std::to_string(total) + " SPECIAL points (you used " + std::to_string(sum) + ")."); return false; }
     if (m.tagMask >> kSkillCount) { Tell(c, "Character creation: invalid tag skills."); return false; }
     if (static_cast<int>(std::bitset<16>(m.tagMask).count()) != rt_.TagCount) { Tell(c, "Character creation: choose exactly " + std::to_string(rt_.TagCount) + " tag skills."); return false; }
-    if (static_cast<int>(std::bitset<16>(m.traitMask).count()) > rt_.TraitMax) { Tell(c, "Character creation: choose at most " + std::to_string(rt_.TraitMax) + " traits."); return false; }
+    if (static_cast<int>(std::bitset<16>(m.traitMask).count()) > TraitMaxEff()) { Tell(c, "Character creation: choose at most " + std::to_string(TraitMaxEff()) + " traits."); return false; }
+    if (!content_.traits.empty())   // with a trait list from data/traits only those can be chosen
+        for (int i = 0; i < 16; ++i)
+            if (((m.traitMask >> i) & 1u) && !content_.TraitByIndex(i)) { Tell(c, "Character creation: unknown trait."); return false; }
     for (int i = 0; i < 7; i++) c.special[i] = m.special[i];
     c.tagMask = m.tagMask;
     c.traitMask = m.traitMask;
@@ -182,7 +174,8 @@ bool Server::UseSkill(Critter& c, int skill, int kind, uint32_t target) {
 
 int Server::KillXp(const Critter& victim) const {
     if (const Proto* p = victim.protoPid >= 0 ? data_.GetProto(static_cast<uint16_t>(victim.protoPid)) : nullptr) {
-        auto it = rt_.XpByProto.find(p->key);
+        if (p->xp >= 0) return p->xp;   // data/npcs "xp"
+        auto it = rt_.XpByProto.find(p->key);   // legacy config.lua table
         if (it != rt_.XpByProto.end()) return it->second;
     }
     return std::max(0, rt_.KillXpBase + rt_.KillXpPerHp * victim.maxHp);
@@ -190,6 +183,7 @@ int Server::KillXp(const Critter& victim) const {
 
 void Server::AddXp(Critter& c, int amount) {
     if (!c.IsPlayer() || !c.created || amount <= 0) return;
+    if (const int pct = Mod(c, StXpGain)) amount = std::max(1, amount * (100 + pct) / 100);
     c.xp += amount;
     Tell(c, "You gain " + std::to_string(amount) + " experience points.");
     bool leveled = false;
@@ -201,7 +195,7 @@ void Server::AddXp(Critter& c, int amount) {
         const int sp = SkillRate(c);
         c.skillPoints += sp;
         std::string msg = "Level up! You are now level " + std::to_string(c.level) + ": +" + std::to_string(sp) + " skill points";
-        if (rt_.PerkRate > 0 && c.level % rt_.PerkRate == 0) { ++c.perkPoints; msg += ", +1 perk point (perks are not implemented yet)"; }
+        if (rt_.PerkRate > 0 && c.level % rt_.PerkRate == 0) { ++c.perkPoints; msg += ", +1 perk point (/perks)"; }
         Tell(c, msg + ".");
         leveled = true;
         if (scripting_) scripting_->Call("on_levelup", &c, c.level);

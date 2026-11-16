@@ -1,5 +1,6 @@
 // f3_gametest: end-to-end test of the data-driven server (run it against `f3_server --data gamedata/server`).
 //   f3_gametest [--port N] [--expect-map NAME]
+//   f3_gametest --content DIR   data layer: client sync, perk flow, /reload (DIR = content folder of the server, edited by the test)
 // Two bots log in on the real start map: verifies the map size/grid, stats and starter inventory, walking
 // with real-grid pathfinding, pickup of a ground item, an attack between the bots (hit/damage events),
 // and a map transition (walk into the Junktown -> Vault region). Real-time timing checks (bot A announces the
@@ -14,7 +15,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <sstream>
 #include <map>
 #include <string>
 #include <thread>
@@ -46,6 +50,9 @@ struct Bot {
     int authCode = -1, authNew = 0;   // account block
     gnet::CharSheet sheet;
     int sheetCount = 0;
+    gnet::ContentDefs content;   // designer data sync (traits, perks, item overrides); items accumulate over the chunks of one sync
+    int contentCount = 0;        // S2C_ContentDefs messages received
+    int contentSyncs = 0;        // complete resyncs (first = 1)
     gnet::PipData pip;   // latest Pip-Boy snapshot (quests, friends, mail)
     int pipCount = 0;
     CritterId myId = 0;
@@ -153,6 +160,14 @@ struct Bot {
             case (uint8_t)GMsgRt::S2C_WaitState: { gnet::WaitState m; if (m.Read(b)) waits.push_back({m, LocalMs()}); break; }
             case (uint8_t)GMsgAuth::S2C_AuthResult: { gnet::AuthResult m; if (m.Read(b)) { authCode = m.code; authNew = m.isNew; } break; }
             case (uint8_t)GMsgPip::S2C_Pip: { if (pip.Read(b)) ++pipCount; break; }
+            case (uint8_t)GMsgContent::S2C_ContentDefs: {
+                gnet::ContentDefs m;
+                if (!m.Read(b)) break;
+                ++contentCount;
+                if (m.first) { content = m; ++contentSyncs; content.items = m.items; }
+                else content.items.insert(content.items.end(), m.items.begin(), m.items.end());
+                break;
+            }
             case (uint8_t)GMsgChar::S2C_CharSheet: { if (sheet.Read(b)) ++sheetCount; break; }
             case (uint8_t)GMsgDlg::S2C_DialogOpen: { gnet::DialogOpen m; if (m.Read(b)) dlgOpens.push_back(m); break; }
             case (uint8_t)GMsgDlg::S2C_DialogNode: { gnet::DialogNode m; if (m.Read(b)) dlgNodes.push_back(m); break; }
@@ -270,6 +285,7 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
         CHECK(!a.sheet.created && a.sheet.unspentSpecial == 5 && a.sheet.creationTotal == 40 && a.stats.special[0] == 5 && a.sheet.traitMax == 2,
               "new character: creation pending, SPECIAL 5 each, 5 points to allocate, up to %d traits", a.sheet.traitMax);
         CHECK(a.mapInfoCount == 0 && !a.havePos && a.invUpdates == 0 && a.critters.empty(), "session in character creation has no map, no position, no critters, no inventory");
+        CHECK(a.contentCount > 0 && a.content.traits.size() == 16 && a.content.traits[3].name == "Fast Shot", "content sync (trait list) arrives while the session is in character creation");
         {   // not in the world: gated requests are ignored, chat is not delivered, nobody sees the session
             net::MoveToReq mv0; mv0.x = 10; mv0.y = 10;
             a.Send(net::Pack(mv0));
@@ -315,6 +331,17 @@ static int RunAccountTests(uint16_t port, int phase, const std::string& stateFil
             a.Send(gnet::PackG(ok));
             CHECK(WaitFor({&a}, 6, [&] { return a.sheet.created && a.mapInfoCount > 0 && a.havePos && a.invUpdates > 0; }), "valid creation accepted (S8 P5 E5 C5 I8 A5 L4, tags Firearms/Medic/Science, traits 0 + 3): the character enters the world only now");
             CHECK(a.inv.empty() && a.sheet.traitMask == 9, "new account character owns nothing, traits stored (mask %u)", a.sheet.traitMask);
+            {   // /reload is a dev command: refused on a server without --dev-kit / --dev-commands; /perks stays available
+                a.chat.clear();
+                net::ChatReq rl; rl.text = "/reload";
+                a.Send(net::Pack(rl));
+                auto hasChat = [&](const char* n) { for (auto& t : a.chat) if (t.find(n) != std::string::npos) return true; return false; };
+                CHECK(WaitFor({&a}, 3, [&] { return hasChat("Dev commands are disabled"); }), "/reload is refused without dev commands");
+                a.chat.clear();
+                rl.text = "/perks";
+                a.Send(net::Pack(rl));
+                CHECK(WaitFor({&a}, 3, [&] { return hasChat("Perks:"); }), "/perks works for everyone");
+            }
             CHECK(WaitFor({&obs}, 4, [&] { return obs.critters.count(a.myId) != 0; }), "the observer now sees the new character");
             WaitFor({&a}, 1, [] { return false; });
             CHECK(a.stats.special[0] == 8 && a.stats.maxHp == 33 && a.sheet.skill[0] == 45 && a.sheet.skill[7] == 46 && a.sheet.skillPoints == 10 && a.sheet.maxAp == 7,
@@ -901,6 +928,142 @@ static int RunDoorTests(uint16_t port, int phase, const std::string& stateFile) 
     return g_failed ? 1 : 0;
 }
 
+
+// Data layer end-to-end: client sync, perk flow, stat modifiers, /reload (applied, diff report, failure keeps the old data).
+// `contentDir` is the content folder of the server under test (a throw-away copy of data/): the test edits it and sends /reload.
+static int RunContentTests(uint16_t port, const std::string& contentDir) {
+    namespace fs = std::filesystem;
+    const fs::path dir = contentDir;
+    auto readAll = [](const fs::path& p) { std::ifstream f(p, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); return ss.str(); };
+    auto writeAll = [](const fs::path& p, const std::string& s) { fs::create_directories(p.parent_path()); std::ofstream f(p, std::ios::binary); f << s; };
+    auto said = [](Bot& b, const char* needle) { for (auto& t : b.chat) if (t.find(needle) != std::string::npos) return true; return false; };
+    auto say = [](Bot& b, const char* text) { net::ChatReq r; r.text = text; b.Send(net::Pack(r)); };
+
+    Bot a;
+    if (!a.Connect(port)) { std::printf("FAIL: cannot connect\n"); return 1; }
+    a.Login("DataBot");
+    CHECK(WaitFor({&a}, 8, [&] { return a.loggedIn && a.mapInfoCount > 0 && a.haveStats && a.contentCount > 0 && a.sheetCount > 0; }), "login with content sync");
+    if (!a.loggedIn) return 1;
+    CHECK(a.content.traits.size() == 16 && a.content.traitMax == 2 && a.content.schema == 1, "ContentDefs: %zu traits, traitMax %u, schema %u (16 / 2 / 1)", a.content.traits.size(), a.content.traitMax, a.content.schema);
+    {
+        bool names = a.content.traits.size() == 16;
+        for (auto& t : a.content.traits) if (t.index >= 16 || t.name.empty() || t.desc.empty()) names = false;
+        CHECK(names && a.content.traits[0].name == "Bruiser" && a.content.traits[15].name == "Small Frame", "trait slots carry names and descriptions (0 = %s, 15 = %s)", a.content.traits.empty() ? "-" : a.content.traits[0].name.c_str(), a.content.traits.empty() ? "-" : a.content.traits[15].name.c_str());
+        bool tough = false;
+        for (auto& p : a.content.perks) if (p.id == "toughness" && p.reqLevel == 3 && !p.name.empty()) tough = true;
+        CHECK(tough && a.content.perks.size() >= 9, "ContentDefs carries the perks (%zu)", a.content.perks.size());
+    }
+    CHECK(a.sheet.created && a.sheet.perkPoints == 0 && a.sheet.traitMax == 2, "CharSheet: created, no perk points, traitMax %u", a.sheet.traitMax);
+    const int hp0 = a.stats.maxHp;
+
+    // ---- chat commands and the perk flow
+    a.chat.clear();
+    say(a, "/perks");
+    CHECK(WaitFor({&a}, 3, [&] { return said(a, "toughness") && said(a, "Perks:"); }), "/perks lists the perks from data/perks");
+    a.chat.clear();
+    say(a, "/traits");
+    CHECK(WaitFor({&a}, 3, [&] { return said(a, "Bruiser") && said(a, "Small Frame"); }), "/traits lists the traits");
+    a.chat.clear();
+    say(a, "/perk take toughness");
+    CHECK(WaitFor({&a}, 3, [&] { return said(a, "no perk points"); }), "taking a perk without perk points is refused");
+    say(a, "/givexp 3000");
+    CHECK(WaitFor({&a}, 4, [&] { return a.sheet.level == 3 && a.sheet.perkPoints == 1; }), "level 3 grants a perk point (level %d, points %u)", a.sheet.level, a.sheet.perkPoints);
+    WaitFor({&a}, 0.5, [] { return false; });
+    const int hp3 = a.stats.maxHp;   // level 3 hit points
+    a.chat.clear();
+    say(a, "/perk take no_such_perk");
+    CHECK(WaitFor({&a}, 3, [&] { return said(a, "unknown perk"); }) && a.sheet.perkPoints == 1, "unknown perk refused, point kept");
+    a.chat.clear();
+    say(a, "/perk take thick_skin");
+    CHECK(WaitFor({&a}, 3, [&] { return said(a, "requires"); }) && a.sheet.perkPoints == 1, "a perk whose requirements are not met is refused (thick_skin needs level 6 and Toughness)");
+    a.chat.clear();
+    say(a, "/perk take toughness");
+    CHECK(WaitFor({&a}, 4, [&] { return said(a, "Perk gained: Toughness") && a.sheet.perkPoints == 0 && a.stats.maxHp == hp3 + 10; }), "Toughness taken: perk point spent, maxHp %d -> %d (+10 from the data effect)", hp3, a.stats.maxHp);
+    CHECK(a.stats.hp > 0 && a.stats.hp <= a.stats.maxHp, "hp follows");
+    a.chat.clear();
+    say(a, "/perk take toughness");
+    CHECK(WaitFor({&a}, 3, [&] { return said(a, "no perk points") || said(a, "maximum rank"); }), "no second rank of a single-rank perk");
+    (void)hp0;
+
+    // ---- /reload: edit a perk, add item + npc overrides
+    const fs::path perksFile = dir / "perks" / "perks.json";
+    const std::string perksOrig = readAll(perksFile);
+    if (perksOrig.empty()) { std::printf("FAIL: cannot read %s\n", perksFile.string().c_str()); return 1; }
+    std::string perksNew = perksOrig;
+    {
+        const std::string d0 = "You can take a beating: +10 maximum hit points.";
+        size_t at = perksNew.find(d0);
+        if (at != std::string::npos) perksNew.replace(at, d0.size(), "Reloaded description.");
+        size_t m = perksNew.find("\"max_hp\"");
+        size_t ad = m == std::string::npos ? m : perksNew.find("\"add\": 10", m);
+        if (ad != std::string::npos) perksNew.replace(ad, 9, "\"add\": 25");
+    }
+    CHECK(perksNew != perksOrig, "test edit of perks.json prepared");
+    writeAll(perksFile, perksNew);
+    writeAll(dir / "items" / "zz_test.json", R"({"schema":1,"kind":"items","records":[
+        {"id":"Weapons9mm_Autoloader.WEA","name":"Reloaded Autoloader","desc":"Edited by the test.","weight":2,"weapon":{"range":22,"dmg_min":9,"dmg_max":19}},
+        {"id":"F3_TestPistol.WEA","base":"Weapons9mm_Autoloader.WEA","name":"Test Pistol","desc":"A new item."}]})");
+    writeAll(dir / "npcs" / "zz_test.json", R"({"schema":1,"kind":"npcs","records":[{"id":"Critters00_TMBobby.CRT","name":"Bobby Reloaded","xp":777}]})");
+    const int syncs0 = a.contentSyncs;
+    const uint32_t rev0 = a.content.revision;
+    a.chat.clear();
+    say(a, "/reload data");
+    CHECK(WaitFor({&a}, 6, [&] { return said(a, "data reloaded") && a.contentSyncs > syncs0; }), "/reload data: applied and the client is re-synced");
+    CHECK(said(a, "perks: +0 -0 ~1") && said(a, "toughness") && said(a, "items: +2") && said(a, "npcs: +1"), "the report lists what changed (perk changed, items added, npc added)");
+    WaitFor({&a}, 0.6, [] { return false; });
+    CHECK(a.content.revision > rev0, "revision increased (%u -> %u)", rev0, a.content.revision);
+    {
+        bool desc = false;
+        for (auto& p : a.content.perks) if (p.id == "toughness" && p.desc == "Reloaded description.") desc = true;
+        CHECK(desc, "the client got the new perk description");
+        const gnet::ContentDefs::Item *ov = nullptr, *nw = nullptr;
+        for (auto& it : a.content.items) { if (it.name == "Reloaded Autoloader") ov = &it; if (it.key == "F3_TestPistol.WEA") nw = &it; }
+        CHECK(ov && ov->basePid == 0xFFFF && ov->desc == "Edited by the test." && ov->range == 22 && ov->dmgMax == 19.0f, "item override synced (range %u, dmg %.0f)", ov ? ov->range : 0, ov ? ov->dmgMax : 0.f);
+        CHECK(nw && ov && nw->basePid == ov->pid && nw->pid > ov->pid && nw->name == "Test Pistol", "new item synced: pid %u cloned from base pid %u", nw ? nw->pid : 0, nw ? nw->basePid : 0);
+    }
+    CHECK(a.stats.maxHp == hp3 + 25, "existing character picks up the changed effect: maxHp %d (expect %d)", a.stats.maxHp, hp3 + 25);
+    {   // existing instances keep working: the inventory of the dev kit shows the overridden name, the session is alive
+        int sc = a.invUpdates;
+        a.Send(gnet::PackG(gnet::ReqState{}));
+        CHECK(WaitFor({&a}, 3, [&] { return a.invUpdates > sc; }) && !a.failed, "session and inventory keep working after the reload");
+        bool renamed = false;
+        for (auto& e : a.inv) if (e.name == "Reloaded Autoloader") renamed = true;
+        CHECK(renamed, "the existing 9mm autoloader now carries the reloaded name");
+    }
+
+    // ---- a broken edit: the reload fails as a whole, the previous data stays active
+    const int count1 = a.contentCount;
+    writeAll(dir / "items" / "zz_test.json", R"({"schema":1,"kind":"items","records":[{"id":"Nope_Not_There.WEA","name":"x"}]})");
+    a.chat.clear();
+    say(a, "/reload data");
+    CHECK(WaitFor({&a}, 5, [&] { return said(a, "data reload FAILED") && said(a, "zz_test.json"); }), "a broken data file fails the reload, naming the file");
+    WaitFor({&a}, 0.8, [] { return false; });
+    CHECK(a.contentCount == count1, "no resync after a failed reload");
+    a.chat.clear();
+    say(a, "/perks");
+    CHECK(WaitFor({&a}, 3, [&] { return said(a, "Reloaded description."); }), "the previous (good) data is still active");
+
+    // ---- restore the folder, reload again
+    writeAll(perksFile, perksOrig);
+    fs::remove(dir / "items" / "zz_test.json");
+    fs::remove(dir / "npcs" / "zz_test.json");
+    a.chat.clear();
+    say(a, "/reload");
+    CHECK(WaitFor({&a}, 6, [&] { return said(a, "data reloaded") && said(a, "scripts reloaded"); }), "/reload (all): scripts and data");
+    WaitFor({&a}, 0.8, [] { return false; });
+    CHECK(said(a, "items: +0 -2") && said(a, "npcs: +0 -1") && a.stats.maxHp == hp3 + 10, "restored files: records removed again, maxHp %d back to %d", a.stats.maxHp, hp3 + 10);
+    {
+        bool gone = true;
+        for (auto& it : a.content.items) if (it.name == "Reloaded Autoloader" || it.key == "F3_TestPistol.WEA") gone = false;
+        CHECK(gone, "client item list is clean again");
+    }
+    a.chat.clear();
+    say(a, "/reload bogus");
+    CHECK(WaitFor({&a}, 3, [&] { return said(a, "usage: reload"); }), "/reload with an unknown argument prints the usage");
+    std::printf(g_failed ? "CONTENT TESTS FAILED\n" : "CONTENT TESTS PASSED\n");
+    return g_failed ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
     uint16_t port = 4048;
     std::string expectMap = "00_03_Tutorial_Junktown";
@@ -920,6 +1083,7 @@ int main(int argc, char** argv) {
     if (accountPhase) return RunAccountTests(port, accountPhase, stateFile);
     for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--doors")) return RunDoorTests(port, std::atoi(argv[i + 1]), stateFile);
     for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], "--tutorial")) return RunTutorialTests(port);
+    for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--content")) return RunContentTests(port, argv[i + 1]);
 
     Bot a, b;
     if (!a.Connect(port) || !b.Connect(port)) { std::printf("FAIL: cannot connect to 127.0.0.1:%u\n", port); return 1; }

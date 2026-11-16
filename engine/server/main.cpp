@@ -1,7 +1,8 @@
 // f3_server: headless authoritative server.
 //   f3_server [--port N] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit]
 // --data defaults to the nearest gamedata/server (output of f3_dataimport) next to the binary or in a parent of the cwd.
-// Console commands on stdin: reload | status | say <text> | quit
+//   --content DIR (default: nearest data/), --lenient, --validate-data (check data/ and exit), --dev-commands (chat /reload; implied by --dev-kit)
+// Console commands on stdin: reload [data|scripts|all] | status | say <text> | quit
 #include <algorithm>
 #include <atomic>
 #include <csignal>
@@ -48,7 +49,7 @@ std::filesystem::path FindData(const char* argv0) {
 
 int main(int argc, char** argv) {
     f3::Server::Config cfg;
-    bool scriptsGiven = false, dataGiven = false;
+    bool scriptsGiven = false, dataGiven = false, contentGiven = false, validateOnly = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&](const char* name) -> const char* {
@@ -59,6 +60,10 @@ int main(int argc, char** argv) {
         else if (a == "--scripts") { cfg.scriptsDir = next("--scripts"); scriptsGiven = true; }
         else if (a == "--data") { cfg.dataDir = next("--data"); dataGiven = true; }
         else if (a == "--no-data") cfg.noData = true;
+        else if (a == "--content") { cfg.contentDir = next("--content"); contentGiven = true; }
+        else if (a == "--lenient") cfg.lenient = true;
+        else if (a == "--validate-data") validateOnly = true;
+        else if (a == "--dev-commands") cfg.devCommands = true;
         else if (a == "--tickrate") cfg.tickRate = std::max(1, std::atoi(next("--tickrate")));
         else if (a == "--dev-kit") cfg.devKit = true;
         else if (a == "--allow-guest") cfg.allowGuest = true;
@@ -68,10 +73,17 @@ int main(int argc, char** argv) {
         else if (a == "--run-seconds") cfg.maxRunSeconds = std::atoi(next("--run-seconds"));
         else if (a == "--bind") cfg.bindHost = next("--bind");
         else if (a == "--local") cfg.bindHost = "127.0.0.1";
-        else { std::cerr << "usage: f3_server [--port N] [--bind ADDR | --local] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit] [--allow-guest] [--saves DIR] [--save-interval SEC]\n"; return 2; }
+        else { std::cerr << "usage: f3_server [--content DIR] [--lenient] [--validate-data] [--dev-commands] [--port N] [--bind ADDR | --local] [--scripts DIR] [--data DIR | --no-data] [--tickrate N] [--run-seconds N] [--dev-kit] [--allow-guest] [--saves DIR] [--save-interval SEC]\n"; return 2; }
     }
     if (!scriptsGiven) cfg.scriptsDir = FindScripts(argv[0]);
     if (!dataGiven && !cfg.noData) cfg.dataDir = FindData(argv[0]);
+    if (!contentGiven) cfg.contentDir = f3::FindContentDir(argv[0]);
+    if (validateOnly) {   // --validate-data: check data/ (against gamedata when present), print the report, exit 0 / 1 (2 = gamedata unusable)
+        if (cfg.contentDir.empty()) { std::cerr << "validate-data: no data/ folder found (use --content DIR)" << std::endl; return 2; }
+        return f3::RunValidateData(cfg.noData ? std::filesystem::path() : cfg.dataDir, cfg.contentDir, cfg.lenient);
+    }
+    if (cfg.contentDir.empty()) f3::log::Info("no data/ folder found: built-in content defaults (see docs/data-format.md)");
+    else f3::log::Info("content: %s", std::filesystem::absolute(cfg.contentDir).string().c_str());
     if (cfg.dataDir.empty()) f3::log::Info("no gamedata/server found: running with the built-in test map (see docs/server-data.md)");
     else f3::log::Info("data: %s", std::filesystem::absolute(cfg.dataDir).string().c_str());
     f3::log::Info("scripts: %s", std::filesystem::absolute(cfg.scriptsDir).string().c_str());

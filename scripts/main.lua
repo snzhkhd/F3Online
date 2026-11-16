@@ -45,6 +45,11 @@ function on_reload()
     broadcast("[server] scripts reloaded")
 end
 
+-- Perk hook named by data/perks ("hook": "perk_awareness"): called as fn(critter, perk_id, rank) when the perk is taken.
+function perk_awareness(c, perk_id, rank)
+    c:tell("Your senses sharpen: you notice more of the world around you.")
+end
+
 function on_login(c)
     -- A new character has NOTHING equipped and an empty inventory (it looks like the base body). The test kit below is
     -- only given when the server runs with --dev-kit.

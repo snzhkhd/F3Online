@@ -10,6 +10,7 @@
 #include <vector>
 #include "Account.h"
 #include "AmxHost.h"
+#include "Content.h"
 #include "DataStore.h"
 #include "GameConfig.h"
 #include "World.h"
@@ -41,6 +42,9 @@ public:
         int pbkdf2Iterations = 10000;
         int maxLoginFails = 5;          // failed logins per account / ip within 5 minutes before a 30 s lockout
         std::string bindHost;   // empty = all interfaces; "127.0.0.1" = loopback only (no Windows Firewall prompt)
+        std::filesystem::path contentDir;   // data/ (designer JSON, docs/data-format.md); empty = auto-detect, none found = built-in defaults
+        bool lenient = false;               // --lenient: data validation errors are warnings (the bad records are dropped)
+        bool devCommands = false;           // --dev-commands (implied by --dev-kit): /reload and friends from player chat
     };
 
     explicit Server(Config cfg);
@@ -136,6 +140,20 @@ public:
     void PipOnLogout(Critter& c);      // updates the friends' lists
     bool PipChat(Critter& c, const std::string& text);   // /friend, /friends, /mail, /inbox, /quests chat commands; true = handled
     void HandlePip(Critter& c, const gnet::PipReq& m);
+    // ---- data-driven content (GameContent.cpp): traits, perks, skills, quests and item / npc overrides from data/*.json
+    const ContentDb& Content() const { return content_; }
+    bool LoadContent();                                   // startup: strict (fails on errors unless --lenient); applies items / npcs to the prototypes
+    std::vector<std::string> ReloadContent();             // /reload: re-reads data/, applies on success, returns the report lines
+    int TraitMaxEff() const;                              // traits allowed at creation: data/traits max_picks, else config.lua TraitMax
+    int Mod(const Critter& c, int stat) const;            // sum of the stat modifiers of the critter's traits and perks (StatId / kStatSkillBase + skill)
+    int PerkRank(const Critter& c, const std::string& id) const;
+    bool PerkAvailable(const Critter& c, const PerkDef& p, std::string* why = nullptr) const;   // requirements, rank cap (not the perk points)
+    bool TakePerk(Critter& c, const std::string& id);     // spends a perk point
+    bool QuestStart(Critter& c, const std::string& id);   // data/quests record -> Pip-Boy task
+    void SendContentDefs(Critter& c);
+    bool ContentChat(Critter& c, const std::string& text);   // /perks /perk /traits /reload; true = handled
+    void SpawnDataNpcs();                                    // data/npcs "spawns"
+    std::string ReloadAll(const std::string& what);          // "data" | "scripts" | "all" -> report text (console and /reload)
     // ---- accounts + persistence (Persist.cpp)
     bool SavePlayer(Critter& c);
     void SaveAllPlayers();
@@ -253,6 +271,8 @@ private:
     std::atomic<bool> running_{false};
     uint64_t tick_ = 0;
     GameConfig rt_;
+    ContentDb content_;
+    uint32_t contentRev_ = 0;
     AccountStore accounts_;
     uint64_t nextSaveTick_ = 0;
     std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();

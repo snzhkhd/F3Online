@@ -70,7 +70,18 @@ bool Server::QuestSet(Critter& c, const std::string& id, uint8_t state) {
         q.state = state;
         q.updated = static_cast<int64_t>(std::time(nullptr));
         Tell(c, std::string("Pip-Boy: task ") + (state == 1 ? "completed" : state == 2 ? "failed" : "reopened") + " - " + q.title);
+        const std::string qid = q.id;
         SendPip(c);
+        // data/quests rewards (xp, items), once per character
+        if (state == 1)
+            if (const QuestDef* d = content_.FindQuest(qid))
+                if (!c.vars.count("quest_reward." + qid)) {
+                    c.vars["quest_reward." + qid] = 1;
+                    for (const auto& [item, n] : d->items)
+                        if (const Proto* ip = data_.FindProto(item)) GiveItem(c, *ip, n);
+                    if (!d->items.empty()) SendInventory(c);
+                    if (d->xp > 0) AddXp(c, d->xp);
+                }
         return true;
     }
     return false;

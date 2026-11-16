@@ -82,15 +82,18 @@ bool Server::Init() {
         }
         if (!dd.empty()) {
             if (!data_.Load(dd, err)) { log::Error("data: %s", err.c_str()); return false; }
+            if (!LoadContent()) return false;   // data/*.json on top of the original prototypes (before the world is spawned)
             amx_ = std::make_unique<AmxHost>(*this, dd / "scripts");
             if (!LoadWorldData()) { log::Error("data: no maps could be loaded"); return false; }
+            SpawnDataNpcs();
         }
     }
+    if (!data_.Loaded() && !LoadContent()) return false;   // no gamedata: traits / perks / skills / quests only
     if (cfg_.savesDir.empty()) cfg_.savesDir = cfg_.scriptsDir.parent_path() / "saves";
     accounts_.Init(cfg_.savesDir, cfg_.pbkdf2Iterations);
     LoadWorldState();   // door / container state per map (<saves>/world/)
     accounts_.ConfigureLimit(cfg_.maxLoginFails, 300, 30);
-    if (cfg_.devKit) cfg_.allowGuest = true;
+    if (cfg_.devKit) { cfg_.allowGuest = true; cfg_.devCommands = true; }
     nextSaveTick_ = static_cast<uint64_t>(std::max(0, cfg_.saveIntervalSec)) * cfg_.tickRate;
     log::Info("accounts: %s (guest login %s, autosave %ds)", cfg_.savesDir.string().c_str(), cfg_.allowGuest ? "ALLOWED" : "off", cfg_.saveIntervalSec);
     scripting_ = std::make_unique<Scripting>(*this, cfg_.scriptsDir);
@@ -268,6 +271,7 @@ bool Server::StartSession(ENetPeer* peer, const std::string& name, const nlohman
         ok.tickRate = static_cast<uint16_t>(cfg_.tickRate);
         ok.moveTicks = static_cast<uint16_t>(cfg_.moveTicks);
         SendMsg(*c, ok);
+        SendContentDefs(*c);
         SendStats(*c);
         SendCharSheet(*c);
         log::Info("player '%s' (id %u) logged in, waiting in character creation (not in the world)", c->name.c_str(), c->id);
@@ -278,6 +282,7 @@ bool Server::StartSession(ENetPeer* peer, const std::string& name, const nlohman
     ok.tickRate = static_cast<uint16_t>(cfg_.tickRate);
     ok.moveTicks = static_cast<uint16_t>(cfg_.moveTicks);
     SendMsg(*c, ok);
+    SendContentDefs(*c);
     EnterWorld(*c, restore ? saved : nullptr);
     return true;
 }
@@ -423,6 +428,7 @@ void Server::OnChatReq(Critter& c, const std::string& raw) {
     std::string text = SanitizeText(raw, kMaxChatLen);
     if (text.empty()) return;
     CritterId id = c.id;
+    if (ContentChat(c, text)) return;   // /perks /perk /traits /reload
     if (PipChat(c, text)) return;   // /friend /friends /mail /inbox /maildel /quests
     if (!scripting_->OnChat(c, text)) return;
     text = SanitizeText(text, kMaxChatLen);
@@ -702,8 +708,12 @@ void Server::ExecCommand(const std::string& line) {
     std::string cmd;
     ss >> cmd;
     if (cmd.empty()) return;
-    if (cmd == "reload") {
-        scripting_->Reload();
+    if (cmd == "reload") {   // reload [data|scripts|all] (default all)
+        std::string what;
+        ss >> what;
+        const std::string rep = ReloadAll(what);
+        std::istringstream ls(rep);
+        for (std::string l; std::getline(ls, l);) log::Info("%s", l.c_str());
     } else if (cmd == "status") {
         size_t players = 0, npcs = 0;
         for (auto& [id, c] : world_.Critters()) (c->IsPlayer() ? players : npcs)++;
@@ -724,7 +734,7 @@ void Server::ExecCommand(const std::string& line) {
     } else if (cmd == "quit" || cmd == "stop" || cmd == "exit") {
         RequestStop();
     } else {
-        log::Info("commands: reload | status | amx <script> <public> | say <text> | quit");
+        log::Info("commands: reload [data|scripts|all] | status | amx <script> <public> | say <text> | quit");
     }
 }
 

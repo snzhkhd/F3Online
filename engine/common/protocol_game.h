@@ -643,3 +643,59 @@ struct PipData {
 }  // namespace gnet
 
 }  // namespace f3
+
+// ---- Content block: designer data (data/*.json, docs/data-format.md) the client needs for display. S2C only (id 130, free in the
+// 120..139 range); old clients ignore it, old servers never send it (a new client then keeps its built-in fallbacks: the original
+// English.stf trait names, the prototype table of gamedata/server). Sent after login (also while the session waits in character
+// creation) and again to every player after a data reload. A message with first = 1 replaces what the client knew (traits, perks);
+// the item list is split over several messages (first = 0 for the following ones).
+namespace f3 {
+enum class GMsgContent : uint8_t { S2C_ContentDefs = 130 };
+namespace gnet {
+struct ContentDefs {
+    static constexpr GMsg kId = static_cast<GMsg>(GMsgContent::S2C_ContentDefs);
+    struct Trait { uint8_t index = 0; std::string id, name, desc; };               // index = bit of the trait mask / creation screen slot
+    struct Perk { std::string id, name, desc; uint8_t ranks = 1, reqLevel = 0; };
+    // A prototype overridden or added by the data layer. basePid = 0xFFFF: an override of the prototype `pid`; else a NEW prototype
+    // (pid = index after the original ones) that the client clones from basePid (model, icon, ...) and then applies name / desc / numbers to.
+    struct Item { uint16_t pid = 0, basePid = 0xFFFF; std::string key, name, desc; uint16_t range = 0; float dmgMin = 0, dmgMax = 0; uint16_t armor[7] = {}; };
+    uint8_t first = 1;
+    uint16_t schema = 1;
+    uint32_t revision = 0;
+    uint8_t traitMax = 2;
+    std::vector<Trait> traits;
+    std::vector<Perk> perks;
+    std::vector<Item> items;
+    void Write(ByteBuffer& b) const {
+        b.WriteU8(first); b.WriteU16(schema); b.WriteU32(revision); b.WriteU8(traitMax);
+        b.WriteU16(static_cast<uint16_t>(traits.size()));
+        for (const Trait& t : traits) { b.WriteU8(t.index); b.WriteString(t.id); b.WriteString(t.name); b.WriteString(t.desc); }
+        b.WriteU16(static_cast<uint16_t>(perks.size()));
+        for (const Perk& p : perks) { b.WriteString(p.id); b.WriteString(p.name); b.WriteString(p.desc); b.WriteU8(p.ranks); b.WriteU8(p.reqLevel); }
+        b.WriteU16(static_cast<uint16_t>(items.size()));
+        for (const Item& i : items) {
+            b.WriteU16(i.pid); b.WriteU16(i.basePid); b.WriteString(i.key); b.WriteString(i.name); b.WriteString(i.desc);
+            b.WriteU16(i.range); WriteF32(b, i.dmgMin); WriteF32(b, i.dmgMax);
+            for (int k = 0; k < 7; k++) b.WriteU16(i.armor[k]);
+        }
+    }
+    bool Read(ByteBuffer& b) {
+        traits.clear(); perks.clear(); items.clear();
+        first = b.ReadU8(); schema = b.ReadU16(); revision = b.ReadU32(); traitMax = b.ReadU8();
+        uint16_t n = b.ReadU16();
+        for (uint16_t k = 0; k < n && b.Ok(); k++) { Trait t; t.index = b.ReadU8(); t.id = b.ReadString(64); t.name = b.ReadString(200); t.desc = b.ReadString(2000); traits.push_back(std::move(t)); }
+        n = b.ReadU16();
+        for (uint16_t k = 0; k < n && b.Ok(); k++) { Perk p; p.id = b.ReadString(64); p.name = b.ReadString(200); p.desc = b.ReadString(2000); p.ranks = b.ReadU8(); p.reqLevel = b.ReadU8(); perks.push_back(std::move(p)); }
+        n = b.ReadU16();
+        for (uint16_t k = 0; k < n && b.Ok(); k++) {
+            Item i;
+            i.pid = b.ReadU16(); i.basePid = b.ReadU16(); i.key = b.ReadString(200); i.name = b.ReadString(200); i.desc = b.ReadString(4000);
+            i.range = b.ReadU16(); i.dmgMin = ReadF32(b); i.dmgMax = ReadF32(b);
+            for (int q = 0; q < 7; q++) i.armor[q] = b.ReadU16();
+            items.push_back(std::move(i));
+        }
+        return b.Ok();
+    }
+};
+}  // namespace gnet
+}  // namespace f3

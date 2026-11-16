@@ -14,7 +14,7 @@ uint64_t Server::NowMs() const {
 
 int Server::MaxAp(const Critter& c) const {
     int div = std::max(1, rt_.ApAgilityDiv);
-    return std::clamp((rt_.ApBase + c.special[5] / div) * 100, 100, 25500);
+    return std::clamp((rt_.ApBase + c.special[5] / div + Mod(c, StMaxAp)) * 100, 100, 25500);
 }
 
 void Server::SyncAp(Critter& c) {

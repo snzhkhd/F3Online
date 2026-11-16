@@ -147,7 +147,8 @@ bool Server::LoadWorldData() {
 void Server::InitCritterStats(Critter& c, const Proto& p) {
     c.protoPid = p.pid;
     for (int i = 0; i < 7; i++) c.special[i] = p.special[i];
-    c.level = 1;
+    c.level = std::max(1, p.level);
+    c.maxHpFixed = p.maxHpFixed;
     RecalcDerived(c);
     c.hp = c.maxHp;
     c.team = p.team;
@@ -254,6 +255,7 @@ ItemId Server::SpawnObjectProto(MapId mapId, const Proto& p, TilePos pos, uint16
 
 // Unit weight: per-prototype override (config.ItemWeights), else the class default from the config table.
 int Server::ProtoWeight(const Proto& p) const {
+    if (p.weightOverride >= 0) return p.weightOverride;   // data/items "weight"
     auto o = rt_.ItemWeights.find(p.key);
     if (o != rt_.ItemWeights.end()) return std::max(0, o->second);
     switch (p.cls) {
@@ -264,7 +266,7 @@ int Server::ProtoWeight(const Proto& p) const {
     }
 }
 
-int Server::CarryLimit(const Critter& c) const { return std::max(0, rt_.CarryBase + rt_.CarryPerStrength * c.special[0]); }
+int Server::CarryLimit(const Critter& c) const { return std::max(0, rt_.CarryBase + rt_.CarryPerStrength * c.special[0] + Mod(c, StCarryWeight)); }
 
 int Server::Weight(const Critter& c) const {
     int w = 0;
@@ -301,9 +303,9 @@ void Server::SendStats(Critter& c) {
     s.level = static_cast<uint8_t>(c.level);
     s.hp = static_cast<int16_t>(c.hp);
     s.maxHp = static_cast<int16_t>(c.maxHp);
-    s.armorClass = static_cast<uint8_t>(std::min(255, c.special[5] + WornArmor(c, data_).ac));
-    s.sequence = static_cast<uint8_t>(2 * c.special[1]);
-    s.meleeBonus = static_cast<uint8_t>(std::max(0, c.special[0] - 5));
+    s.armorClass = static_cast<uint8_t>(std::clamp(c.special[5] + WornArmor(c, data_).ac + Mod(c, StArmorClass), 0, 255));
+    s.sequence = static_cast<uint8_t>(std::clamp(2 * c.special[1] + Mod(c, StSequence), 0, 255));
+    s.meleeBonus = static_cast<uint8_t>(std::clamp(c.special[0] - 5 + Mod(c, StMeleeDamage), 0, 255));
     s.carryWeight = static_cast<uint16_t>(std::min(65535, CarryLimit(c)));
     s.carried = static_cast<uint16_t>(Weight(c));
     Send(c, gnet::PackG(s));
@@ -786,9 +788,9 @@ struct AttackPlan {
     ItemId ammoInv = 0;
 };
 
-AttackPlan PlanAttack(const Critter& c, const DataStore& d) {
+AttackPlan PlanAttack(const Critter& c, const DataStore& d, int meleeMod) {
     AttackPlan a;
-    int meleeBonus = std::max(0, c.special[0] - 5);
+    int meleeBonus = std::max(0, c.special[0] - 5 + meleeMod);
     const Proto* w = EquippedWeapon(c, d);
     a.weapon = w;
     if (w) {
@@ -836,7 +838,7 @@ bool Server::StartAttack(Critter& c, CritterId targetId) {
 bool Server::InAttackRange(const Critter& c, const Critter& t) {
     Map* m = world_.GetMap(c.mapId);
     if (!m || t.mapId != c.mapId) return false;
-    AttackPlan plan = PlanAttack(c, data_);
+    AttackPlan plan = PlanAttack(c, data_, Mod(c, StMeleeDamage));
     int dist = TileDist(c.pos, t.pos);
     return dist <= plan.rangeCells && (dist <= 1 || HasLos(*m, c.pos, t.pos));
 }
@@ -846,7 +848,7 @@ void Server::TickCombat(Critter& c) {
     Critter* t = world_.GetCritter(c.target);
     Map* m = world_.GetMap(c.mapId);
     if (!t || !m || t->dead || t->mapId != c.mapId) { c.target = 0; return; }
-    AttackPlan plan = PlanAttack(c, data_);
+    AttackPlan plan = PlanAttack(c, data_, Mod(c, StMeleeDamage));
     int dist = TileDist(c.pos, t->pos);
     bool los = dist <= 1 || HasLos(*m, c.pos, t->pos);
     if (dist > plan.rangeCells || !los) {
@@ -901,7 +903,7 @@ void Server::TickCombat(Critter& c) {
     int dmg = 0;
     if (hit) {
         dmg = RandRange(plan.dmgLo, plan.dmgHi);
-        bool crit = RandRange(1, 100) <= c.special[6];  // Luck % (guess)
+        bool crit = RandRange(1, 100) <= c.special[6] + Mod(c, StCritChance);  // Luck % (guess)
         if (crit) dmg *= 2;
         // threshold reduction, but never below a quarter of the roll (guess)
         dmg = std::max({dmg - ta.dt, dmg / 4, 1});
