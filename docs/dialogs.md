@@ -20,6 +20,10 @@ when none matches, it is the name of an original dialog and the AMX path runs as
 must therefore not collide (the validator does not know the AMX names). `speaker` in the dialog record is optional documentation
 plus a check: it must name an existing critter prototype.
 
+The shipped sample NPCs also carry `"equipment": [ ... ]` (a leather outfit or biohazard suit plus a crowbar / pistol / hatchet): equipment is worn on
+spawn, and the worn armor and the hand-1 weapon are sent to the clients as the appearance block, so the figure is drawn dressed and armed. A record without
+`equipment` (and a base prototype without one) is drawn in the base body, i.e. in underwear. Pick ids from `data/items/armor.json` / `weapons.json`.
+
 ## 2. File format
 
 Envelope as everywhere (`docs/data-format.md`, 2): `{ "schema": 1, "kind": "dialogs", "records": [ ... ] }`. Strings have a 1500
