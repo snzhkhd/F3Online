@@ -696,7 +696,7 @@ static int RunTutorialTests(uint16_t port) {
         say("/tp 170 572");
         WaitFor({&a}, 2, [] { return false; });
         CritterId arm = 0;
-        int bestD = 1 << 20;   // Armstrong's display name is the type string ("GMC Soldier"): take the NPC closest to his post
+        int bestD = 1 << 20;   // Armstrong's display name is "Armstrong" but other NPCs share the spot: take the NPC closest to his post
         for (auto& [id, c] : a.critters) if (c.kind == CritterKind::Npc) { int d = std::abs(c.x - 170) + std::abs(c.y - 578); if (d < bestD) { bestD = d; arm = id; } }
         CHECK(arm != 0 && bestD < 12, "Corporal Armstrong (nearest NPC to his post, distance %d) is in view in Junktown", bestD);
         if (arm) {
@@ -1768,17 +1768,17 @@ int main(int argc, char** argv) {
         CHECK(WaitFor({&a, &b, &c}, 8, [&] { return c.loggedIn && c.havePos && c.haveStats; }), "bot C logged in");
         net::ChatReq fm; fm.text = "/forcemiss on";
         c.Send(net::Pack(fm));
-        net::ChatReq nr; nr.text = "/near GMC Soldier";
+        net::ChatReq nr; nr.text = "/near Armstrong";
         c.Send(net::Pack(nr));
         WaitFor({&a, &b, &c}, 3, [&] { return false; });
         CritterId npc = 0;
         int bd = 1 << 30;
         for (auto& [id, cr] : c.critters) {
-            if (id == a.myId || id == b.myId || id == c.myId || cr.name.find("GMC Soldier") == std::string::npos) continue;
+            if (id == a.myId || id == b.myId || id == c.myId || cr.name.find("Armstrong") == std::string::npos) continue;
             int d = TileDist(TilePos{cr.x, cr.y}, c.pos);
             if (d < bd) { bd = d; npc = id; }
         }
-        CHECK(npc != 0, "found neutral NPC 'GMC Soldier' near bot C");
+        CHECK(npc != 0, "found neutral NPC 'Armstrong' near bot C");
         if (npc) {
             c.combat.clear();
             gnet::Attack at; at.id = npc;
@@ -1962,9 +1962,9 @@ int main(int argc, char** argv) {
         a.Send(net::Pack(c));
         CritterId arm = 0;
         CHECK(WaitFor({&a, &b}, 5, [&] {
-                  int best = 99999;   // Armstrong's prototype is displayed as "GMC Soldier": take the nearest one (we stand next to him)
+                  int best = 99999;   // Armstrong's prototype is displayed as "Armstrong" (npcs/original.json name): take the nearest one (we stand next to him)
                   for (auto& [id, cr] : a.critters)
-                      if (cr.name == "GMC Soldier" && TileDist(TilePos{cr.x, cr.y}, a.pos) < best) { best = TileDist(TilePos{cr.x, cr.y}, a.pos); arm = id; }
+                      if (cr.name == "Armstrong" && TileDist(TilePos{cr.x, cr.y}, a.pos) < best) { best = TileDist(TilePos{cr.x, cr.y}, a.pos); arm = id; }
                   return arm != 0 && best <= 4;
               }), "Armstrong is in view after /near");
         if (arm) {
