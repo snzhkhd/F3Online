@@ -9,7 +9,7 @@ Server part in `engine/server/Pip.cpp`, protocol in `engine/common/protocol_game
 
 ## Data
 * Quests (`id`, `title`, `text`, `state` 0 active / 1 done / 2 failed) and friends are part of the character (`Persist.cpp`), max 100 / 50.
-* Mail is per account, `<saves>/mail/<account key>.json` (array of `{id, from, text, time, read}`), max 50 messages of 400 chars, so it reaches offline players. Guests have no mailbox and cannot send.
+* Mail is per account, table `mail` of the database (`id` database wide, `sender`, `body`, `sent_at`, `is_read`; `docs/persistence.md`), max 50 messages of 400 chars, so it reaches offline players. Sending is audited (`mail_sent`). Quests and friends are rows of `quests` / `friends` of the saved character. Guests have no mailbox and cannot send.
 * Lua (`scripts/main.lua`, demo quests "First steps" / "Survivor"): `c:quest_add(id, title, text)`, `c:quest_done(id)`, `c:quest_fail(id)`, `c:quest_state(id)` (-1 unknown, 0, 1, 2).
 * Chat commands: `/friend add|del <name>`, `/friends`, `/mail <name> <text>`, `/inbox`, `/maildel <id>`, `/quests`. At login the player is told about unread mail ("press P").
 
