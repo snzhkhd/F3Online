@@ -15,8 +15,12 @@
 #include "IRenderer.h"
 #include "MapView.h"
 #include "CharPreview.h"
+#include "Fonts.h"
 #include "OrigUi.h"
+#include "TextUtil.h"
+#include "common/Localization.h"
 #include "common/log.h"
+#include "common/utf8.h"
 
 namespace f3 {
 
@@ -63,6 +67,12 @@ public:
         SetTargetFPS(60);
         SetExitKey(0);  // Esc is ours
         if (!IsWindowReady()) return false;
+        {   // Cyrillic capable TTFs (the original bitmap-like fonts have Latin glyphs only), see Fonts.h
+            fonts::Options fo;
+            fo.dir = opt_.fontDir; fo.body = opt_.fontBody; fo.head = opt_.fontHead;
+            fonts::Load(fo);
+            fonts::SetAlways(opt_.wideFonts);
+        }
         if (!opt_.gameDir.empty()) {
             assets_ = std::make_unique<GameAssets>();
             std::string err;
@@ -88,6 +98,7 @@ public:
         startTime_ = GetTime();
         return true;
     }
+    void SetWideFonts(bool on) override { fonts::SetAlways(on); orig_.ResetTextCache(); }
     void Shutdown() override {
         visuals_.clear();   // GL meshes before the context goes away
         orig_.Unload();
@@ -136,6 +147,14 @@ public:
             const char* u = CodepointToUTF8(cp, &n);
             in.typed.append(u, n);
         }
+        // Ctrl+V: paste the clipboard as typed text (one line: control characters become spaces)
+        if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V)) {
+            if (const char* clip = GetClipboardText()) {
+                std::string t = clip;
+                for (char& ch : t) if (static_cast<unsigned char>(ch) < 32 || ch == 127) ch = ' ';
+                if (utf8::Valid(t)) in.typed += t;
+            }
+        }
         in.enter = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER);
         in.backspace = IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE);
         in.escape = IsKeyPressed(KEY_ESCAPE);
@@ -177,29 +196,29 @@ public:
         const Color panel{30, 34, 40, 255}, edge{90, 100, 110, 255}, txt{225, 225, 220, 255}, dim{150, 155, 160, 255}, hot{70, 110, 60, 255}, norm{50, 58, 66, 255};
         DrawRectangle(L.px, L.py, L.pw, L.ph, panel);
         DrawRectangleLines(L.px, L.py, L.pw, L.ph, edge);
-        DrawText("F3Online", L.px + 40, L.py + 24, 34, txt);
-        DrawText(v.server.c_str(), L.px + 40, L.py + 66, 14, dim);
+        fonts::Draw("F3Online", L.px + 40, L.py + 24, 34, txt);
+        fonts::Draw(v.server.c_str(), L.px + 40, L.py + 66, 14, dim);
         auto field = [&](const char* label, int x, int y, const std::string& text, bool masked, bool focus) {
-            DrawText(label, x, y - 18, 14, dim);
+            fonts::Draw(label, x, y - 18, 14, dim);
             DrawRectangle(x, y, L.fieldW, L.fieldH, Color{16, 18, 22, 255});
             DrawRectangleLines(x, y, L.fieldW, L.fieldH, focus ? Color{140, 200, 120, 255} : edge);
-            std::string shown = masked ? std::string(text.size(), '*') : text;
+            std::string shown = masked ? std::string(utf8::Count(text), '*') : text;
             if (focus && std::fmod(GetTime(), 1.0) < 0.5) shown += "_";
-            DrawText(shown.c_str(), x + 8, y + 8, 20, txt);
+            fonts::Draw(shown.c_str(), x + 8, y + 8, 20, txt);
         };
-        field("Name", L.nameX, L.nameY, v.name, false, v.focus == 0);
-        field("Password", L.passX, L.passY, v.password, true, v.focus == 1);
+        field(loc::T("login.name").c_str(), L.nameX, L.nameY, v.name, false, v.focus == 0);
+        field(loc::T("login.password").c_str(), L.passX, L.passY, v.password, true, v.focus == 1);
         auto button = [&](const char* label, int x, int idx) {
             DrawRectangle(x, L.btnY, L.btnW, L.btnH, v.hover == idx && !v.busy ? hot : norm);
             DrawRectangleLines(x, L.btnY, L.btnW, L.btnH, edge);
-            const int tw = MeasureText(label, 20);
-            DrawText(label, x + (L.btnW - tw) / 2, L.btnY + 10, 20, v.busy ? dim : txt);
+            const int tw = fonts::Measure(label, 20);
+            fonts::Draw(label, x + (L.btnW - tw) / 2, L.btnY + 10, 20, v.busy ? dim : txt);
         };
-        button("Login", L.loginX, 0);
-        button("Register", L.regX, 1);
-        if (!v.error.empty()) DrawText(v.error.c_str(), L.px + 40, L.btnY + L.btnH + 14, 16, Color{240, 110, 90, 255});
-        else if (!v.status.empty()) DrawText(v.status.c_str(), L.px + 40, L.btnY + L.btnH + 14, 16, dim);
-        DrawText("Tab: next field   Enter: log in   (password never stored locally)", L.px + 40, L.py + L.ph - 24, 11, dim);
+        button(loc::T("login.btn_login").c_str(), L.loginX, 0);
+        button(loc::T("login.btn_register").c_str(), L.regX, 1);
+        if (!v.error.empty()) fonts::Draw(v.error.c_str(), L.px + 40, L.btnY + L.btnH + 14, 16, Color{240, 110, 90, 255});
+        else if (!v.status.empty()) fonts::Draw(v.status.c_str(), L.px + 40, L.btnY + L.btnH + 14, 16, dim);
+        fonts::Draw(loc::T("login.help"), L.px + 40, L.py + L.ph - 24, 11, dim);
     }
     void EndFrame() override {
         ++frame_;
@@ -292,8 +311,8 @@ public:
             DrawCircle(static_cast<int>(p.x + ts / 2 + kDirDx[d] * ts * 0.28f),
                        static_cast<int>(p.y + ts / 2 + kDirDy[d] * ts * 0.28f), std::max(2.0f, ts * 0.07f), BLACK);
             const std::string& n = sc.critter->name;
-            int tw = MeasureText(n.c_str(), 12);
-            DrawText(n.c_str(), static_cast<int>(p.x + ts / 2 - tw / 2), static_cast<int>(p.y - 14),
+            int tw = fonts::Measure(n.c_str(), 12);
+            fonts::Draw(n.c_str(), static_cast<int>(p.x + ts / 2 - tw / 2), static_cast<int>(p.y - 14),
                      12, sc.critter->kind == CritterKind::Npc ? Color{255, 220, 140, 255} : RAYWHITE);
         }
 
@@ -358,22 +377,22 @@ public:
             orig_.DrawCharScreen(ui, true, uiRects_);
             return;
         }
-        DrawText(ui.status.c_str(), 10, 8, 16, RAYWHITE);
+        fonts::Draw(ui.status.c_str(), 10, 8, 16, RAYWHITE);
         if (active3d_) {
             char b[320];
             std::snprintf(b, sizeof b, "%d fps | az %.0f el %.0f fov %.1f | %s", GetFPS(), cam_.azimuth, cam_.elevation,
                           cam_.fov, map_.info().c_str());
-            DrawText(b, 10, 28, 12, Color{200, 200, 200, 255});
+            fonts::Draw(b, 10, 28, 12, Color{200, 200, 200, 255});
             if (!ui.core && hoverValid_) {
                 std::snprintf(b, sizeof b, "cursor: x %.1f y %.1f z %.1f  cell (%d, %d)  [original axes]", hover_.x, hover_.y,
                               -hover_.z, static_cast<int>(std::floor(hover_.x * 2)), static_cast<int>(std::floor(-hover_.z * 2)));
-                DrawText(b, 10, 44, 12, Color{200, 200, 140, 255});
+                fonts::Draw(b, 10, 44, 12, Color{200, 200, 140, 255});
             }
             if (!ui.core)
-                DrawText("RMB orbit | MMB/WASD pan | wheel zoom | Q/E rotate | R/F tilt | PgUp/PgDn roof cut | G grid | H props | L lightmap | F12 shot",
+                fonts::Draw("RMB orbit | MMB/WASD pan | wheel zoom | Q/E rotate | R/F tilt | PgUp/PgDn roof cut | G grid | H props | L lightmap | F12 shot",
                          10, 60, 12, Color{150, 150, 150, 255});
         } else if (ui.core) {
-            DrawText("LMB act | RMB cycle cursor mode | Enter chat | wheel zoom", 10, 28, 12, Color{180, 180, 180, 255});
+            fonts::Draw("LMB act | RMB cycle cursor mode | Enter chat | wheel zoom", 10, 28, 12, Color{180, 180, 180, 255});
         }
 
         // overhead labels and floating combat text
@@ -395,36 +414,18 @@ public:
                 const ChatLine& l = (*ui.chat)[i];
                 std::string line = l.name.empty() ? l.text : l.name + ": " + l.text;
                 Color c = l.channel == ChatChannel::System ? Color{140, 220, 255, 255} : RAYWHITE;
-                std::string cur;
-                size_t pos = 0;
-                while (pos < line.size()) {
-                    size_t sp = line.find(' ', pos);
-                    std::string word = line.substr(pos, sp == std::string::npos ? std::string::npos : sp - pos + 1);
-                    pos = sp == std::string::npos ? line.size() : sp + 1;
-                    while (MeasureText(word.c_str(), 14) > maxW && word.size() > 1) {  // very long word: hard split
-                        size_t n = word.size();
-                        while (n > 1 && MeasureText(word.substr(0, n).c_str(), 14) > maxW) --n;
-                        if (!cur.empty()) { wrapped.emplace_back(cur, c); cur.clear(); }
-                        wrapped.emplace_back(word.substr(0, n), c);
-                        word = word.substr(n);
-                    }
-                    if (!cur.empty() && MeasureText((cur + word).c_str(), 14) > maxW) {
-                        wrapped.emplace_back(cur, c);
-                        cur.clear();
-                    }
-                    cur += word;
-                }
-                if (!cur.empty()) wrapped.emplace_back(cur, c);
+                for (std::string& ln : txt::Wrap(line, static_cast<float>(maxW), [](const std::string& s2) { return static_cast<float>(fonts::Measure(s2, 14)); }, false))
+                    wrapped.emplace_back(std::move(ln), c);
             }
             int first = std::max(0, static_cast<int>(wrapped.size()) - maxLines);
             int y = static_cast<int>(panel.y) + 2;
             for (size_t i = first; i < wrapped.size(); ++i, y += lineH)
-                DrawText(wrapped[i].first.c_str(), static_cast<int>(panel.x) + 6, y, 14, wrapped[i].second);
+                fonts::Draw(wrapped[i].first.c_str(), static_cast<int>(panel.x) + 6, y, 14, wrapped[i].second);
         }
         Rectangle in{panel.x, panel.y + panel.height + 4, panel.width, 24};
         if (!chatInBar) DrawRectangleRec(in, ui.chatInputActive ? Color{30, 30, 60, 220} : Color{0, 0, 0, 90});
-        std::string text = ui.chatInputActive ? ui.chatInput + ((static_cast<int>(ui.now * 2) & 1) ? "_" : "") : "Press Enter to chat";
-        if (!chatInBar) DrawText(text.c_str(), static_cast<int>(in.x) + 6, static_cast<int>(in.y) + 4, 16,
+        std::string text = ui.chatInputActive ? ui.chatInput + ((static_cast<int>(ui.now * 2) & 1) ? "_" : "") : loc::T("chat.press_enter");
+        if (!chatInBar) fonts::Draw(text.c_str(), static_cast<int>(in.x) + 6, static_cast<int>(in.y) + 4, 16,
                  ui.chatInputActive ? WHITE : Color{150, 150, 150, 255});
 
         if (ui.core && ui.state && ui.commands && ui.core->state() == ClientCore::State::InGame) {
@@ -444,13 +445,13 @@ public:
                 p = e + 1;
             }
             int bw = 0;
-            for (auto& l : lines) bw = std::max(bw, MeasureText(l.c_str(), fs));
+            for (auto& l : lines) bw = std::max(bw, fonts::Measure(l.c_str(), fs));
             Rectangle r{(sw - bw) / 2.0f - 14, 52, static_cast<float>(bw + 28), static_cast<float>(lines.size() * (fs + 4) + 16)};
             DrawRectangleRec(r, Color{90, 20, 20, 230});
             DrawRectangleLinesEx(r, 2, Color{255, 200, 60, 255});
             float y = r.y + 8;
             for (size_t i = 0; i < lines.size(); ++i, y += fs + 4)
-                DrawText(lines[i].c_str(), static_cast<int>(r.x) + 14, static_cast<int>(y), fs, i == 0 ? Color{255, 220, 90, 255} : RAYWHITE);
+                fonts::Draw(lines[i].c_str(), static_cast<int>(r.x) + 14, static_cast<int>(y), fs, i == 0 ? Color{255, 220, 90, 255} : RAYWHITE);
         }
         (void)sh;
     }
@@ -1000,9 +1001,9 @@ private:
         for (const Label& l : labels_) {
             if (l.text.empty()) continue;
             Vector2 sp = GetWorldToScreen(l.pos, lastCam_);
-            int tw = MeasureText(l.text.c_str(), 12);
-            DrawText(l.text.c_str(), static_cast<int>(sp.x) - tw / 2 + 1, static_cast<int>(sp.y) - 5, 12, Color{0, 0, 0, 200});
-            DrawText(l.text.c_str(), static_cast<int>(sp.x) - tw / 2, static_cast<int>(sp.y) - 6, 12, l.color);
+            int tw = fonts::Measure(l.text.c_str(), 12);
+            fonts::Draw(l.text.c_str(), static_cast<int>(sp.x) - tw / 2 + 1, static_cast<int>(sp.y) - 5, 12, Color{0, 0, 0, 200});
+            fonts::Draw(l.text.c_str(), static_cast<int>(sp.x) - tw / 2, static_cast<int>(sp.y) - 6, 12, l.color);
             if (l.id && l.hp >= 0 && l.maxHp > 0) {
                 float f = std::clamp(static_cast<float>(l.hp) / l.maxHp, 0.0f, 1.0f);
                 Rectangle b{sp.x - 20, sp.y + 8, 40, 4};
@@ -1019,9 +1020,9 @@ private:
             Color col = f.kind == 1 ? Color{200, 200, 200, 255} : (f.kind == 2 ? Color{255, 200, 40, 255} : (f.kind == 3 ? Color{255, 60, 60, 255} : Color{255, 110, 90, 255}));
             col.a = static_cast<unsigned char>(255 * std::clamp(1.6f - age, 0.0f, 1.0f));
             int fs = f.kind == 2 ? 22 : 18;
-            int tw = MeasureText(f.text.c_str(), fs);
-            DrawText(f.text.c_str(), static_cast<int>(sp.x) - tw / 2 + 1, static_cast<int>(sp.y) + 1, fs, Color{0, 0, 0, col.a});
-            DrawText(f.text.c_str(), static_cast<int>(sp.x) - tw / 2, static_cast<int>(sp.y), fs, col);
+            int tw = fonts::Measure(f.text.c_str(), fs);
+            fonts::Draw(f.text.c_str(), static_cast<int>(sp.x) - tw / 2 + 1, static_cast<int>(sp.y) + 1, fs, Color{0, 0, 0, col.a});
+            fonts::Draw(f.text.c_str(), static_cast<int>(sp.x) - tw / 2, static_cast<int>(sp.y), fs, col);
         }
         DrawSpeech(ui);
     }
@@ -1054,10 +1055,10 @@ private:
     }
     static float DrawSpeechPlain(const std::string& t, float cx, float bottomY, Color c, float alpha) {
         const int fs = 14;
-        const int tw = MeasureText(t.c_str(), fs);
+        const int tw = fonts::Measure(t.c_str(), fs);
         c.a = static_cast<unsigned char>(alpha * 255);
-        DrawText(t.c_str(), static_cast<int>(cx) - tw / 2 + 1, static_cast<int>(bottomY) - fs + 1, fs, Color{0, 0, 0, c.a});
-        DrawText(t.c_str(), static_cast<int>(cx) - tw / 2, static_cast<int>(bottomY) - fs, fs, c);
+        fonts::Draw(t.c_str(), static_cast<int>(cx) - tw / 2 + 1, static_cast<int>(bottomY) - fs + 1, fs, Color{0, 0, 0, c.a});
+        fonts::Draw(t.c_str(), static_cast<int>(cx) - tw / 2, static_cast<int>(bottomY) - fs, fs, c);
         return static_cast<float>(fs);
     }
 
@@ -1069,8 +1070,8 @@ private:
         DrawRectangleRec(r, bg);
         DrawRectangleLinesEx(r, 1, active ? Color{140, 230, 140, 255} : Color{90, 90, 110, 255});
         int fs = 14;
-        int tw = MeasureText(text, fs);
-        DrawText(text, static_cast<int>(r.x + (r.width - tw) / 2), static_cast<int>(r.y + (r.height - fs) / 2), fs, enabled ? RAYWHITE : Color{120, 120, 120, 255});
+        int tw = fonts::Measure(text, fs);
+        fonts::Draw(text, static_cast<int>(r.x + (r.width - tw) / 2), static_cast<int>(r.y + (r.height - fs) / 2), fs, enabled ? RAYWHITE : Color{120, 120, 120, 255});
         return hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     }
 
@@ -1111,15 +1112,15 @@ private:
 
         // mode buttons
         // only Move, Examine and Attack are manual; Pickup / Use / Talk follow the mouse
-        const char* names[] = {"Move", "Examine", "A Attack"};
+        const std::string names[] = {loc::T("cursor.move"), loc::T("cursor.examine"), "A " + loc::T("cursor.attack")};
         for (int i = 0; i < 3; ++i) {
             Rectangle b{hud.x + 8 + i * 74.0f, hud.y + 8, 70, 24};
-            if (Button(b, names[i], st.mode == static_cast<CursorMode>(i)))
+            if (Button(b, names[i].c_str(), st.mode == static_cast<CursorMode>(i)))
                 ui.commands->push_back(UiCommand{UiCommand::SetMode, static_cast<uint32_t>(i), 0});
         }
-        DrawText("auto: pickup / use / talk", static_cast<int>(hud.x) + 8 + 3 * 74, static_cast<int>(hud.y) + 14, 10, Color{140, 140, 150, 255});
-        if (Button(Rectangle{hud.x + 420, hud.y + 8, 56, 24}, "I Inv", st.inventory)) ui.commands->push_back(UiCommand{UiCommand::ToggleInventory, 0, 0});
-        if (Button(Rectangle{hud.x + 484, hud.y + 8, 56, 24}, "C Char", st.charSheet)) ui.commands->push_back(UiCommand{UiCommand::ToggleChar, 0, 0});
+        fonts::Draw(loc::T("hud.fb.auto"), static_cast<int>(hud.x) + 8 + 3 * 74, static_cast<int>(hud.y) + 14, 10, Color{140, 140, 150, 255});
+        if (Button(Rectangle{hud.x + 420, hud.y + 8, 56, 24}, loc::T("hud.fb.inv").c_str(), st.inventory)) ui.commands->push_back(UiCommand{UiCommand::ToggleInventory, 0, 0});
+        if (Button(Rectangle{hud.x + 484, hud.y + 8, 56, 24}, loc::T("hud.fb.char").c_str(), st.charSheet)) ui.commands->push_back(UiCommand{UiCommand::ToggleChar, 0, 0});
 
         // HP
         const ClientCritter* me = core.self();
@@ -1133,8 +1134,7 @@ private:
         }
         DrawRectangleLinesEx(hpb, 1, Color{150, 70, 70, 255});
         char buf[96];
-        std::snprintf(buf, sizeof buf, "HP %d / %d", std::max(hp, 0), std::max(maxHp, 0));
-        DrawText(buf, static_cast<int>(hpb.x) + 6, static_cast<int>(hpb.y) + 3, 14, RAYWHITE);
+        fonts::Draw(loc::T("inv.hp", {{"n", std::max(hp, 0)}, {"max", std::max(maxHp, 0)}}), static_cast<int>(hpb.x) + 6, static_cast<int>(hpb.y) + 3, 14, RAYWHITE);
 
         // AP: one cell per AP, partial fill for the regenerating one
         const float maxAp = core.waitKnown() ? core.MaxAp() : (core.hasStats() ? core.stats().sequence : 0.0f);
@@ -1152,8 +1152,13 @@ private:
             }
         }
         DrawRectangleLinesEx(apb, 1, Color{60, 130, 80, 255});
-        std::snprintf(buf, sizeof buf, "AP %.1f / %.0f", ap, maxAp);
-        DrawText(buf, static_cast<int>(apb.x) + 4, static_cast<int>(apb.y) - 14, 12, Color{150, 230, 170, 255});
+        {
+            char a1[24], a2[24];
+            std::snprintf(a1, sizeof a1, "%.1f", ap);
+            std::snprintf(a2, sizeof a2, "%.0f", maxAp);
+            std::snprintf(buf, sizeof buf, "%s", loc::T("hud.ap", {{"ap", a1}, {"max", a2}}).c_str());
+        }
+        fonts::Draw(buf, static_cast<int>(apb.x) + 4, static_cast<int>(apb.y) - 14, 12, Color{150, 230, 170, 255});
 
         // break time (FOnline IntBreakTime): bar + red clock while actions are locked
         Rectangle bt{hud.x + 36, hud.y + 72, 514, 18};
@@ -1163,8 +1168,9 @@ private:
             const double rem = core.BreakRemaining(), tot = std::max(0.05, core.BreakTotal());
             const float f = static_cast<float>(std::clamp(rem / tot, 0.0, 1.0));
             DrawRectangleRec(Rectangle{bt.x, bt.y, bt.width * f, bt.height}, Color{220, 30, 30, 255});
-            std::snprintf(buf, sizeof buf, "BREAK  %.1fs", rem);
-            DrawText(buf, static_cast<int>(bt.x) + 8, static_cast<int>(bt.y) + 2, 14, WHITE);
+            char rs[24];
+            std::snprintf(rs, sizeof rs, "%.1f", rem);
+            fonts::Draw(loc::T("hud.break", {{"s", rs}}), static_cast<int>(bt.x) + 8, static_cast<int>(bt.y) + 2, 14, WHITE);
             // red clock icon
             const Vector2 c{hud.x + 20, hud.y + 81};
             const float pulse = 0.8f + 0.2f * std::sin(static_cast<float>(ui.now) * 10.0f);
@@ -1177,18 +1183,18 @@ private:
             const Vector2 c{hud.x + 20, hud.y + 81};
             DrawCircleV(c, 11, Color{30, 90, 40, 255});
             DrawCircleLines(static_cast<int>(c.x), static_cast<int>(c.y), 11, Color{120, 200, 130, 255});
-            DrawText(core.InBattle() ? "IN BATTLE - ready" : "ready", static_cast<int>(bt.x) + 8, static_cast<int>(bt.y) + 2, 14, Color{110, 170, 120, 255});
+            fonts::Draw(loc::T(core.InBattle() ? "hud.battle_ready" : "hud.ready"), static_cast<int>(bt.x) + 8, static_cast<int>(bt.y) + 2, 14, Color{110, 170, 120, 255});
         }
         DrawRectangleLinesEx(bt, 1, locked ? Color{200, 60, 60, 255} : Color{80, 60, 60, 255});
         if (core.waitKnown() && core.lastResult() != gnet::ActionResult::Ok && core.lastResult() != gnet::ActionResult::None &&
             ui.now - core.lastResultTime() < 1.5) {
             const bool isMove = core.lastAction() == static_cast<uint8_t>(GMsgRt::C2S_MoveToF) || core.lastAction() == static_cast<uint8_t>(Msg::C2S_MoveTo);
-            const char* why = core.lastResult() == gnet::ActionResult::Busy ? (isMove ? "busy - walking as soon as ready" : "busy") : core.lastResult() == gnet::ActionResult::NoAp ? "not enough AP" :
-                              core.lastResult() == gnet::ActionResult::Dead ? "dead" : "invalid";
-            DrawText(why, static_cast<int>(hud.x) + 8, static_cast<int>(hud.y) - 20, 16, Color{255, 120, 100, 255});
+            const std::string why = loc::T(core.lastResult() == gnet::ActionResult::Busy ? (isMove ? "hud.busy_walk" : "hud.busy") : core.lastResult() == gnet::ActionResult::NoAp ? "hud.noap" :
+                                           core.lastResult() == gnet::ActionResult::Dead ? "hud.dead" : "hud.invalid");
+            fonts::Draw(why, static_cast<int>(hud.x) + 8, static_cast<int>(hud.y) - 20, 16, Color{255, 120, 100, 255});
         }
-        std::snprintf(buf, sizeof buf, "%s", core.serverTiming() ? "real-time" : "legacy server");
-        DrawText(buf, static_cast<int>(hud.x + hud.width) - MeasureText(buf, 10) - 6, static_cast<int>(hud.y + hud.height) - 14, 10, Color{110, 110, 120, 255});
+        std::snprintf(buf, sizeof buf, "%s", loc::T(core.serverTiming() ? "hud.timing.rt" : "hud.timing.legacy").c_str());
+        fonts::Draw(buf, static_cast<int>(hud.x + hud.width) - fonts::Measure(buf, 10) - 6, static_cast<int>(hud.y + hud.height) - 14, 10, Color{110, 110, 120, 255});
 
         if (st.inventory) DrawInventory(ui);
         if (core.hasContainer()) DrawContainer(ui);
@@ -1203,11 +1209,11 @@ private:
         DrawRectangleRec(p, Color{10, 12, 16, 225});
         DrawRectangleLinesEx(p, 1, Color{80, 84, 100, 255});
         uiRects_.push_back(p);
-        DrawText("Inventory", static_cast<int>(p.x) + 8, static_cast<int>(p.y) + 6, 16, RAYWHITE);
+        fonts::Draw(loc::T("hud.inventory"), static_cast<int>(p.x) + 8, static_cast<int>(p.y) + 6, 16, RAYWHITE);
         if (core.hasStats()) {
             char b[64];
-            std::snprintf(b, sizeof b, "%u / %u lb", core.stats().carried, core.stats().carryWeight);
-            DrawText(b, static_cast<int>(p.x + p.width) - MeasureText(b, 12) - 8, static_cast<int>(p.y) + 9, 12, Color{180, 180, 190, 255});
+            std::snprintf(b, sizeof b, "%s", loc::T("inv.weight_cur", {{"n", core.stats().carried}, {"max", core.stats().carryWeight}}).c_str());
+            fonts::Draw(b, static_cast<int>(p.x + p.width) - fonts::Measure(b, 12) - 8, static_cast<int>(p.y) + 9, 12, Color{180, 180, 190, 255});
         }
         float y = p.y + 30;
         for (const gnet::InvEntry& e : core.inventory()) {
@@ -1215,14 +1221,14 @@ private:
             Rectangle row{p.x + 6, y, p.width - 12, 24};
             DrawRectangleRec(row, e.equipped ? Color{40, 60, 40, 220} : Color{24, 26, 34, 220});
             std::string label = e.name + (e.count > 1 ? " x" + std::to_string(e.count) : "");
-            DrawText(label.c_str(), static_cast<int>(row.x) + 6, static_cast<int>(row.y) + 5, 14, e.equipped ? Color{170, 240, 170, 255} : RAYWHITE);
-            if (Button(Rectangle{row.x + row.width - 128, row.y + 2, 60, 20}, e.equipped ? "Unequip" : "Equip", false))
+            fonts::Draw(label.c_str(), static_cast<int>(row.x) + 6, static_cast<int>(row.y) + 5, 14, e.equipped ? Color{170, 240, 170, 255} : RAYWHITE);
+            if (Button(Rectangle{row.x + row.width - 128, row.y + 2, 60, 20}, loc::T(e.equipped ? "inv.unequip" : "inv.equip").c_str(), false))
                 ui.commands->push_back(UiCommand{UiCommand::Equip, e.id, e.equipped ? 0u : 1u});
-            if (Button(Rectangle{row.x + row.width - 62, row.y + 2, 56, 20}, "Drop", false))
+            if (Button(Rectangle{row.x + row.width - 62, row.y + 2, 56, 20}, loc::T("inv.drop").c_str(), false))
                 ui.commands->push_back(UiCommand{UiCommand::Drop, e.id, 0});
             y += 27;
         }
-        if (core.inventory().empty()) DrawText("(empty)", static_cast<int>(p.x) + 10, static_cast<int>(y) + 4, 14, Color{140, 140, 150, 255});
+        if (core.inventory().empty()) fonts::Draw(loc::T("ui.empty"), static_cast<int>(p.x) + 10, static_cast<int>(y) + 4, 14, Color{140, 140, 150, 255});
     }
 
     // Conversation window: NPC text (word wrapped) and one button per reply (answers go back as DialogChoose commands).
@@ -1231,33 +1237,20 @@ private:
         const int sw = GetScreenWidth(), sh = GetScreenHeight();
         const float w = std::min(680.0f, sw - 20.0f);
         const int fs = 16;
-        std::vector<std::string> lines;
-        {   // greedy word wrap
-            std::string cur, word;
-            auto flush = [&]() { if (!cur.empty()) lines.push_back(cur); cur.clear(); };
-            std::string t = d.text + " ";
-            for (char ch : t) {
-                if (ch == '\n') { cur += (cur.empty() ? "" : " ") + word; word.clear(); flush(); continue; }
-                if (ch != ' ') { word.push_back(ch); continue; }
-                std::string tryLine = cur.empty() ? word : cur + " " + word;
-                if (!cur.empty() && MeasureText(tryLine.c_str(), fs) > w - 24) { flush(); cur = word; } else cur = tryLine;
-                word.clear();
-            }
-            flush();
-        }
+        const std::vector<std::string> lines = txt::Wrap(d.text, w - 24, [&](const std::string& s2) { return static_cast<float>(fonts::Measure(s2, fs)); }, false);
         const float textH = 28 + static_cast<float>(lines.size()) * (fs + 4);
         const float h = textH + 12 + static_cast<float>(d.replies.size()) * 28 + 10;
         Rectangle p{(sw - w) / 2, std::max(40.0f, sh - h - 150.0f), w, h};
         DrawRectangleRec(p, Color{12, 12, 18, 240});
         DrawRectangleLinesEx(p, 1, Color{200, 170, 90, 255});
         uiRects_.push_back(p);
-        DrawText(d.npcName.c_str(), static_cast<int>(p.x) + 10, static_cast<int>(p.y) + 6, 14, Color{255, 220, 120, 255});
+        fonts::Draw(d.npcName.c_str(), static_cast<int>(p.x) + 10, static_cast<int>(p.y) + 6, 14, Color{255, 220, 120, 255});
         float y = p.y + 26;
-        for (auto& l : lines) { DrawText(l.c_str(), static_cast<int>(p.x) + 12, static_cast<int>(y), fs, RAYWHITE); y += fs + 4; }
+        for (auto& l : lines) { fonts::Draw(l.c_str(), static_cast<int>(p.x) + 12, static_cast<int>(y), fs, RAYWHITE); y += fs + 4; }
         y = p.y + textH + 8;
         for (size_t i = 0; i < d.replies.size(); ++i) {
             std::string label = std::to_string(i + 1) + ". " + d.replies[i];
-            while (label.size() > 8 && MeasureText(label.c_str(), 14) > w - 28) label = label.substr(0, label.size() - 4) + "...";
+            label = txt::Ellipsize(label, w - 28, [](const std::string& s2) { return static_cast<float>(fonts::Measure(s2, 14)); });
             if (Button(Rectangle{p.x + 8, y, p.width - 16, 24}, label.c_str(), false))
                 ui.commands->push_back(UiCommand{UiCommand::DialogChoose, static_cast<uint32_t>(i), 0});
             y += 28;
@@ -1271,9 +1264,9 @@ private:
         DrawRectangleRec(p, Color{14, 14, 20, 235});
         DrawRectangleLinesEx(p, 1, Color{120, 140, 200, 255});
         uiRects_.push_back(p);
-        DrawText("Container", static_cast<int>(p.x) + 8, static_cast<int>(p.y) + 6, 16, RAYWHITE);
-        if (Button(Rectangle{p.x + p.width - 70, p.y + 4, 62, 20}, "Close", false)) ui.commands->push_back(UiCommand{UiCommand::CloseContainer, 0, 0});
-        if (Button(Rectangle{p.x + p.width - 150, p.y + 4, 74, 20}, "Take all", false, !core.container().empty()))
+        fonts::Draw(loc::T("loot.container"), static_cast<int>(p.x) + 8, static_cast<int>(p.y) + 6, 16, RAYWHITE);
+        if (Button(Rectangle{p.x + p.width - 70, p.y + 4, 62, 20}, loc::T("ui.close").c_str(), false)) ui.commands->push_back(UiCommand{UiCommand::CloseContainer, 0, 0});
+        if (Button(Rectangle{p.x + p.width - 150, p.y + 4, 74, 20}, loc::T("loot.take_all").c_str(), false, !core.container().empty()))
             ui.commands->push_back(UiCommand{UiCommand::Take, core.containerOwner(), 0});
         float y = p.y + 30;
         for (const gnet::InvEntry& e : core.container()) {
@@ -1281,12 +1274,12 @@ private:
             Rectangle row{p.x + 6, y, p.width - 12, 24};
             DrawRectangleRec(row, Color{26, 28, 38, 220});
             std::string label = e.name + (e.count > 1 ? " x" + std::to_string(e.count) : "");
-            DrawText(label.c_str(), static_cast<int>(row.x) + 6, static_cast<int>(row.y) + 5, 14, RAYWHITE);
-            if (Button(Rectangle{row.x + row.width - 56, row.y + 2, 50, 20}, "Take", false))
+            fonts::Draw(label.c_str(), static_cast<int>(row.x) + 6, static_cast<int>(row.y) + 5, 14, RAYWHITE);
+            if (Button(Rectangle{row.x + row.width - 56, row.y + 2, 50, 20}, loc::T("loot.take").c_str(), false))
                 ui.commands->push_back(UiCommand{UiCommand::Take, core.containerOwner(), e.id});
             y += 27;
         }
-        if (core.container().empty()) DrawText("(empty)", static_cast<int>(p.x) + 10, static_cast<int>(y) + 4, 14, Color{140, 140, 150, 255});
+        if (core.container().empty()) fonts::Draw(loc::T("ui.empty"), static_cast<int>(p.x) + 10, static_cast<int>(y) + 4, 14, Color{140, 140, 150, 255});
     }
 
     void DrawCharSheet(const UiView& ui) {
@@ -1298,11 +1291,11 @@ private:
         DrawRectangleLinesEx(p, 1, Color{80, 84, 100, 255});
         uiRects_.push_back(p);
         const int px = static_cast<int>(p.x), py = static_cast<int>(p.y);
-        DrawText(creating ? "Create your character" : "Character", px + 10, py + 8, 18, RAYWHITE);
-        if (!core.hasStats() || !core.hasSheet()) { DrawText("(no data)", px + 10, py + 36, 14, GRAY); return; }
+        fonts::Draw(creating ? loc::T("cs.create") : loc::T("hud.character"), px + 10, py + 8, 18, RAYWHITE);
+        if (!core.hasStats() || !core.hasSheet()) { fonts::Draw(loc::T("cs.nodata"), px + 10, py + 36, 14, GRAY); return; }
         const gnet::Stats& s = core.stats();
         const gnet::CharSheet& sh = core.sheet();
-        static const char* spNames[7] = {"Strength", "Perception", "Endurance", "Charisma", "Intelligence", "Agility", "Luck"};
+        static const char* spNames[7] = {"special.strength", "special.perception", "special.endurance", "special.charisma", "special.intelligence", "special.agility", "special.luck"};
         const Color txt{220, 220, 230, 255}, dim{150, 155, 165, 255}, gold{210, 200, 120, 255};
         CharDraft& d = st.draft;
         if (creating && !d.init) { for (int i = 0; i < 7; ++i) d.special[i] = s.special[i]; d.tagMask = 0; d.traitMask = 0; d.init = true; }
@@ -1314,51 +1307,47 @@ private:
 
         // ---- SPECIAL
         int y = py + 40;
-        DrawText("SPECIAL", px + 10, y, 14, gold);
+        fonts::Draw("SPECIAL", px + 10, y, 14, gold);
         y += 22;
         for (int i = 0; i < 7; ++i, y += 24) {
-            DrawText(spNames[i], px + 10, y + 3, 14, txt);
+            fonts::Draw(loc::T(spNames[i]), px + 10, y + 3, 14, txt);
             const int v = creating ? d.special[i] : s.special[i];
             std::snprintf(b, sizeof b, "%d", v);
-            DrawText(b, px + 128, y + 3, 14, txt);
+            fonts::Draw(b, px + 128, y + 3, 14, txt);
             if (creating) {
                 if (Button(Rectangle{static_cast<float>(px + 152), static_cast<float>(y), 22, 20}, "-", false, v > 1)) d.special[i] = v - 1;
                 if (Button(Rectangle{static_cast<float>(px + 178), static_cast<float>(y), 22, 20}, "+", false, v < 10 && left > 0)) d.special[i] = v + 1;
             }
         }
         if (creating) {
-            std::snprintf(b, sizeof b, "Points left: %d", left);
-            DrawText(b, px + 10, y + 2, 14, left == 0 ? Color{140, 230, 140, 255} : Color{240, 180, 100, 255});
+            fonts::Draw(loc::T("cs.points_left", {{"n", left}}), px + 10, y + 2, 14, left == 0 ? Color{140, 230, 140, 255} : Color{240, 180, 100, 255});
             y += 22;
         }
         // ---- derived values
         y += 8;
-        DrawText("Derived", px + 10, y, 14, gold);
+        fonts::Draw(loc::T("cs.derived"), px + 10, y, 14, gold);
         y += 20;
-        auto line = [&](const char* fmt, int a, int b2 = 0) { std::snprintf(b, sizeof b, fmt, a, b2); DrawText(b, px + 10, y, 14, txt); y += 18; };
+        auto line = [&](const char* key, int a, int b2 = 0) { fonts::Draw(loc::T(key, {{"a", a}, {"b", b2}}), px + 10, y, 14, txt); y += 18; };
         if (creating) {   // preview from the draft, same formulas as the server defaults (the server is authoritative)
-            line("Hit points %d", 15 + d.special[0] + 2 * d.special[2]);
-            line("Action points %d", 5 + d.special[5] / 2);
-            line("Carry weight %d", 25 + 25 * d.special[0]);
-            line("Armor class %d", d.special[5]);
+            line("cs.hp", 15 + d.special[0] + 2 * d.special[2]);
+            line("cs.ap", 5 + d.special[5] / 2);
+            line("cs.carry", 25 + 25 * d.special[0]);
+            line("cs.ac", d.special[5]);
         } else {
-            line("Hit points %d / %d", s.hp, s.maxHp);
-            line("Action points %d", sh.maxAp);
-            line("Armor class %d", s.armorClass);
-            line("Sequence %d", s.sequence);
-            line("Carry weight %d / %d", s.carried, s.carryWeight);
-            line("Melee damage +%d", s.meleeBonus);
-            line("Healing rate %d", sh.healRate);
-            line("Critical chance %d%%", sh.critChance);
+            line("cs.hp2", s.hp, s.maxHp);
+            line("cs.ap", sh.maxAp);
+            line("cs.ac", s.armorClass);
+            line("cs.seq", s.sequence);
+            line("cs.carry2", s.carried, s.carryWeight);
+            line("cs.melee", s.meleeBonus);
+            line("cs.heal", sh.healRate);
+            line("cs.crit", sh.critChance);
         }
         if (!creating) {
             y += 6;
-            std::snprintf(b, sizeof b, "Level %d", sh.level);
-            DrawText(b, px + 10, y, 16, gold); y += 22;
-            if (sh.xpNext) std::snprintf(b, sizeof b, "XP %u / %u", sh.xp, sh.xpNext); else std::snprintf(b, sizeof b, "XP %u (max level)", sh.xp);
-            DrawText(b, px + 10, y, 14, txt); y += 18;
-            std::snprintf(b, sizeof b, "Skill points %d   Perk points %d", sh.skillPoints, sh.perkPoints);
-            DrawText(b, px + 10, y, 14, sh.skillPoints ? Color{140, 230, 140, 255} : txt);
+            fonts::Draw(loc::T("char.level", {{"n", sh.level}}), px + 10, y, 16, gold); y += 22;
+            fonts::Draw(sh.xpNext ? loc::T("char.xp", {{"n", sh.xp}, {"next", sh.xpNext}}) : loc::T("char.xp_max", {{"n", sh.xp}}), px + 10, y, 14, txt); y += 18;
+            fonts::Draw(loc::T("cs.points", {{"sp", sh.skillPoints}, {"pp", sh.perkPoints}}), px + 10, y, 14, sh.skillPoints ? Color{140, 230, 140, 255} : txt);
         }
 
         // ---- skills
@@ -1366,9 +1355,9 @@ private:
         int sy = py + 40;
         int tags = 0;
         if (creating) for (int i = 0; i < kSkillCount; ++i) if (d.tagMask & (1u << i)) ++tags;
-        DrawText(creating ? "Skills (click to tag)" : "Skills", sx, sy, 14, gold);
-        if (!creating) { std::snprintf(b, sizeof b, "points: %d", sh.skillPoints); DrawText(b, sx + 250, sy, 14, dim); }
-        else { std::snprintf(b, sizeof b, "tags %d/%d", tags, sh.tagCount); DrawText(b, sx + 250, sy, 14, tags == sh.tagCount ? Color{140, 230, 140, 255} : Color{240, 180, 100, 255}); }
+        fonts::Draw(creating ? loc::T("cs.skills_tag") : loc::T("cs.skills"), sx, sy, 14, gold);
+        if (!creating) { fonts::Draw(loc::T("cs.pts", {{"n", sh.skillPoints}}), sx + 250, sy, 14, dim); }
+        else { fonts::Draw(loc::T("cs.tags", {{"n", tags}, {"max", sh.tagCount}}), sx + 250, sy, 14, tags == sh.tagCount ? Color{140, 230, 140, 255} : Color{240, 180, 100, 255}); }
         sy += 22;
         for (int i = 0; i < kSkillCount; ++i, sy += 24) {
             const bool tagged = creating ? (d.tagMask & (1u << i)) != 0 : (sh.tagMask & (1u << i)) != 0;
@@ -1381,8 +1370,8 @@ private:
             }
             if (!creating && Button(Rectangle{static_cast<float>(sx), static_cast<float>(sy), 196, 22}, "", st.mode == CursorMode::Skill && st.skill == i, true))
                 ui.commands->push_back(UiCommand{UiCommand::SelectSkill, static_cast<uint32_t>(i), 0});
-            DrawText(tagged ? "*" : " ", sx + 6, sy + 4, 14, gold);
-            DrawText(kSkillNames[i], sx + 20, sy + 4, 14, txt);
+            fonts::Draw(tagged ? "*" : " ", sx + 6, sy + 4, 14, gold);
+            fonts::Draw(txt::SkillLabel(kSkillNames[i]), sx + 20, sy + 4, 14, txt);
             int value = sh.skill[i];
             if (creating) {   // preview: base from the draft SPECIAL + tag bonus (server formulas, see Character.cpp)
                 int spv[7]; for (int k = 0; k < 7; ++k) spv[k] = d.special[k];
@@ -1390,7 +1379,7 @@ private:
                 if (tagged) value += 20;
             }
             std::snprintf(b, sizeof b, "%d%%", value);
-            DrawText(b, sx + 150, sy + 4, 14, txt);
+            fonts::Draw(b, sx + 150, sy + 4, 14, txt);
             if (!creating) {
                 if (Button(Rectangle{static_cast<float>(sx + 200), static_cast<float>(sy + 1), 24, 20}, "+", false, sh.skillPoints > 0 && value < 100))
                     ui.commands->push_back(UiCommand{UiCommand::SpendSkill, static_cast<uint32_t>(i), 1});
@@ -1401,8 +1390,7 @@ private:
                                                  "Increased Metabolism", "Kamikaze", "Night Person", "One Hander", "One In a Million", "Red Scare", "Skilled", "Small Frame"};
             int nt = 0;
             for (int t = 0; t < 16; ++t) if (d.traitMask & (1u << t)) ++nt;
-            std::snprintf(b, sizeof b, "Traits (up to %d)", sh.traitMax);
-            DrawText(b, px + 10, py + 408, 14, gold);
+            fonts::Draw(loc::T("cs.traits_up_to", {{"n", sh.traitMax}}), px + 10, py + 408, 14, gold);
             for (int t = 0; t < 16; ++t) {
                 const gnet::ContentDefs::Trait* td = core.TraitAt(t);
                 if (core.hasContent() && !td) continue;
@@ -1411,11 +1399,11 @@ private:
                 if (Button(tb, td ? td->name.c_str() : traitNames[t], on, on || nt < sh.traitMax)) { if (on) d.traitMask &= ~(1u << t); else d.traitMask |= (1u << t); }
             }
             const bool ready = left == 0 && tags == sh.tagCount;
-            if (Button(Rectangle{static_cast<float>(px + 10), static_cast<float>(py + 528), 150, 28}, "Create character", ready, ready))
+            if (Button(Rectangle{static_cast<float>(px + 10), static_cast<float>(py + 528), 150, 28}, loc::T("cs.create_btn").c_str(), ready, ready))
                 ui.commands->push_back(UiCommand{UiCommand::CharCreate, 0, 0});
-            DrawText(ready ? "Ready." : "Spend all points and tag the skills.", px + 170, py + 535, 13, dim);
+            fonts::Draw(loc::T(ready ? "cs.ready" : "cs.spend"), px + 170, py + 535, 13, dim);
         } else {
-            DrawText("C closes this window.  Click a skill to use it, then click a target (S cycles skills, Esc / RMB cancels).", px + 10, py + 472, 12, dim);
+            fonts::Draw(loc::T("cs.help"), px + 10, py + 472, 12, dim);
         }
     }
 
@@ -1426,29 +1414,29 @@ private:
         PickResult pr;
         const bool picked = Pick(static_cast<int>(mp.x), static_cast<int>(mp.y), pr);
         const CursorMode mode = picked ? ResolveCursor(*ui.core, ui.state->mode, pr) : ui.state->mode;
-        std::string t = mode == CursorMode::Skill ? std::string("[") + kSkillNames[std::clamp(ui.state->skill, 0, kSkillCount - 1)] + "]" : std::string("[") + CursorModeName(mode) + "]";
+        std::string t = mode == CursorMode::Skill ? "[" + txt::SkillLabel(kSkillNames[std::clamp(ui.state->skill, 0, kSkillCount - 1)]) + "]" : "[" + CursorModeName(mode) + "]";
         if (picked) {
             if (pr.kind == PickResult::Critter) {
                 if (const ClientCritter* c = ui.core->Find(pr.critter)) {
                     t += " " + CritterLabel(ui.core->protos(), *c, false);
-                    if (c->hp >= 0 && c->maxHp > 0) t += "  " + std::to_string(c->hp) + "/" + std::to_string(c->maxHp) + " HP";
-                    if (c->dead) t += " (dead)";
+                    if (c->hp >= 0 && c->maxHp > 0) t += "  " + loc::T("cursor.hp", {{"hp", c->hp}, {"max", c->maxHp}});
+                    if (c->dead) t += " " + loc::T("name.dead");
                 }
             } else if (pr.kind == PickResult::Item) {
                 auto it = ui.core->items().find(pr.item);
                 if (it != ui.core->items().end()) {
                     const ClientItem& o = it->second;
                     if (mode == CursorMode::Use && (o.kind == gnet::ObjectKind::Door || o.kind == gnet::ObjectKind::Container))
-                        t = std::string("[") + ObjectActionLabel(o) + "]";   // [Open] / [Close] / [Locked] / [Jammed] instead of [Use]
+                        t = "[" + ObjectActionLabel(o) + "]";   // [Open] / [Close] / [Locked] / [Jammed] instead of [Use]
                     t += " " + o.name;
                 }
             }
         }
         const int fs = 14;
-        const int tw = MeasureText(t.c_str(), fs);
+        const int tw = fonts::Measure(t.c_str(), fs);
         Rectangle r{mp.x + 16, mp.y + (curDefault_ ? 50.0f : 14.0f), static_cast<float>(tw + 10), 20};
         DrawRectangleRec(r, Color{0, 0, 0, 170});
-        DrawText(t.c_str(), static_cast<int>(r.x) + 5, static_cast<int>(r.y) + 3, fs, ModeColor(mode));
+        fonts::Draw(t.c_str(), static_cast<int>(r.x) + 5, static_cast<int>(r.y) + 3, fs, ModeColor(mode));
     }
 
     float TileSize() const { return 32.0f * zoom_; }

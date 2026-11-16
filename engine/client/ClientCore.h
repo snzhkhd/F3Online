@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <vector>
 #include "ProtoDb.h"
+#include "common/Localization.h"
 #include "common/protocol.h"
 #include "common/protocol_game.h"
 
@@ -257,7 +258,7 @@ private:
 };
 
 // Readable name of a critter for labels: the prototype's English name, else the internal file name made readable
-// ("Critters00_TMCommunist_Insurgent_Shiv.CRT" -> "TMCommunist Insurgent Shiv"); dead ones get " (dead)".
+// ("Critters00_TMCommunist_Insurgent_Shiv.CRT" -> "TMCommunist Insurgent Shiv"); dead ones get the localized "(dead)" suffix (key name.dead).
 inline std::string CritterLabel(const ProtoDb& db, const ClientCritter& c, bool withDead = true) {
     std::string s = c.name;
     if (c.kind == CritterKind::Npc) {
@@ -272,7 +273,7 @@ inline std::string CritterLabel(const ProtoDb& db, const ClientCritter& c, bool 
             for (char& ch : s) if (ch == '_') ch = ' ';
         }
     }
-    if (withDead && c.dead) s += " (dead)";
+    if (withDead && c.dead) s += " " + loc::T("name.dead");
     return s;
 }
 

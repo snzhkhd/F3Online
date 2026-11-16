@@ -18,15 +18,15 @@ namespace f3 {
 // Move cursor they appear by themselves while the mouse hovers a usable object / an NPC with a dialogue / a loose item
 // (see ResolveCursor).
 enum class CursorMode : int { Move = 0, Examine, Attack, Use, Talk, Pickup, Skill, Count };
-inline const char* CursorModeName(CursorMode m) {
+inline std::string CursorModeName(CursorMode m) {
     switch (m) {
-        case CursorMode::Move: return "Move";
-        case CursorMode::Examine: return "Examine";
-        case CursorMode::Attack: return "Attack";
-        case CursorMode::Use: return "Use";
-        case CursorMode::Talk: return "Talk";
-        case CursorMode::Pickup: return "Pickup";
-        case CursorMode::Skill: return "Skill";
+        case CursorMode::Move: return loc::T("cursor.move");
+        case CursorMode::Examine: return loc::T("cursor.examine");
+        case CursorMode::Attack: return loc::T("cursor.attack");
+        case CursorMode::Use: return loc::T("cursor.use");
+        case CursorMode::Talk: return loc::T("cursor.talk");
+        case CursorMode::Pickup: return loc::T("cursor.pickup");
+        case CursorMode::Skill: return loc::T("cursor.skill");
         default: return "?";
     }
 }
@@ -75,6 +75,8 @@ struct SceneView {
 // Options for the asset renderer. With an empty gameDir (or a failed open) the placeholder renderer is used.
 struct RendererOptions {
     std::string gameDir;            // original install (resource.rht + data\*.grp)
+    std::string fontDir, fontBody, fontHead;   // Cyrillic capable TTFs (assets/fonts/README.md): extra folder / explicit files
+    bool wideFonts = false;         // UI language other than English: every string uses the replacement fonts
     std::string screenshotPath;     // write a PNG of frame `screenshotFrame`
     int screenshotFrame = 30;
     bool exitAfterScreenshot = false;
@@ -162,11 +164,11 @@ struct PickResult {
 };
 
 // What using a door / container does right now, from its state (ObjectInfo): Open, Close, Locked, Jammed or Sealed (cannot be opened).
-inline const char* ObjectActionLabel(const ClientItem& o) {
-    if (o.open) return o.kind == gnet::ObjectKind::Door ? "Close" : "Open";
-    if (o.flags & kLockNoOpen) return "Sealed";
-    if (o.flags & kLockJammed) return "Jammed";
-    return o.locked ? "Locked" : "Open";
+inline std::string ObjectActionLabel(const ClientItem& o) {
+    if (o.open) return loc::T(o.kind == gnet::ObjectKind::Door ? "obj.close" : "obj.open");
+    if (o.flags & kLockNoOpen) return loc::T("obj.sealed");
+    if (o.flags & kLockJammed) return loc::T("obj.jammed");
+    return loc::T(o.locked ? "obj.locked" : "obj.open");
 }
 
 // The cursor the game shows (and acts with) for the thing under the mouse, given the cursor the player selected.
@@ -211,6 +213,7 @@ public:
     virtual void EndFrame() = 0;
     virtual void DrawLogin(const LoginView& /*v*/) {}
     virtual void WindowSize(int& w, int& h) const { w = 1280; h = 720; }
+    virtual void SetWideFonts(bool /*on*/) {}   // UI language switched at run time (/lang): replacement fonts for all text on / off
     // Maps a screen position to the tile under it for the last drawn scene.
     virtual bool ScreenToTile(int sx, int sy, TilePos& out) const = 0;
     // What is under the cursor (critter, item or ground) in the last drawn scene.

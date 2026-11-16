@@ -2,7 +2,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include "Fonts.h"
+#include "TextUtil.h"
+#include "common/Localization.h"
 #include "common/log.h"
+#include "common/utf8.h"
 #include "gamedata/Tga.h"
 
 namespace f3 {
@@ -17,14 +21,14 @@ std::string StripExt(std::string s) {
     return s;
 }
 
-const char* ModeName(int type) {
+std::string ModeName(int type) {
     switch (type) {
-        case 1: return "BURST";
-        case 2: return "SINGLE";
-        case 6: return "THRUST";
-        case 8: return "SWING";
-        case 9: return "THROW";
-        default: return "ATTACK";
+        case 1: return loc::T("mode.burst");
+        case 2: return loc::T("mode.single");
+        case 6: return loc::T("mode.thrust");
+        case 8: return loc::T("mode.swing");
+        case 9: return loc::T("mode.throw");
+        default: return loc::T("mode.attack");
     }
 }
 
@@ -47,21 +51,17 @@ bool Equippable(const ProtoInfo* p) { return p && (p->cls == "weapon" || p->cls 
 std::string ItemText(const gnet::InvEntry& e, const ProtoInfo* p) {
     std::string t;
     if (p && !p->desc.empty()) t += p->desc + "\n";
-    char b[160];
-    std::snprintf(b, sizeof b, "Weight: %d lb", e.weight * e.count);
-    t += b;
+    t += loc::T("item.weight", {{"n", e.weight * e.count}});
     if (p && p->cls == "weapon") {
-        std::snprintf(b, sizeof b, "\nDamage: %d-%d   Range: %d", static_cast<int>(p->dmgMin), static_cast<int>(p->dmgMax), p->range);
-        t += b;
+        t += "\n" + loc::T("item.weapon", {{"min", static_cast<int>(p->dmgMin)}, {"max", static_cast<int>(p->dmgMax)}, {"range", p->range}});
         if (!p->modes.empty()) {
-            t += "\nModes:";
-            for (auto& m : p->modes) t += std::string(" ") + ModeName(m.type);
+            t += "\n" + loc::T("item.modes");
+            for (auto& m : p->modes) t += " " + ModeName(m.type);
         }
     } else if (p && p->cls == "armor") {
-        std::snprintf(b, sizeof b, "\nDamage threshold: %d   Armor class: %d", p->armor[0] / 2, p->armor[1] / 4);
-        t += b;
+        t += "\n" + loc::T("item.armor", {{"dt", p->armor[0] / 2}, {"ac", p->armor[1] / 4}});
     } else if (p && p->cls == "ammo") {
-        t += "\nAmmunition";
+        t += "\n" + loc::T("item.ammo");
     }
     return t;
 }
@@ -174,13 +174,28 @@ const Texture2D* OrigUi::Texture(const std::string& name) {
 
 // ----------------------------------------------------------------------------------------------------- primitives
 
-float OrigUi::TextW(const Font& f, const std::string& s, float size) const { return MeasureTextEx(f, s.c_str(), size, 1).x; }
+const Font& OrigUi::Pick(const Font& f, const std::string& s, float size) const {
+    // the original TTFs have Latin glyphs only: other languages / Cyrillic strings use the replacement fonts. The wide display font is
+    // for headings only (fallouty_ at 19 px and up), everything smaller uses the condensed body font
+    return fonts::For(&f == &fallouty_ && size >= 19 ? fonts::Role::Head : fonts::Role::Body, s, f);
+}
+
+float OrigUi::FitSize(const Font& f, const std::string& s, float size, float maxW) const {
+    if (maxW <= 0 || &Pick(f, s, size) == &f) return size;   // the original (Latin) fonts keep the layout's size
+    float k = size;
+    while (k > size * 0.62f && TextW(f, s, k) > maxW) k -= 0.5f;
+    return k;
+}
+
+std::string OrigUi::StfT(int id) const { return loc::TOr("stf." + std::to_string(id), stf_.Get(id)); }
+
+float OrigUi::TextW(const Font& f, const std::string& s, float size) const { return MeasureTextEx(Pick(f, s, size), s.c_str(), size, 1).x; }
 
 void OrigUi::Text(const Font& f, const std::string& s, float x, float y, float size, Color c, int align, float w) {
     if (s.empty()) return;
     if (align == 1) x += (w - TextW(f, s, size)) / 2;
     else if (align == 2) x += w - TextW(f, s, size);
-    DrawTextEx(f, s.c_str(), Vector2{std::floor(x), std::floor(y)}, size, 1, c);
+    DrawTextEx(Pick(f, s, size), s.c_str(), Vector2{std::floor(x), std::floor(y)}, size, 1, c);
 }
 
 OrigUi::Roll OrigUi::RollOf(const std::string& key, int v) {
@@ -206,7 +221,7 @@ void OrigUi::DrawSkillPanel(const UiView& ui, std::vector<Rectangle>& rects) {
     DrawRectangleRec(r, Color{8, 8, 6, 235});
     DrawRectangleLinesEx(r, 2, Color{120, 100, 44, 255});
     DrawRectangleLinesEx(Rectangle{r.x + 4, r.y + 4, r.width - 8, r.height - 8}, 1, Color{60, 50, 24, 255});
-    Text(fallouty_, "USE SKILL", r.x, r.y + 8 * s, 20 * s, kAmber, 1, r.width);
+    Text(fallouty_, loc::T("skillpanel.title"), r.x, r.y + 8 * s, 20 * s, kAmber, 1, r.width);
     const Vector2 mp = GetMousePosition();
     for (int i = 0; i < kUsableSkillCount; ++i) {
         const int sk = kUsableSkills[i];
@@ -215,11 +230,11 @@ void OrigUi::DrawSkillPanel(const UiView& ui, std::vector<Rectangle>& rects) {
         const bool cur = ui.state->mode == CursorMode::Skill && ui.state->skill == sk;
         if (hot || cur) DrawRectangleRec(row, Color{70, 58, 22, hot ? 200u : 120u});
         const Color c = hot ? Color{255, 235, 140, 255} : kAmber;
-        Text(gothic_, std::to_string(i + 1) + "  " + kSkillNames[sk], row.x + 6 * s, row.y + 3 * s, 17 * s, c);
+        Text(gothic_, std::to_string(i + 1) + "  " + txt::SkillLabel(kSkillNames[sk]), row.x + 6 * s, row.y + 3 * s, 17 * s, c);
         if (have) DrawNumber("uSkill" + std::to_string(sk), fallouty_, row.x, row.y + 4 * s, 15 * s, Color{120, 235, 90, 255}, 2, row.width - 6 * s, "", ui.core->sheet().skill[sk]);
         if (hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) ui.commands->push_back(UiCommand{UiCommand::SelectSkill, static_cast<uint32_t>(sk), 0, 0});
     }
-    Text(gothic_, "U / Esc: close", r.x, r.y + r.height - 20 * s, 12 * s, kAmberDim, 1, r.width);
+    Text(gothic_, loc::T("skillpanel.close"), r.x, r.y + r.height - 20 * s, 12 * s, kAmberDim, 1, r.width);
 }
 
 void OrigUi::DrawDialog(const UiView& ui, std::vector<Rectangle>& rects) {
@@ -242,33 +257,7 @@ void OrigUi::DrawDialog(const UiView& ui, std::vector<Rectangle>& rects) {
     auto X = [&](int lx) { return ox + (lx - spW->rect[0]) * k; };
     auto Y = [&](int ly, float extra = 0) { return oy + (ly - spW->rect[1]) * k + extra; };
     auto wrap = [&](const std::string& text, float maxW) {
-        std::vector<std::string> lines;
-        std::string cur;
-        size_t pos = 0;
-        while (pos <= text.size()) {
-            size_t nl = text.find('\n', pos);
-            std::string para = text.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
-            pos = nl == std::string::npos ? text.size() + 1 : nl + 1;
-            cur.clear();
-            size_t p = 0;
-            while (p < para.size()) {
-                size_t sp = para.find(' ', p);
-                std::string word = para.substr(p, sp == std::string::npos ? std::string::npos : sp - p + 1);
-                p = sp == std::string::npos ? para.size() : sp + 1;
-                while (TextW(gothic_, word, fs) > maxW && word.size() > 1) {   // overlong word
-                    size_t n = word.size();
-                    while (n > 1 && TextW(gothic_, word.substr(0, n), fs) > maxW) --n;
-                    if (!cur.empty()) { lines.push_back(cur); cur.clear(); }
-                    lines.push_back(word.substr(0, n));
-                    word = word.substr(n);
-                }
-                if (!cur.empty() && TextW(gothic_, cur + word, fs) > maxW) { lines.push_back(cur); cur.clear(); }
-                cur += word;
-            }
-            lines.push_back(cur);
-        }
-        while (lines.size() > 1 && lines.back().empty()) lines.pop_back();
-        return lines;
+        return txt::Wrap(text, maxW, [&](const std::string& s) { return TextW(gothic_, s, fs); });
     };
     const Vector2 mp = GetMousePosition();
     const Color plate{8, 8, 6, 240}, edge{120, 100, 44, 255}, inner{60, 50, 24, 255};
@@ -300,7 +289,7 @@ void OrigUi::DrawDialog(const UiView& ui, std::vector<Rectangle>& rects) {
             const Rectangle pr{X(pic->rect[0]), Y(pic->rect[1]), pic->w() * k, pic->h() * k};
             DrawRectangleRec(pr, Color{24, 20, 10, 255});
             DrawRectangleLinesEx(pr, 1, inner);
-            if (!d.npcName.empty()) Text(fallouty_, d.npcName.substr(0, 1), pr.x, pr.y + pr.height * 0.18f, pr.height * 0.6f, kAmberDim, 1, pr.width);
+            if (!d.npcName.empty()) Text(fallouty_, utf8::Truncate(d.npcName, 1), pr.x, pr.y + pr.height * 0.18f, pr.height * 0.6f, kAmberDim, 1, pr.width);
         }
     }
     for (int i = 0; i < shown && dlgScroll_ + i < static_cast<int>(tl.size()); ++i)
@@ -346,7 +335,7 @@ void OrigUi::DrawDialog(const UiView& ui, std::vector<Rectangle>& rects) {
     }
     if (reps.empty()) Text(gothic_, "...", repX, y, fs, kAmberDim);
     // leave
-    const std::string leave = "[Esc] End conversation";
+    const std::string leave = loc::T("dlg.end");
     const float lw = TextW(gothic_, leave, fs * 0.85f);
     const Rectangle lr{liR.x + liR.width - lw - 14 * k, liR.y + liR.height - lh - 4 * k, lw + 8 * k, lh};
     const bool lhot = CheckCollisionPointRec(mp, lr);
@@ -413,24 +402,7 @@ void OrigUi::DrawNumberText(const std::string& key, const Font& f, float x, floa
 float OrigUi::DrawSpeech(const std::string& text, float cx, float bottomY, Color c, float alpha, float maxW) {
     const Font& f = haveFonts_ ? gothic_ : GetFontDefault();
     const float fs = 16;
-    std::vector<std::string> lines;
-    std::string cur;
-    size_t pos = 0;
-    while (pos < text.size()) {
-        size_t sp = text.find(' ', pos);
-        std::string word = text.substr(pos, sp == std::string::npos ? std::string::npos : sp - pos + 1);
-        pos = sp == std::string::npos ? text.size() : sp + 1;
-        while (TextW(f, word, fs) > maxW && word.size() > 1) {
-            size_t n = word.size();
-            while (n > 1 && TextW(f, word.substr(0, n), fs) > maxW) --n;
-            if (!cur.empty()) { lines.push_back(cur); cur.clear(); }
-            lines.push_back(word.substr(0, n));
-            word = word.substr(n);
-        }
-        if (!cur.empty() && TextW(f, cur + word, fs) > maxW) { lines.push_back(cur); cur.clear(); }
-        cur += word;
-    }
-    if (!cur.empty()) lines.push_back(cur);
+    const std::vector<std::string> lines = txt::Wrap(text, maxW, [&](const std::string& s) { return TextW(f, s, fs); }, false);
     const float lh = fs + 1;
     const float h = lh * lines.size();
     const unsigned char a = static_cast<unsigned char>(std::clamp(alpha, 0.0f, 1.0f) * 255);
@@ -517,13 +489,13 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
         std::string mode, ap;
         if (p && p->cls == "weapon") {
             if (!p->modes.empty()) { mode = ModeName(p->modes[0].type); ap = "AP"; }
-            else { mode = "MELEE"; }
+            else { mode = loc::T("mode.melee"); }
         } else if (!item && i == 0) {
-            mode = "UNARMED";
+            mode = loc::T("mode.unarmed");
         }
         const float fs = 22 * s;
         Text(gothic_, mode, b.x * s + ox + 8 * s, b.y * s + oy + 4 * s, fs, kAmber, 2, 164 * s - 16 * s);
-        if (!ap.empty()) DrawNumber("wAp" + std::to_string(i), gothic_, b.x * s + ox + 8 * s, b.y * s + oy + 56 * s, fs, kAmber, 0, 0, "", ModeAp(p->modes[0].ap), "AP");
+        if (!ap.empty()) DrawNumber("wAp" + std::to_string(i), gothic_, b.x * s + ox + 8 * s, b.y * s + oy + 56 * s, fs, kAmber, 0, 0, "", ModeAp(p->modes[0].ap), loc::T("hud.ap_unit"));
         if (p && p->cls == "weapon" && p->range > 1) {
             bool ammo = false;
             for (auto& e : core.inventory()) if (const ProtoInfo* q = ProtoOf(core, e)) if (q->cls == "ammo") ammo = true;
@@ -532,7 +504,7 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
         }
         if (In(br, mp)) {
             if (item) Tooltip(item->name, ItemText(*item, p));
-            else Tooltip(active ? "Active hand (empty)" : "Spare hand (empty)", active ? "Fists. Press B or click the other hand to switch." : "Click here or press B to switch hands.");
+            else Tooltip(loc::T(active ? "hand.empty_active" : "hand.empty_spare"), loc::T(active ? "hand.fists_tip" : "hand.switch_tip"));
             // clicking the inactive hand makes it the active one, also when it is empty (= holster the weapon)
             if (click && !active) ui.commands->push_back(UiCommand{UiCommand::SwapHands, 0, 0, 0});
         }
@@ -575,9 +547,9 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
 
     // ---- buttons
     struct Btn { const char* name; const char* label; UiCommand::Type cmd; bool on; };
-    const Btn btns[] = {{"btnInventory", "Inventory", UiCommand::ToggleInventory, st.inventory},
-                        {"btnCharacter", "Character", UiCommand::ToggleChar, st.charSheet},
-                        {"btnOptions", "Options", UiCommand::SetMode, false}};
+    const Btn btns[] = {{"btnInventory", "hud.inventory", UiCommand::ToggleInventory, st.inventory},
+                        {"btnCharacter", "hud.character", UiCommand::ToggleChar, st.charSheet},
+                        {"btnOptions", "hud.options", UiCommand::SetMode, false}};
     for (auto& bt : btns) {
         int bi;
         Rectangle b = LRect(bar_, bt.name, 0, &bi);
@@ -585,7 +557,7 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
         Rectangle r = P(b.x, b.y, b.width, b.height);
         const bool hot = In(r, mp);
         Blit(Texture(bt.on || (hot && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) ? "f3_button_down.tga" : "f3_button_up.tga"), r);
-        Text(gothic_, bt.label, r.x + 42 * s, r.y + 8 * s, 18 * s, hot ? Color{255, 230, 130, 255} : kAmber);
+        { const std::string bl = loc::T(bt.label); Text(gothic_, bl, r.x + 42 * s, r.y + 8 * s, FitSize(gothic_, bl, 18 * s, r.width - 46 * s), hot ? Color{255, 230, 130, 255} : kAmber); }
         if (hot && click && bt.cmd != UiCommand::SetMode) ui.commands->push_back(UiCommand{bt.cmd, 0, 0});
     }
 
@@ -606,23 +578,7 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
                 for (const ChatLine& l : *ui.chat) {
                     std::string line = l.name.empty() ? l.text : l.name + ": " + l.text;
                     const Color c = l.channel == ChatChannel::System ? Color{140, 220, 255, 255} : Color{225, 205, 150, 255};
-                    std::string cur;
-                    size_t pos = 0;
-                    while (pos < line.size()) {
-                        size_t sp = line.find(' ', pos);
-                        std::string word = line.substr(pos, sp == std::string::npos ? std::string::npos : sp - pos + 1);
-                        pos = sp == std::string::npos ? line.size() : sp + 1;
-                        while (TextW(gothic_, word, fs) > maxW && word.size() > 1) {
-                            size_t n = word.size();
-                            while (n > 1 && TextW(gothic_, word.substr(0, n), fs) > maxW) --n;
-                            if (!cur.empty()) { wrapped_.emplace_back(cur, c); cur.clear(); }
-                            wrapped_.emplace_back(word.substr(0, n), c);
-                            word = word.substr(n);
-                        }
-                        if (!cur.empty() && TextW(gothic_, cur + word, fs) > maxW) { wrapped_.emplace_back(cur, c); cur.clear(); }
-                        cur += word;
-                    }
-                    if (!cur.empty()) wrapped_.emplace_back(cur, c);
+                    for (std::string& ln : txt::Wrap(line, maxW, [&](const std::string& s2) { return TextW(gothic_, s2, fs); }, false)) wrapped_.emplace_back(std::move(ln), c);
                 }
             }
             // a user who scrolled up keeps looking at the same lines when new ones arrive; at the bottom the view follows
@@ -653,7 +609,7 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
             const float thumbH = std::max(8.0f * s, th * frac);
             const float pos = maxScroll > 0 ? static_cast<float>(maxScroll - chatScroll_) / maxScroll : 1.0f;
             DrawRectangleRec(Rectangle{tr.x, tr.y + (th - thumbH) * pos, tr.width, thumbH}, chatScroll_ > 0 ? Color{255, 220, 120, 230} : Color{170, 150, 80, 180});
-            if (chatScroll_ > 0) Text(gothic_, "more below", area.x + area.width - 6 * s, inR.y - 12 * s, 10 * s, kAmberDim, 2);
+            if (chatScroll_ > 0) Text(gothic_, loc::T("chat.more"), area.x + area.width - 6 * s, inR.y - 12 * s, 10 * s, kAmberDim, 2);
         }
         if (ui.chatInputActive) {
             DrawRectangleRec(inR, Color{30, 26, 8, 200});
@@ -661,11 +617,12 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
             const float tw = TextW(gothic_, t, fs);
             Text(gothic_, t, inR.x + 2 * s - std::max(0.0f, tw - (inR.width - 8 * s)), inR.y, fs, WHITE);
         } else {
-            Text(gothic_, "Enter: chat", inR.x + 2 * s, inR.y, fs, Color{110, 95, 55, 255});
+            Text(gothic_, loc::T("chat.hint"), inR.x + 2 * s, inR.y, fs, Color{110, 95, 55, 255});
         }
         // cursor mode (RMB toggles Move/Examine, A = Attack): small unobtrusive label
         {
-            const char* mn = st.mode == CursorMode::Attack ? "Attack" : st.mode == CursorMode::Examine ? "Examine" : st.mode == CursorMode::Skill ? kSkillNames[std::clamp(st.skill, 0, kSkillCount - 1)] : "Move";
+            const std::string mn = st.mode == CursorMode::Attack ? loc::T("cursor.attack") : st.mode == CursorMode::Examine ? loc::T("cursor.examine") :
+                                   st.mode == CursorMode::Skill ? txt::SkillLabel(kSkillNames[std::clamp(st.skill, 0, kSkillCount - 1)]) : loc::T("cursor.move");
             Text(gothic_, mn, P(16, 18, 0, 0).x, P(16, 18, 0, 0).y, 12 * s, kAmberDim, 2, 262 * s);
         }
         // break time: red bar while actions are locked
@@ -676,16 +633,16 @@ void OrigUi::DrawActionBar(const UiView& ui, std::vector<Rectangle>& rects) {
         if (locked) {
             const double rem = core.BreakRemaining(), tot = std::max(0.05, core.BreakTotal());
             DrawRectangleRec(Rectangle{bt.x, bt.y, bt.width * static_cast<float>(std::clamp(rem / tot, 0.0, 1.0)), bt.height}, Color{210, 30, 30, 255});
-            std::snprintf(b, sizeof b, "BREAK  %.1fs", rem);
-            Text(gothic_, b, bt.x + 6, bt.y - 1 * s, 14 * s, WHITE);
+            std::snprintf(b, sizeof b, "%.1f", rem);
+            Text(gothic_, loc::T("hud.break", {{"s", b}}), bt.x + 6, bt.y - 1 * s, 14 * s, WHITE);
         } else {
-            Text(gothic_, core.InBattle() ? "IN BATTLE - ready" : "ready", bt.x + 6, bt.y - 1 * s, 14 * s, Color{120, 170, 120, 255});
+            Text(gothic_, loc::T(core.InBattle() ? "hud.battle_ready" : "hud.ready"), bt.x + 6, bt.y - 1 * s, 14 * s, Color{120, 170, 120, 255});
         }
         DrawRectangleLinesEx(bt, 1, locked ? Color{200, 60, 60, 255} : Color{80, 60, 60, 255});
         if (core.waitKnown() && core.lastResult() != gnet::ActionResult::Ok && core.lastResult() != gnet::ActionResult::None && ui.now - core.lastResultTime() < 1.5) {
             const bool mv = core.lastAction() == static_cast<uint8_t>(GMsgRt::C2S_MoveToF) || core.lastAction() == static_cast<uint8_t>(Msg::C2S_MoveTo);
-            const char* why = core.lastResult() == gnet::ActionResult::Busy ? (mv ? "busy - walking as soon as ready" : "busy") : core.lastResult() == gnet::ActionResult::NoAp ? "not enough AP" :
-                              core.lastResult() == gnet::ActionResult::Dead ? "dead" : "invalid";
+            const std::string why = loc::T(core.lastResult() == gnet::ActionResult::Busy ? (mv ? "hud.busy_walk" : "hud.busy") : core.lastResult() == gnet::ActionResult::NoAp ? "hud.noap" :
+                                           core.lastResult() == gnet::ActionResult::Dead ? "hud.dead" : "hud.invalid");
             Text(gothic_, why, P(16, 108, 0, 0).x + 150 * s, P(16, 108, 0, 0).y, 14 * s, Color{255, 120, 100, 255});
         }
     }
@@ -746,8 +703,8 @@ void OrigUi::DrawInventory(const UiView& ui, std::vector<Rectangle>& rects) {
             regions.push_back({P(68 + cc * 64, 96 + rr * 64, 60, 60), 0, idx < static_cast<int>(list.size()) ? list[idx] : nullptr});
         }
     struct SlotDef { int slot; const char* label; float hy; float ey; const char* nm; };
-    const SlotDef sdefs[] = {{gnet::SlotHead, "HEAD", 72, 164, "Head"}, {gnet::SlotBody, "BODY", 212, 216, "Body"},
-                             {gnet::SlotHand1, "HAND 1", 348, 268, "Hand1"}, {gnet::SlotHand2, "HAND 2", 488, 320, "Hand2"}};
+    const SlotDef sdefs[] = {{gnet::SlotHead, "inv.slot.head", 72, 164, "Head"}, {gnet::SlotBody, "inv.slot.body", 212, 216, "Body"},
+                             {gnet::SlotHand1, "inv.slot.hand1", 348, 268, "Hand1"}, {gnet::SlotHand2, "inv.slot.hand2", 488, 320, "Hand2"}};
     for (auto& d : sdefs) {
         const gnet::InvEntry* it = nullptr;
         for (auto& e : all) if (e.equipped == d.slot) it = &e;
@@ -778,7 +735,7 @@ void OrigUi::DrawInventory(const UiView& ui, std::vector<Rectangle>& rects) {
         }
     }
     const float labelY[] = {32, 170, 308, 448};
-    for (int i = 0; i < 4; ++i) Text(gothic_, sdefs[i].label, P(312, labelY[i], 124, 24).x, P(312, labelY[i], 124, 24).y + 2 * s, 17 * s, kAmber, 1, 124 * s);
+    for (int i = 0; i < 4; ++i) Text(gothic_, loc::T(sdefs[i].label), P(312, labelY[i], 124, 24).x, P(312, labelY[i], 124, 24).y + 2 * s, 17 * s, kAmber, 1, 124 * s);
 
     // ---- while dragging: show which slots accept the item
     const gnet::InvEntry* dragItem = nullptr;
@@ -791,44 +748,57 @@ void OrigUi::DrawInventory(const UiView& ui, std::vector<Rectangle>& rects) {
     }
 
     // ---- readouts
-    Text(gothic_, "WEIGHT", P(68, 60, 0, 0).x, P(68, 60, 0, 0).y - 2 * s, 15 * s, kAmber);
+    Text(gothic_, loc::T("inv.weight"), P(68, 60, 0, 0).x, P(68, 60, 0, 0).y - 2 * s, 15 * s, kAmber);
     if (core.hasStats()) {
         const bool over = core.stats().carried > core.stats().carryWeight;
-        DrawNumber("invWeight", fallouty_, P(152, 60, 0, 0).x, P(152, 60, 0, 0).y, 14 * s, over ? Color{255, 90, 70, 255} : Color{120, 235, 90, 255}, 0, 0, "",
-                   static_cast<int>(core.stats().carried), " / " + std::to_string(core.stats().carryWeight) + " lb");
-        const char* sp[] = {"ST", "PE", "EN", "CH", "IN", "AG", "LK"};
+        {
+            std::string pre, post;
+            txt::SplitNum(loc::T("inv.weight_cur", {{"max", core.stats().carryWeight}}), pre, post);
+            DrawNumber("invWeight", fallouty_, P(152, 60, 0, 0).x, P(152, 60, 0, 0).y, 14 * s, over ? Color{255, 90, 70, 255} : Color{120, 235, 90, 255}, 0, 0, pre,
+                       static_cast<int>(core.stats().carried), post);
+        }
+        const char* sp[] = {"special_short.strength", "special_short.perception", "special_short.endurance", "special_short.charisma", "special_short.intelligence", "special_short.agility", "special_short.luck"};
         for (int i = 0; i < 7; ++i) {
-            Text(gothic_, sp[i], P(468, 68 + 12 * i, 0, 0).x, P(468, 68 + 12 * i, 0, 0).y - 3 * s, 14 * s, kAmber);
+            { const std::string sl = loc::T(sp[i]); Text(gothic_, sl, P(468, 68 + 12 * i, 0, 0).x, P(468, 68 + 12 * i, 0, 0).y - 3 * s, FitSize(gothic_, sl, 14 * s, 27 * s), kAmber); }
             DrawNumber("invSp" + std::to_string(i), fallouty_, P(496, 68 + 12 * i, 0, 0).x, P(496, 68 + 12 * i, 0, 0).y, 13 * s, Color{120, 235, 90, 255}, 0, 0, "", core.stats().special[i]);
         }
-        DrawNumber("invHp", fallouty_, P(560, 68, 0, 0).x, P(560, 68, 0, 0).y, 13 * s, Color{120, 235, 90, 255}, 0, 0, "HP ", core.stats().hp, " / " + std::to_string(core.stats().maxHp));
-        DrawNumber("invAc", fallouty_, P(560, 82, 0, 0).x, P(560, 82, 0, 0).y, 13 * s, Color{120, 235, 90, 255}, 0, 0, "Armor class ", core.stats().armorClass);
-        DrawNumber("invLvl", fallouty_, P(560, 96, 0, 0).x, P(560, 96, 0, 0).y, 13 * s, Color{120, 235, 90, 255}, 0, 0, "Level ", core.stats().level);
+        {
+            const Color g{120, 235, 90, 255};
+            std::string pre, post;
+            txt::SplitNum(loc::T("inv.hp", {{"max", core.stats().maxHp}}), pre, post);
+            DrawNumber("invHp", fallouty_, P(560, 68, 0, 0).x, P(560, 68, 0, 0).y, 13 * s, g, 0, 0, pre, core.stats().hp, post);
+            txt::SplitNum(loc::T("inv.ac"), pre, post);
+            DrawNumber("invAc", fallouty_, P(560, 82, 0, 0).x, P(560, 82, 0, 0).y, 13 * s, g, 0, 0, pre, core.stats().armorClass, post);
+            txt::SplitNum(loc::T("inv.level"), pre, post);
+            DrawNumber("invLvl", fallouty_, P(560, 96, 0, 0).x, P(560, 96, 0, 0).y, 13 * s, g, 0, 0, pre, core.stats().level, post);
+        }
     }
     if (core.self()) Text(fallouty_, core.self()->name, P(464, 32, 0, 0).x, P(464, 32, 0, 0).y, 18 * s, kAmber);
     for (auto& d : sdefs) {
         const gnet::InvEntry* it = nullptr;
         for (auto& e : all) if (e.equipped == d.slot) it = &e;
         const float x = 468, y = d.ey;
-        Text(gothic_, std::string(d.label) + ":", P(x, y + 2, 0, 0).x, P(x, y + 2, 0, 0).y, 14 * s, kAmberDim);
-        if (!it) { Text(fallouty_, "(empty)", P(x + 56, y, 0, 0).x, P(x + 56, y, 0, 0).y, 13 * s, kAmberDim); continue; }
+        const std::string slotLbl = loc::T(d.label) + ":";
+        Text(gothic_, slotLbl, P(x, y + 2, 0, 0).x, P(x, y + 2, 0, 0).y, 14 * s, kAmberDim);
+        const float vx = P(x, y, 0, 0).x + std::max(56 * s, TextW(gothic_, slotLbl, 14 * s) + 6 * s);   // the value follows the label (translations are longer)
+        if (!it) { Text(fallouty_, loc::T("ui.empty"), vx, P(x, y, 0, 0).y, 13 * s, kAmberDim); continue; }
         const ProtoInfo* p = ProtoOf(core, *it);
-        Text(fallouty_, it->name, P(x + 56, y, 0, 0).x, P(x + 56, y, 0, 0).y, 13 * s, Color{120, 235, 90, 255});
-        char b[96] = "";
+        Text(fallouty_, it->name, vx, P(x, y, 0, 0).y, 13 * s, Color{120, 235, 90, 255});
+        std::string b;
         if (p && p->cls == "weapon") {
             int ammo = 0;
             for (auto& e : all) if (const ProtoInfo* q = ProtoOf(core, e)) if (q->cls == "ammo") ammo += e.count;
-            std::snprintf(b, sizeof b, "Damage %d-%d    Range %d    Ammo %d", static_cast<int>(p->dmgMin), static_cast<int>(p->dmgMax), p->range, ammo);
+            b = loc::T("inv.weapon_line", {{"min", static_cast<int>(p->dmgMin)}, {"max", static_cast<int>(p->dmgMax)}, {"range", p->range}, {"ammo", ammo}});
         } else if (p && p->cls == "armor") {
-            std::snprintf(b, sizeof b, "Threshold %d    Armor class %d", p->armor[0] / 2, p->armor[1] / 4);
+            b = loc::T("inv.armor_line", {{"dt", p->armor[0] / 2}, {"ac", p->armor[1] / 4}});
         }
-        Text(fallouty_, b, P(x + 56, y + 16, 0, 0).x, P(x + 56, y + 16, 0, 0).y, 12 * s, kAmber);
+        Text(fallouty_, b, vx, P(x, y + 16, 0, 0).y, FitSize(fallouty_, b, 12 * s, 262 * s - (vx - P(x, y, 0, 0).x)), kAmber);
     }
     // sort selector (bottom left field) and drop target
     {
-        const char* names[] = {"Sort: type", "Sort: weight", "Sort: name"};
+        const char* names[] = {"inv.sort.type", "inv.sort.weight", "inv.sort.name"};
         Rectangle sr = P(48, 540, 172, 24);
-        Text(gothic_, names[sortMode_], sr.x, sr.y + 2 * s, 16 * s, kAmber, 1, sr.width);
+        Text(gothic_, loc::T(names[sortMode_]), sr.x, sr.y + 2 * s, 16 * s, kAmber, 1, sr.width);
         if (In(sr, mp) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) sortMode_ = (sortMode_ + 1) % 3;
     }
     const Rectangle dropR = P(244, 528, 48, 48);
@@ -1012,31 +982,37 @@ void OrigUi::DrawLoot(const UiView& ui, std::vector<Rectangle>& rects) {
     }
 
     // ---- headers: left = "WEIGHT x / limit lb" (as in the inventory), right = the target's name and weight
-    Text(gothic_, "WEIGHT", PP(0, 68, 60, 0, 0).x, PP(0, 68, 60, 0, 0).y - 2 * s, 15 * s, kAmber);
+    Text(gothic_, loc::T("inv.weight"), PP(0, 68, 60, 0, 0).x, PP(0, 68, 60, 0, 0).y - 2 * s, 15 * s, kAmber);
     if (core.hasStats()) {
         const bool over = core.stats().carried > core.stats().carryWeight;
-        DrawNumber("lootMyWeight", fallouty_, PP(0, 152, 60, 0, 0).x, PP(0, 152, 60, 0, 0).y, 14 * s, over ? Color{255, 90, 70, 255} : green, 0, 0, "",
-                   static_cast<int>(core.stats().carried), " / " + std::to_string(core.stats().carryWeight) + " lb");
+        std::string pre, post;
+        txt::SplitNum(loc::T("inv.weight_cur", {{"max", core.stats().carryWeight}}), pre, post);
+        DrawNumber("lootMyWeight", fallouty_, PP(0, 152, 60, 0, 0).x, PP(0, 152, 60, 0, 0).y, 14 * s, over ? Color{255, 90, 70, 255} : green, 0, 0, pre,
+                   static_cast<int>(core.stats().carried), post);
     }
     {
         std::string nm = core.containerName();
-        if (nm.empty()) nm = corpse ? "Corpse" : "Container";
+        if (nm.empty()) nm = loc::T(corpse ? "loot.corpse" : "loot.container");
         float fs = 20 * s;
         const Rectangle nr = PP(1, 40, 20, 232, 26);
         while (fs > 10 * s && TextW(gothic_, nm, fs) > nr.width) fs -= 1;
         Text(gothic_, nm, nr.x, nr.y, fs, kAmber, 1, nr.width);
         int contW = 0;
         for (auto& e : core.container()) contW += e.weight * e.count;
-        Text(gothic_, "WEIGHT", PP(1, 68, 60, 0, 0).x, PP(1, 68, 60, 0, 0).y - 2 * s, 15 * s, kAmber);
-        DrawNumber("lootWeight", fallouty_, PP(1, 152, 60, 0, 0).x, PP(1, 152, 60, 0, 0).y, 14 * s, green, 0, 0, "", contW, " lb");
-        if (core.container().empty()) Text(gothic_, "(empty)", PP(1, 68, 270, 192, 20).x, PP(1, 68, 270, 192, 20).y, 18 * s, kAmberDim, 1, 192 * s);
+        Text(gothic_, loc::T("inv.weight"), PP(1, 68, 60, 0, 0).x, PP(1, 68, 60, 0, 0).y - 2 * s, 15 * s, kAmber);
+        {
+            std::string pre, post;
+            txt::SplitNum(loc::T("inv.weight_lb"), pre, post);
+            DrawNumber("lootWeight", fallouty_, PP(1, 152, 60, 0, 0).x, PP(1, 152, 60, 0, 0).y, 14 * s, green, 0, 0, pre, contW, post);
+        }
+        if (core.container().empty()) Text(gothic_, loc::T("ui.empty"), PP(1, 68, 270, 192, 20).x, PP(1, 68, 270, 192, 20).y, 18 * s, kAmberDim, 1, 192 * s);
     }
 
     // ---- left bottom field: sort selector; trash = drop to the world
     {
-        const char* names[] = {"Sort: type", "Sort: weight", "Sort: name"};
+        const char* names[] = {"inv.sort.type", "inv.sort.weight", "inv.sort.name"};
         const Rectangle sr = PP(0, 48, 540, 172, 24);
-        Text(gothic_, names[sortMode_], sr.x, sr.y + 2 * s, 16 * s, kAmber, 1, sr.width);
+        Text(gothic_, loc::T(names[sortMode_]), sr.x, sr.y + 2 * s, 16 * s, kAmber, 1, sr.width);
         if (pressed && In(sr, mp)) sortMode_ = (sortMode_ + 1) % 3;
     }
     const Rectangle trashR = PP(0, 244, 528, 48, 48);
@@ -1053,8 +1029,8 @@ void OrigUi::DrawLoot(const UiView& ui, std::vector<Rectangle>& rects) {
         Text(gothic_, label, r.x, r.y + (r.height - 18 * s) / 2, 18 * s, enabled ? kAmber : kAmberDim, 1, r.width);
         return hot && pressed;
     };
-    const std::string lblAll = stf_.ok() && !stf_.Get(1713).empty() ? stf_.Get(1713) : "Take All";
-    const std::string lblDone = stf_.ok() && !stf_.Get(75).empty() ? stf_.Get(75) : "Done";
+    const std::string lblAll = !StfT(1713).empty() ? StfT(1713) : loc::T("loot.take_all");
+    const std::string lblDone = !StfT(75).empty() ? StfT(75) : loc::T("loot.done");
     DrawRectangleRec(PP(1, 38, 526, 258, 54), Color{34, 32, 24, 255});   // hides the sort field / trash art of the panel under the buttons
     const Rectangle doneR = PP(1, 44, 536, 116, 34), allR = PP(1, 166, 536, 124, 34);
     if (button(allR, lblAll, !core.container().empty())) ui.commands->push_back(UiCommand{UiCommand::Take, core.containerOwner(), 0, 0});
@@ -1101,14 +1077,9 @@ void OrigUi::DrawOverlay() {
         const float s = 1.0f, fs = 16;
         const float sw = static_cast<float>(GetScreenWidth()), sh = static_cast<float>(GetScreenHeight());
         const Vector2 mp = GetMousePosition();
-        std::vector<std::string> lines{tipTitle_};
-        size_t pos = 0;
-        while (pos <= tipBody_.size()) {
-            size_t e = tipBody_.find('\n', pos);
-            if (e == std::string::npos) e = tipBody_.size();
-            lines.push_back(tipBody_.substr(pos, e - pos));
-            pos = e + 1;
-        }
+        auto wrapTip = [&](const std::string& t) { return txt::Wrap(t, 360.0f, [&](const std::string& s2) { return TextW(gothic_, s2, fs); }); };
+        std::vector<std::string> lines = wrapTip(tipTitle_);
+        for (std::string& l : wrapTip(tipBody_)) lines.push_back(std::move(l));
         float w = 0;
         for (auto& l : lines) w = std::max(w, TextW(gothic_, l, fs));
         w = std::min(w, 360.0f);

@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -18,7 +19,9 @@
 #include "ClientCore.h"
 #include "IRenderer.h"
 #include "Settings.h"
+#include "common/Localization.h"
 #include "common/log.h"
+#include "common/utf8.h"
 
 using namespace f3;
 
@@ -26,7 +29,7 @@ static const char* kUsage =
     "usage: f3_client [--host H] [--port N] [--name NAME] [--password PW [--register]] [--guest] [--gamedir DIR] [--protos FILE|DIR]\n"
     "       f3_client --viewmap MAP [--gamedir DIR]     map viewer, no server needed\n"
     "game data: --gamedir, env F3_GAMEDIR, client.cfg (gamedir=...), else auto-detected (F:\\_work\\F3_Demo, ..\\F3_Demo)\n"
-    "options:   --no-assets (flat placeholder view)  --size W,H\n"
+    "options:   --no-assets (flat placeholder view)  --size W,H  --lang CODE (en, ru; client.cfg lang=)  --font-dir DIR (Cyrillic TTFs)\n"
     "test:      --shot FILE.png [--shot-frame N] [--shot-exit]   --shots PREFIX --shot-times t0,t1,.. [--shot-exit]\n"
     "           --autouse (use the nearest door / container once)  --autowalk (random walks)  --trace FILE.csv  --run-seconds N\n"
     "           --cam AZ,EL,FOV  --target X,Z  --clipy Y  --noentities  --modelscale S\n"
@@ -85,9 +88,15 @@ bool StraightWalkable(const ClientMap& m, float x0, float y0, float x1, float y1
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main(int argc0, char** argv0) {
+    const std::vector<std::string> argStore = Utf8Args(argc0, argv0);
+    std::vector<char*> argPtr;
+    for (const std::string& a : argStore) argPtr.push_back(const_cast<char*>(a.c_str()));
+    const int argc = static_cast<int>(argPtr.size());
+    char** argv = argPtr.data();
     Config cfg = LoadConfig();
     std::string host = cfg.count("host") ? cfg["host"] : "127.0.0.1";
+    std::string lang = cfg.count("lang") ? cfg["lang"] : "en";
     std::string name = cfg.count("name") ? cfg["name"] : "Player";
     std::string viewMap, protosHint, gameDirArg, password;
     bool doRegister = false, guest = false, autoCreate = false;
@@ -112,6 +121,8 @@ int main(int argc, char** argv) {
         else if (a == "--password") password = next();
         else if (a == "--register") doRegister = true;
         else if (a == "--guest") guest = true;
+        else if (a == "--lang") lang = next();
+        else if (a == "--font-dir") ropt.fontDir = next();
         else if (a == "--autocreate") autoCreate = true;   // scripted tests: create the character with a fixed allocation
         else if (a == "--gamedir") gameDirArg = next();
         else if (a == "--protos") protosHint = next();
@@ -171,6 +182,20 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // ---- localization (data/locale): table + language, then the fonts follow the language (Cyrillic needs the replacement TTFs)
+    {
+        std::string lerr;
+        const std::filesystem::path ldir = loc::Locale::FindDir(ExeDir());
+        if (ldir.empty() || !loc::Global().Load(ldir, &lerr)) log::Warn("locale: data/locale not found or unreadable (%s); UI texts show their keys", lerr.c_str());
+        lang = loc::Locale::Normalize(lang);
+        if (loc::Global().Loaded() && !loc::Global().Has(lang)) { log::Warn("locale: no texts for language '%s', using en", lang.c_str()); lang = "en"; }
+        loc::GlobalLang() = lang;
+        log::Info("language: %s", lang.c_str());
+        if (cfg.count("font_dir") && ropt.fontDir.empty()) ropt.fontDir = cfg["font_dir"];
+        if (cfg.count("font_body")) ropt.fontBody = cfg["font_body"];
+        if (cfg.count("font_head")) ropt.fontHead = cfg["font_head"];
+        ropt.wideFonts = lang != "en";
+    }
     ClientCore core;
     if (viewMap.empty()) {
         std::string perr;
@@ -208,7 +233,7 @@ int main(int argc, char** argv) {
     // remember connection settings for the next start
     {
         Config c = LoadConfig();
-        c["host"] = host; c["port"] = std::to_string(port); c["name"] = name;
+        c["host"] = host; c["port"] = std::to_string(port); c["name"] = name; c["lang"] = loc::GlobalLang();
         SaveConfig(c);
     }
     core.SetLegacyOnly(legacy);
@@ -216,7 +241,7 @@ int main(int argc, char** argv) {
     bool loginPhase = !guest && password.empty();
     LoginView lv;
     lv.name = name;
-    lv.server = "server " + host + ":" + std::to_string(port);
+    lv.server = loc::T("login.server", {{"host", host}, {"port", static_cast<int>(port)}});
     if (!loginPhase && !core.Connect(host, port, name, guest ? std::string() : password, doRegister)) log::Error("connect: %s", core.failReason().c_str());
 
     bool typing = false;
@@ -261,10 +286,10 @@ int main(int argc, char** argv) {
                 else if (LoginLayout::In(li.mouseX, li.mouseY, L.regX, L.btnY, L.btnW, L.btnH)) lv.hover = 1;
                 auto submit = [&](bool reg) {
                     if (lv.busy) return;
-                    if (lv.name.size() < 2) { lv.error = "enter a name (2-16 letters, digits or _)"; return; }
-                    if (lv.password.size() < 4) { lv.error = "enter a password (at least 4 characters)"; return; }
+                    if (utf8::Count(lv.name) < 2) { lv.error = loc::T("login.err_name"); return; }
+                    if (utf8::Count(lv.password) < 4) { lv.error = loc::T("login.err_password"); return; }
                     lv.error.clear();
-                    lv.status = reg ? "Creating the account..." : "Logging in...";
+                    lv.status = loc::T(reg ? "status.creating" : "status.logging_in");
                     Config c = LoadConfig();   // the name is remembered, the password never
                     c["host"] = host; c["port"] = std::to_string(port); c["name"] = lv.name;
                     SaveConfig(c);
@@ -272,12 +297,16 @@ int main(int argc, char** argv) {
                 };
                 if (!lv.busy) {
                     std::string& f = lv.focus == 0 ? lv.name : lv.password;
-                    for (char ch : li.typed) {
-                        if (lv.focus == 0 ? (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_') && lv.name.size() < kMaxNameLen
-                                          : static_cast<unsigned char>(ch) >= 32 && ch != 127 && lv.password.size() < 64)
+                    for (size_t ti = 0; ti < li.typed.size();) {   // UTF-8: names take Latin / Cyrillic letters, digits and _ (16 code points)
+                        const size_t b0 = ti;
+                        uint32_t cp;
+                        if (!utf8::Next(li.typed, ti, cp)) continue;
+                        const std::string ch = li.typed.substr(b0, ti - b0);
+                        if (lv.focus == 0 ? (utf8::IsLetter(cp) || utf8::IsDigit(cp) || cp == '_') && utf8::Count(lv.name) < kMaxNameLen
+                                          : cp >= 32 && cp != 127 && lv.password.size() + ch.size() <= 64)
                             f += ch;
                     }
-                    if (li.backspace && !f.empty()) f.pop_back();
+                    if (li.backspace) utf8::PopBack(f);
                     if (li.keyStop) lv.focus ^= 1;
                     if (li.mouseLeftPressed) {
                         if (LoginLayout::In(li.mouseX, li.mouseY, L.nameX, L.nameY, L.fieldW, L.fieldH)) lv.focus = 0;
@@ -321,12 +350,21 @@ int main(int argc, char** argv) {
         // ---- chat input ----
         if (typing) {
             input += in.typed;
-            if (input.size() > kMaxChatLen) input.resize(kMaxChatLen);
-            if (in.backspace) {
-                while (!input.empty() && (static_cast<unsigned char>(input.back()) & 0xC0) == 0x80) input.pop_back();
-                if (!input.empty()) input.pop_back();
+            input = utf8::Truncate(input, kMaxChatLen);   // limit in code points
+            if (in.backspace) utf8::PopBack(input);
+            if (in.enter) {
+                if (input.rfind("/lang ", 0) == 0) {   // switch the UI language right away (texts + fonts); the server is told as well and answers in it
+                    const std::string code = loc::Locale::Normalize(input.substr(6));
+                    if (loc::Global().Has(code)) {
+                        loc::GlobalLang() = code;
+                        renderer->SetWideFonts(code != "en");
+                        Config c = LoadConfig();
+                        c["lang"] = code;
+                        SaveConfig(c);
+                    }
+                }
+                core.SendChat(input); input.clear(); typing = false;
             }
-            if (in.enter) { core.SendChat(input); input.clear(); typing = false; }
             else if (in.escape) { input.clear(); typing = false; }
         } else if (in.enter && !creating) {
             typing = true;
@@ -546,26 +584,24 @@ int main(int argc, char** argv) {
         ui.state = &uiState;
         ui.commands = &commands;
         switch (core.state()) {
-            case ClientCore::State::Connecting: ui.status = "Connecting to " + host + ":" + std::to_string(port) + "..."; break;
-            case ClientCore::State::LoggingIn: ui.status = "Logging in..."; break;
+            case ClientCore::State::Connecting: ui.status = loc::T("status.connecting", {{"host", host}, {"port", static_cast<int>(port)}}); break;
+            case ClientCore::State::LoggingIn: ui.status = loc::T("status.logging_in"); break;
             case ClientCore::State::InGame: {
                 const ClientCritter* me = core.self();
                 ui.status = core.map().name + (me ? "  (" + std::to_string(me->pos.x) + "," + std::to_string(me->pos.y) + ")" : "");
                 break;
             }
-            default: ui.status = "Disconnected: " + core.failReason() + "  (server " + host + ":" + std::to_string(port) + ")"; break;
+            default: ui.status = loc::T("status.disconnected", {{"reason", core.failReason()}, {"host", host}, {"port", static_cast<int>(port)}}); break;
         }
         // loud message when the asset renderer is not in use
         if (!renderer->HasAssets()) {
-            if (noAssets) ui.banner = "Flat placeholder view (--no-assets)";
+            if (noAssets) ui.banner = loc::T("banner.placeholder");
             else if (ropt.gameDir.empty())
-                ui.banner = "NO GAME DATA FOUND - showing the flat placeholder map\n"
-                            "Put gamedir=<install dir> into client.cfg next to f3_client.exe, set F3_GAMEDIR, or run with --gamedir <dir>\n"
-                            "(the install dir contains resource.rht and data\\; auto-detected: F:\\_work\\F3_Demo and ..\\F3_Demo)";
+                ui.banner = loc::T("banner.no_data");
             else
-                ui.banner = "GAME DATA UNUSABLE - showing the flat placeholder map\n" + ropt.gameDir + ": " + renderer->AssetError();
+                ui.banner = loc::T("banner.unusable", {{"dir", ropt.gameDir}, {"error", renderer->AssetError()}});
         } else if (core.hasMap() && !renderer->Is3D() && frame > 3) {
-            ui.banner = "Map '" + core.map().name + "' has no geometry in the game data - showing the flat placeholder map";
+            ui.banner = loc::T("banner.no_geometry", {{"map", core.map().name}});
         }
 
         renderer->BeginFrame();

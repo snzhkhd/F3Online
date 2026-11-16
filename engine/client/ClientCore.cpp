@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include "common/Localization.h"
 #include "common/log.h"
+#include "common/utf8.h"
 
 namespace f3 {
 
@@ -20,14 +22,14 @@ double ClientCore::Now() const {
 
 bool ClientCore::Connect(const std::string& host, uint16_t port, const std::string& name, const std::string& password, bool registerAccount) {
     Disconnect();
-    if (enet_initialize() != 0) { failReason_ = "enet_initialize failed"; state_ = State::Failed; return false; }
+    if (enet_initialize() != 0) { failReason_ = loc::T("err.enet_init"); state_ = State::Failed; return false; }
     host_ = enet_host_create(nullptr, 1, 2, 0, 0);
-    if (!host_) { failReason_ = "cannot create client host"; state_ = State::Failed; return false; }
+    if (!host_) { failReason_ = loc::T("err.no_client_host"); state_ = State::Failed; return false; }
     ENetAddress addr{};
-    if (enet_address_set_host(&addr, host.c_str()) != 0) { failReason_ = "cannot resolve host"; state_ = State::Failed; return false; }
+    if (enet_address_set_host(&addr, host.c_str()) != 0) { failReason_ = loc::T("err.resolve"); state_ = State::Failed; return false; }
     addr.port = port;
     peer_ = enet_host_connect(host_, &addr, 2, 0);
-    if (!peer_) { failReason_ = "no free peer slot"; state_ = State::Failed; return false; }
+    if (!peer_) { failReason_ = loc::T("err.no_peer"); state_ = State::Failed; return false; }
     name_ = name;
     password_ = password;
     register_ = registerAccount;
@@ -80,12 +82,14 @@ void ClientCore::Poll() {
                 if (password_.empty()) {
                     net::LoginReq req;
                     req.name = name_;
+                    req.lang = loc::GlobalLang();   // server messages (chat / system lines) come back in this language
                     Send(net::Pack(req));
                 } else {
                     gnet::Auth a;
                     a.mode = static_cast<uint8_t>(register_ ? gnet::AuthMode::Register : gnet::AuthMode::Login);
                     a.name = name_;
                     a.password = password_;
+                    a.lang = loc::GlobalLang();
                     Send(gnet::PackG(a));
                     password_.assign(password_.size(), '\0'); password_.clear();   // not kept longer than needed
                 }
@@ -97,8 +101,8 @@ void ClientCore::Poll() {
                 enet_packet_destroy(ev.packet);
                 break;
             case ENET_EVENT_TYPE_DISCONNECT:
-                if (state_ == State::Connecting) failReason_ = "connection failed";
-                else if (state_ != State::Failed) failReason_ = failReason_.empty() ? "disconnected from server" : failReason_;
+                if (state_ == State::Connecting) failReason_ = loc::T("err.connect_failed");
+                else if (state_ != State::Failed) failReason_ = failReason_.empty() ? loc::T("err.disconnected") : failReason_;
                 state_ = State::Failed;
                 peer_ = nullptr;
                 break;
@@ -300,7 +304,7 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
         case static_cast<uint8_t>(GMsgAuth::S2C_AuthResult): {
             gnet::AuthResult m;
             if (!m.Read(b)) return;
-            if (m.code != 0) { failReason_ = m.text; state_ = State::Failed; }
+            if (m.code != 0) { failReason_ = loc::TOr(gnet::AuthCodeKey(static_cast<gnet::AuthCode>(m.code)), m.text); state_ = State::Failed; }
             break;
         }
         case static_cast<uint8_t>(GMsgChar::S2C_CharSheet): {
@@ -402,9 +406,9 @@ void ClientCore::HandleGame(GMsg id, ByteBuffer& b) {
             Floater f;
             f.target = m.target; f.time = now;
             switch (m.result) {
-                case gnet::HitResult::Miss: f.text = "MISS"; f.kind = 1; break;
+                case gnet::HitResult::Miss: f.text = loc::T("hud.miss"); f.kind = 1; break;
                 case gnet::HitResult::Hit: f.text = "-" + std::to_string(m.damage); f.kind = 0; break;
-                case gnet::HitResult::Critical: f.text = "CRIT -" + std::to_string(m.damage); f.kind = 2; break;
+                case gnet::HitResult::Critical: f.text = loc::T("hud.crit", {{"n", m.damage}}); f.kind = 2; break;
                 case gnet::HitResult::Kill: f.text = "-" + std::to_string(m.damage); f.kind = 3; break;
             }
             floaters_.push_back(std::move(f));
@@ -568,7 +572,7 @@ void ClientCore::RequestMoveTo(float tx, float ty, bool run) {
 void ClientCore::SendChat(const std::string& text) {
     if (state_ != State::InGame || text.empty()) return;
     net::ChatReq m;
-    m.text = text;
+    m.text = utf8::Truncate(text, kMaxChatLen);   // limits are in code points (UTF-8 chat)
     Send(net::Pack(m));
 }
 

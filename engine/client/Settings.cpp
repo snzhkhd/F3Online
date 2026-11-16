@@ -12,11 +12,33 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 namespace fs = std::filesystem;
 
 namespace f3 {
+
+std::vector<std::string> Utf8Args(int argc, char** argv) {
+    std::vector<std::string> out;
+#ifdef _WIN32
+    // main()'s argv is in the ANSI code page: Cyrillic names would arrive as invalid UTF-8; the wide command line is exact
+    int wc = 0;
+    if (LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wc)) {
+        for (int i = 0; i < wc; ++i) {
+            const int n = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, nullptr, 0, nullptr, nullptr);
+            std::string a(n > 1 ? static_cast<size_t>(n) - 1 : 0, 'x');
+            if (n > 1) WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, a.data(), n, nullptr, nullptr);
+            out.push_back(a);
+        }
+        LocalFree(wargv);
+        if (static_cast<int>(out.size()) == argc) return out;
+        out.clear();
+    }
+#endif
+    for (int i = 0; i < argc; ++i) out.push_back(argv[i]);
+    return out;
+}
 
 namespace {
 std::string Norm(const fs::path& p) {

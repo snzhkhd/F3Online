@@ -42,6 +42,7 @@ public:
     // Pip-Boy (key P, UiState::pipboy): PipBoy.gui / f3_pipboy.tga. Tabs Alarm = friends, Tasks = quests, Downloads = mail (OrigUiPip.cpp).
     // Operations go out as UiCommand::PipOp (a = gnet::PipOp, b = mail id, s = name); op 0xFFFFFFFF = Reply (chat line "/mail <name> ").
     bool HasPip() const;
+    void ResetTextCache() { wrapCounter_ = ~0ull; }               // after a language / font change: re-wrap the chat log
     void DrawPipBoy(const UiView& ui, std::vector<Rectangle>& rects);
     void DrawOverlay();   // tooltip, after all windows
     // Floating speech: word-wrapped outlined text (gothic font), centred on cx, the block's bottom edge at bottomY. Returns the block height.
@@ -63,6 +64,9 @@ private:
     const Texture2D* Texture(const std::string& name);
     void Text(const Font& f, const std::string& s, float x, float y, float size, Color c, int align = 0, float w = 0);  // align 0 left 1 centre 2 right
     float TextW(const Font& f, const std::string& s, float size) const;
+    const Font& Pick(const Font& f, const std::string& s, float size) const;   // the Latin bitmap font, or the Cyrillic capable replacement
+    float FitSize(const Font& f, const std::string& s, float size, float maxW) const;   // shrinks replacement-font text to fit a label box
+    std::string StfT(int id) const;                                // English.stf text, overridden by locale key stf.<id>
     void Blit(const Texture2D* t, Rectangle dst, Color tint = WHITE);
     bool Find(const gd::GuiFile& g, const std::string& name, int from, int* idx) const;
     // widget rectangle in layout units, relative to its parent

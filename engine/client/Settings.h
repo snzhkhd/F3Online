@@ -11,6 +11,8 @@
 
 namespace f3 {
 
+// Command line as UTF-8 (on Windows main()'s argv is in the ANSI code page, Cyrillic names would be mangled).
+std::vector<std::string> Utf8Args(int argc, char** argv);
 std::string ExeDir();
 // cwd and exe dir plus their parents (up to 6 levels), without duplicates; forward slashes.
 std::vector<std::string> SearchRoots();

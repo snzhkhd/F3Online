@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdio>
 #include "CharPreview.h"
+#include "TextUtil.h"
+#include "common/Localization.h"
 
 namespace f3 {
 namespace {
@@ -85,8 +87,8 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         if (!n || txt.empty()) return;
         const bool fo = n->fontName.find("allouty") != std::string::npos;
         const Font& f = fo ? fallouty_ : gothic_;
-        const float px = (fo ? std::max<uint32_t>(10, n->fontSize) * 1.6f : static_cast<float>(n->fontSize)) * s;
         const Rectangle r = Rc(*n);
+        const float px = FitSize(f, txt, (fo ? std::max<uint32_t>(10, n->fontSize) * 1.6f : static_cast<float>(n->fontSize)) * s, r.width);
         Text(f, txt, r.x, r.y + (r.height - px) / 2, px, col, alignOverride >= 0 ? alignOverride : static_cast<int>(n->alignment), r.width);
     };
     // label whose first integer rolls (derived statistics, HP, thresholds)
@@ -94,11 +96,11 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         if (!n || txt.empty()) return;
         const bool fo = n->fontName.find("allouty") != std::string::npos;
         const Font& f = fo ? fallouty_ : gothic_;
-        const float px = (fo ? std::max<uint32_t>(10, n->fontSize) * 1.6f : static_cast<float>(n->fontSize)) * s;
         const Rectangle r = Rc(*n);
+        const float px = FitSize(f, txt, (fo ? std::max<uint32_t>(10, n->fontSize) * 1.6f : static_cast<float>(n->fontSize)) * s, r.width);
         DrawNumberText(key, f, r.x, r.y + (r.height - px) / 2, px, col, static_cast<int>(n->alignment), r.width, txt);
     };
-    auto StfLbl = [&](const gd::GuiNode* n, Color col) { if (n) Lbl(n, stf_.Get(n->strRef), col); };
+    auto StfLbl = [&](const gd::GuiNode* n, Color col) { if (n) Lbl(n, StfT(n->strRef), col); };
 
     // ---- tabs (derived statistics / damage thresholds) and the name plate
     if (click && Hit(Nd("btnStats"))) charTab_ = 0;
@@ -114,7 +116,7 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
     for (int i = 0; i < 7; ++i) {
         const std::string c = kSpecialCode[i];
         Digits("win" + c + "10", "win" + c + "1", sp[i]);
-        if (const gd::GuiNode* n = Nd("lbl" + c)) Lbl(n, stf_.Get(40 + std::clamp(sp[i], 1, 10)), Argb(n->textColor));
+        if (const gd::GuiNode* n = Nd("lbl" + c)) Lbl(n, StfT(40 + std::clamp(sp[i], 1, 10)), Argb(n->textColor));
         const gd::GuiNode* plus = Nd("btn" + c + "+");
         const gd::GuiNode* minus = Nd("btn" + c + "-");
         const bool canPlus = creating && sp[i] < 10 && left > 0, canMinus = creating && sp[i] > 1;
@@ -142,7 +144,7 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         return r;
     };
     for (const char* h : {"lblSkillsHeading1", "lblSkillsHeading2", "lblSkillsHeading3", "lblSkillsHeading4", "lblSkillsHeading1a", "lblSkillsHeading1b"})
-        if (const gd::GuiNode* n = Nd(h)) Lbl(n, stf_.Get(n->strRef), Argb(n->textColor));
+        if (const gd::GuiNode* n = Nd(h)) Lbl(n, StfT(n->strRef), Argb(n->textColor));
     int hoverSkill = -1;
     const gd::GuiNode* skillFont = Nd("lblSkill1a");
     for (int i = 0; i < kSkillCount; ++i) {
@@ -161,8 +163,8 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         const Color base = Argb(skillFont->textColor);
         const Color col = tagged ? kBright : (rowHot && !creating ? Color{120, 235, 90, 255} : base);
         const float px = 10 * 1.6f * s;
-        auto lab = [&](Rectangle q, const std::string& t, int al) { Text(fallouty_, t, q.x, q.y + (q.height - px) / 2, px, col, al, q.width); };
-        lab(r.name, kSkillNames[i], 0);
+        auto lab = [&](Rectangle q, const std::string& t, int al) { const float fp = FitSize(fallouty_, t, px, q.width); Text(fallouty_, t, q.x, q.y + (q.height - fp) / 2, fp, col, al, q.width); };
+        lab(r.name, txt::SkillLabel(kSkillNames[i]), 0);
         int bv = PreviewSkillBase(i, sp);
         int tv = creating ? bv + (tagged ? 20 : 0) : sh.skill[i];
         auto labRoll = [&](Rectangle q, const std::string& key, int v) {
@@ -181,7 +183,7 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
             if (click && rowHot) {
                 if (tagged) d.tagMask &= ~(1u << i);
                 else if (tagCount < sh.tagCount) d.tagMask |= (1u << i);
-                else Hint("You can only tag " + std::to_string(sh.tagCount) + " skills.");
+                else Hint(loc::T("char.tag_limit", {{"n", sh.tagCount}}));
             }
         } else {
             // spend a skill point (the tag / rank bonus lives on the server), or use the skill with a click on its name
@@ -206,11 +208,11 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         const bool on = (traits >> t) & 1u;
         const bool hot = Hit(b) || Hit(l);
         BtnPic(b, on);
-        Lbl(l, td ? td->name : stf_.Get(159 + t), on ? kBright : (hot && creating ? Color{120, 235, 90, 255} : Argb(l->textColor)));
+        Lbl(l, td ? td->name : StfT(159 + t), on ? kBright : (hot && creating ? Color{120, 235, 90, 255} : Argb(l->textColor)));
         if (creating && click && hot) {
             if (on) d.traitMask &= ~(1u << t);
             else if (traitCount < sh.traitMax) d.traitMask |= (1u << t);
-            else Hint("You may choose up to " + std::to_string(sh.traitMax) + " traits.");
+            else Hint(loc::T("char.trait_limit", {{"n", sh.traitMax}}));
         }
     }
 
@@ -240,7 +242,7 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
             if (c.type != gd::GuiNode::Label) continue;
             const bool value = c.name.size() > 5 && c.name.compare(c.name.size() - 5, 5, "Value") == 0;
             if (value) NumLbl(&c, "thr" + c.name, creating ? "0" : "-", Argb(c.textColor));
-            else Lbl(&c, stf_.Get(c.strRef), Argb(c.textColor));
+            else Lbl(&c, StfT(c.strRef), Argb(c.textColor));
         }
     }
     {   // hit points under the character window
@@ -262,21 +264,21 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         line(core.playerName(), kBright);
         y += 6 * s;
         if (creating) {
-            line("New character", txt);
+            line(loc::T("char.new"), txt);
             y += 6 * s;
-            line(Fmt("Points to spend: %d", left), left == 0 ? Color{120, 235, 90, 255} : kBright);
-            line(Fmt("Tag skills: %d of %d", tagCount, sh.tagCount), tagCount == sh.tagCount ? Color{120, 235, 90, 255} : kBright);
-            line(Fmt("Traits: %d of %d", traitCount, sh.traitMax), txt);
+            line(loc::T("char.points", {{"n", left}}), left == 0 ? Color{120, 235, 90, 255} : kBright);
+            line(loc::T("char.tags", {{"n", tagCount}, {"max", sh.tagCount}}), tagCount == sh.tagCount ? Color{120, 235, 90, 255} : kBright);
+            line(loc::T("char.traits", {{"n", traitCount}, {"max", sh.traitMax}}), txt);
         } else {
-            line(Fmt("Level %d", sh.level), txt);
-            line(sh.xpNext ? "XP " + std::to_string(sh.xp) + " / " + std::to_string(sh.xpNext) : "XP " + std::to_string(sh.xp) + " (max)", txt);
+            line(loc::T("char.level", {{"n", sh.level}}), txt);
+            line(sh.xpNext ? loc::T("char.xp", {{"n", sh.xp}, {"next", sh.xpNext}}) : loc::T("char.xp_max", {{"n", sh.xp}}), txt);
             y += 6 * s;
-            line(Fmt("Skill points: %d", sh.skillPoints), sh.skillPoints ? Color{120, 235, 90, 255} : txt);
-            line(Fmt("Perk points: %d", sh.perkPoints), txt);
+            line(loc::T("char.skill_points", {{"n", sh.skillPoints}}), sh.skillPoints ? Color{120, 235, 90, 255} : txt);
+            line(loc::T("char.perk_points", {{"n", sh.perkPoints}}), txt);
             y += 10 * s;
-            Text(fallouty_, "Click a skill to use it,", r.x + 12 * s, y, 14 * s, Color{150, 140, 90, 255}); y += 17 * s;
-            Text(fallouty_, "then click a target.", r.x + 12 * s, y, 14 * s, Color{150, 140, 90, 255}); y += 17 * s;
-            Text(fallouty_, "[+] spends a skill point.", r.x + 12 * s, y, 14 * s, Color{150, 140, 90, 255});
+            Text(fallouty_, loc::T("char.hint1"), r.x + 12 * s, y, 14 * s, Color{150, 140, 90, 255}); y += 17 * s;
+            Text(fallouty_, loc::T("char.hint2"), r.x + 12 * s, y, 14 * s, Color{150, 140, 90, 255}); y += 17 * s;
+            Text(fallouty_, loc::T("char.hint3"), r.x + 12 * s, y, 14 * s, Color{150, 140, 90, 255});
         }
     }
 
@@ -291,12 +293,12 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         BtnPic(b, hot && down);
         if (k == 1 && creating && !ready) { const Rectangle r = Rc(*w); DrawRectangleRec(r, Color{0, 0, 0, 90}); }
         if (!(click && hot)) continue;
-        if (k == 0) Hint("Options are not available in this client.");
+        if (k == 0) Hint(loc::T("char.no_options"));
         else if (k == 1) {
             if (!creating) Cmd(UiCommand::ToggleChar);
             else if (ready) Cmd(UiCommand::CharCreate);
-            else if (left != 0) Hint(left > 0 ? "Spend all character points first (" + std::to_string(left) + " left)." : "Too many SPECIAL points.");
-            else Hint("Choose " + std::to_string(sh.tagCount) + " tag skills first.");
+            else if (left != 0) Hint(left > 0 ? loc::T("char.spend_left", {{"n", left}}) : loc::T("char.too_many"));
+            else Hint(loc::T("char.choose_tags", {{"n", sh.tagCount}}));
         } else Cmd(creating ? UiCommand::Quit : UiCommand::ToggleChar);
     }
 
@@ -318,15 +320,15 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
         if (now < charHintUntil_) title = charHint_;
         else if (best) {
             // the layouts print the pair as "title/text": the first id is the heading ("Strength"), the second the description
-            title = stf_.Get(best->tipTitleRef);
-            if (best->tipTextRef != kNoRef && best->tipTextRef != best->tipTitleRef) body = stf_.Get(best->tipTextRef);
+            title = StfT(best->tipTitleRef);
+            if (best->tipTextRef != kNoRef && best->tipTextRef != best->tipTitleRef) body = StfT(best->tipTextRef);
             img = best->tipImage;
             if (core.hasContent() && (best->name.rfind("lblTrait", 0) == 0 || best->name.rfind("btnTrait", 0) == 0) && best->name.size() >= 10) {
                 const int tens = best->name[8] - '0', dig = best->name[9] - '0';   // "lblTrait<1|2><1..8>": slot (tens - 1) * 8 + digit - 1
                 if (tens >= 1 && tens <= 2 && dig >= 1 && dig <= 8)
                     if (const gnet::ContentDefs::Trait* td = core.TraitAt((tens - 1) * 8 + dig - 1)) { title = td->name; body = td->desc; img.clear(); }
             }
-        } else if (hoverSkill == 13) title = "Traps";
+        } else if (hoverSkill == 13) title = txt::SkillLabel("Traps");
         const Color ink{20, 14, 6, 255};
         if (const gd::GuiNode* n = Nd("lblToolTipTitle")) {
             const Rectangle r = Rc(*n);
@@ -337,17 +339,11 @@ void OrigUi::DrawCharScreen(const UiView& ui, bool creating, std::vector<Rectang
             if (const gd::GuiNode* n = Nd("lblToolTip")) {   // word wrap into the text area
                 const Rectangle r = Rc(*n);
                 const float px = 15 * s;
-                std::string cur;
                 float y = r.y;
-                size_t pos = 0;
-                while (pos < body.size()) {
-                    size_t sp2 = body.find(' ', pos);
-                    const std::string word = body.substr(pos, sp2 == std::string::npos ? std::string::npos : sp2 - pos + 1);
-                    pos = sp2 == std::string::npos ? body.size() : sp2 + 1;
-                    if (!cur.empty() && TextW(gothic_, cur + word, px) > r.width) { Text(gothic_, cur, r.x, y, px, ink); y += px + 2 * s; cur.clear(); }
-                    cur += word;
+                for (const std::string& ln : txt::Wrap(body, r.width, [&](const std::string& s2) { return TextW(gothic_, s2, px); }, false)) {
+                    Text(gothic_, ln, r.x, y, px, ink);
+                    y += px + 2 * s;
                 }
-                if (!cur.empty()) Text(gothic_, cur, r.x, y, px, ink);
             }
         }
         if (!img.empty()) if (const gd::GuiNode* n = Nd("picToolTip")) Blit(Texture(img), Rc(*n));
