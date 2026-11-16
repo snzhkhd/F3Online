@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>F3 Content Editor</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="top">
+  <div class="brand">F3 Content Editor <span class="sub" id="dataDir"></span></div>
+  <div class="grow"></div>
+  <span id="dirtyInd" class="dirty-ind" title="Files with unsaved changes"></span>
+  <button id="btnUndo" title="Undo (Ctrl+Z)">Undo</button>
+  <button id="btnRedo" title="Redo (Ctrl+Y)">Redo</button>
+  <button id="btnValidate" title="Validate the whole data folder with the server's own validator">Validate</button>
+  <button id="btnSave" class="primary" title="Save this file (Ctrl+S)">Save</button>
+  <button id="btnSaveAll" title="Save every file with changes">Save all</button>
+  <button id="btnReload" title="Make the running server re-read data/ (the same logic as /reload) and show the diff report">Apply to running server</button>
+  <button id="btnTheme" title="Switch light / dark">Theme</button>
+</header>
+<div id="layout">
+  <nav id="nav"></nav>
+  <section id="listPane"></section>
+  <main id="main"><div class="empty">Loading...</div></main>
+</div>
+<div id="bottom">
+  <div class="tabs" id="bottomTabs"></div>
+  <div id="bottomBody"></div>
+</div>
+<div id="modalRoot"></div>
+<div id="toast"></div>
+<script src="app.js"></script>
+<script src="dialog.js"></script>
+<script src="locale.js"></script>
+<script src="boot.js"></script>
+</body>
+</html>
